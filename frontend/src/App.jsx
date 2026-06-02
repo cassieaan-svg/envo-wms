@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { sb } from './lib/supabase'
 import { useAppStore } from './store/appStore'
 import { useRealtimeStock } from './hooks/useStock'
+import { hydrateSession } from './utils/session'
 import { AuthScreen } from './components/AuthScreen'
 import { Sidebar } from './components/Sidebar'
 import { Toast } from './components/ui/Toast'
@@ -135,14 +136,14 @@ export default function App() {
   const [authed, setAuthed]     = useState(false)
 
   useEffect(() => {
-    sb.auth.getSession().then(({ data: { session } }) => {
+    sb.auth.getSession().then(async ({ data: { session } }) => {
+      // Restore a persisted session on refresh by rebuilding the store from it,
+      // instead of forcing the user to sign in again.
       if (session?.user) {
-        // Session exists but store is empty — need to re-boot
-        // For simplicity, show auth screen to re-login
-        setChecking(false)
-      } else {
-        setChecking(false)
+        try { await hydrateSession(session.user) }
+        catch { /* hydration failed — fall through to the sign-in screen */ }
       }
+      setChecking(false)
     })
   }, [])
 
