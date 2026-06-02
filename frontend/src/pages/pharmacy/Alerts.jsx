@@ -29,10 +29,11 @@ export function Alerts() {
 
   useEffect(() => {
     loadAll()
-    if (fid) loadFacReqAlerts()
-    const channel = sb.channel(`alerts-transfers-${fid}`)
+    loadFacReqAlerts()
+    const channel = sb.channel(`alerts-transfers-${fid || 'admin'}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_transfer_log' },
         (payload) => {
+          if (store.isAdmin()) { loadFacReqAlerts(); return }
           const row = payload.new?.receiving_facility_id ? payload.new : (payload.old || {})
           if ((row.receiving_facility_id === fid || row.sending_facility_id === fid) && fid) loadFacReqAlerts()
         })
@@ -47,10 +48,13 @@ export function Alerts() {
   }
 
   async function loadFacReqAlerts() {
-    let q = sb.from('stock_transfer_log')
-      .select('*').in('status',['pending','in_transit'])
-      .eq('receiving_facility_id', fid)
-      .order('initiated_at',{ascending:false})
+    let q = sb.from('stock_transfer_log').select('*').order('initiated_at',{ascending:false})
+    if (store.isAdmin()) {
+      // Facility → admin requests awaiting fulfillment (the set the nav badge counts)
+      q = q.eq('status','pending').is('sending_facility_id', null)
+    } else {
+      q = q.in('status',['pending','in_transit']).eq('receiving_facility_id', fid)
+    }
     q = sec(q)
     const { data } = await q
     setFacReqAlerts(data||[])
@@ -210,6 +214,7 @@ export function Alerts() {
       </div>
 
       <MetricGrid>
+        {store.isAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber"/>}
         <Metric label="Out of stock"   value={stockRows.out.length}   color="red"/>
         <Metric label="Low stock"      value={stockRows.low.length}   color="amber"/>
         <Metric label="Overstock"      value={stockRows.over.length}  color="blue"/>
@@ -273,13 +278,30 @@ export function Alerts() {
       {tab==='fac-requests' && (
         <Card>
           <CardHeader>
-            <CardTitle>My redistribution requests</CardTitle>
+            <CardTitle>{store.isAdmin() ? 'Facility redistribution requests' : 'My redistribution requests'}</CardTitle>
             <div className="flex gap-2">
               <button onClick={loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
-              <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>Submit new request</Button>
+              <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>{store.isAdmin() ? 'Open Redistribution' : 'Submit new request'}</Button>
             </div>
           </CardHeader>
-          {facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
+          {facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : store.isAdmin() ? (
+            facReqAlerts.map(req => (
+              <div key={req.id} className="px-5 py-4 border-b border-white/8 last:border-0">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="flex-1">
+                    <div className="font-medium text-gray-100 mb-1">{req.commodity_name}</div>
+                    <div className="text-sm text-gray-400">
+                      Requested: <span className="font-medium text-gray-200">{req.qty_requested ?? req.quantity}</span>
+                      {' '}· From: <span className="text-blue-400">{req.receiving_facility_name || '—'}</span>
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">Submitted {fmtDateTime(req.initiated_at)} by {req.initiated_by||'—'}</div>
+                    {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
+                  </div>
+                  <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>Review &amp; fulfill</Button>
+                </div>
+              </div>
+            ))
+          ) : (
             facReqAlerts.map(req => (
               <div key={req.id} className="px-5 py-4 border-b border-white/8 last:border-0">
                 <div className="flex items-start justify-between gap-4 flex-wrap">
