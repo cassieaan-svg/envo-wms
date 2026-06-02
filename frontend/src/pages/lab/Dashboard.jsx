@@ -14,6 +14,7 @@ export function Dashboard() {
   const commoditySection = store.commoditySection
   const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [amcMap, setAmcMap]   = useState({})
+  const [sdpMap, setSdpMap]   = useState({})
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
   const [todayCount, setTodayCount] = useState('—')
@@ -28,6 +29,18 @@ export function Dashboard() {
   async function loadData() {
     setLoading(true)
     await loadStock()
+
+    // Aggregate Service Delivery Point stock (lab has no dispensary/DSD)
+    const sdpAgg = {}
+    if (fid || store.currentFacility?.id) {
+      const { data: sdpData } = await sb.from('sdp_stock')
+        .select('commodity_id,quantity')
+        .eq('facility_id', fid || store.currentFacility?.id)
+      ;(sdpData || []).forEach(d => {
+        sdpAgg[d.commodity_id] = (sdpAgg[d.commodity_id] || 0) + d.quantity
+      })
+    }
+    setSdpMap(sdpAgg)
 
     // Load AMC
     const threeMonthsAgo = new Date()
@@ -62,7 +75,12 @@ export function Dashboard() {
   const getAMC  = r => amcMap[r.commodity_id] && amcMap[r.commodity_id] > 0 ? amcMap[r.commodity_id] : (r.baseline_amc || 0)
   const getStatus = r => getStockStatus(r.quantity, getAMC(r))
 
-  const groupedAll = groupStockByComm(store.stockData)
+  // Lab total = store + SDP (no dispensary/DSD). Override quantity so status/MOS use it.
+  const groupedAll = groupStockByComm(store.stockData).map(r => ({
+    ...r,
+    sdpQty: sdpMap[r.commodity_id] || 0,
+    quantity: r.storeQty + (sdpMap[r.commodity_id] || 0),
+  }))
   const stockRows = groupedAll
     .filter(r => (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase()))
               && (!catFilter || r.commodities?.category === catFilter))
@@ -88,7 +106,7 @@ export function Dashboard() {
 
       <MetricGrid>
         <Metric label="Commodities tracked" value={groupedAll.length} color="blue" />
-        <Metric label="Well stocked"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" />
+        <Metric label="Optimal stock"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" />
         <Metric label="Low stock"     value={groupedAll.filter(r=>getStatus(r)==='low').length}  color="amber" />
         <Metric label="Out of stock"  value={groupedAll.filter(r=>getStatus(r)==='out').length}  color="red" />
         <Metric label="Stock utilized today" value={todayCount} />
@@ -111,8 +129,9 @@ export function Dashboard() {
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"
             >
               <option value="">All categories</option>
-              <option>Pharmacy drugs</option>
-              <option>Medical supplies</option>
+              <option>RTKs</option>
+              <option>Lab reagents</option>
+              <option>Lab consumables</option>
             </select>
           </div>
         </CardHeader>
@@ -121,7 +140,7 @@ export function Dashboard() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/8 bg-white/2">
-                  {['Commodity','Category','Store SOH','Dispensary SOH','DSD SOH','Total SOH','AMC','MOS','Status'].map(h => (
+                  {['Commodity','Category','Store SOH','SDP SOH','Total SOH','AMC','MOS','Status'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                   ))}
                 </tr>
@@ -134,11 +153,8 @@ export function Dashboard() {
                     <td className={`px-4 py-3 font-mono text-sm ${r.storeQty===0?'text-gray-500':'text-gray-200'}`}>
                       {fmtStockQty(r.storeQty, r.commodities)}
                     </td>
-                    <td className={`px-4 py-3 font-mono text-sm ${r.dispensaryQty===0?'text-gray-500':'text-blue-300'}`}>
-                      {fmtStockQty(r.dispensaryQty, r.commodities)}
-                    </td>
-                    <td className={`px-4 py-3 font-mono text-sm ${r.dsdQty===0?'text-gray-500':'text-purple-300'}`}>
-                      {fmtStockQty(r.dsdQty, r.commodities)}
+                    <td className={`px-4 py-3 font-mono text-sm ${r.sdpQty===0?'text-gray-500':'text-blue-300'}`}>
+                      {fmtStockQty(r.sdpQty, r.commodities)}
                     </td>
                     <td className="px-4 py-3 font-mono text-sm text-gray-200">
                       {fmtStockQty(r.quantity, r.commodities)}
