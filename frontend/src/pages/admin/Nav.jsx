@@ -62,12 +62,12 @@ export function AdminNav() {
       <NavItem page="dispense"   icon={icons.dispense}>Record Stock Consumed</NavItem>
       <NavItem page="intake"     icon={icons.intake}>Stock Intake</NavItem>
       <NavItem page="adjustment" icon={icons.adjustment}>Adjustment</NavItem>
-      <NavItem page="transfers"  icon={icons.transfers} badge={pendingRequestCount}>Redistribution</NavItem>
+      <NavItem page="transfers"  icon={icons.transfers}>Redistribution</NavItem>
       <NavSection>Overview</NavSection>
       <NavItem page="dashboard"      icon={icons.dashboard}>Dashboard</NavItem>
       <NavItem page="stock"          icon={icons.stock}>Stock Levels</NavItem>
       <NavItem page="all-facilities" icon={icons.facilities}>All Facilities</NavItem>
-      <NavItem page="alerts" icon={icons.alerts}>Alerts</NavItem>
+      <NavItem page="alerts" icon={icons.alerts} badge={pendingRequestCount}>Alerts</NavItem>
 
       <NavSection>Reports</NavSection>
       <NavItem page="log"          icon={icons.log}>Activity Log</NavItem>
