@@ -79,6 +79,9 @@ export const SECTION_CATEGORIES = {
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
 }
 
+// A commodity category belongs to the lab section (uses SDP, no dispensary/DSD).
+export const isLabCategory = (category) => (SECTION_CATEGORIES.lab || []).includes(category)
+
 export function filterByCommoditySection(rows, commoditySection, key = 'commodities') {
   if (!commoditySection) return rows
   const cats = SECTION_CATEGORIES[commoditySection]

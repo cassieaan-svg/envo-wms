@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react'
 import { sb } from '../../lib/supabase'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
-import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
+import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
-import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { calcAtypicalAMC, getMOS, getStockStatus, fmtStockQty, groupStockByComm, todayLagos } from '../../utils/helpers'
+import { StockLevelsTable } from '../../components/StockLevelsTable'
+import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, todayLagos, isLabCategory } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Dashboard() {
@@ -18,6 +18,8 @@ export function Dashboard() {
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
   const [todayCount, setTodayCount] = useState('—')
+  const [sdpMap, setSdpMap]   = useState({})
+  const [dsdMap, setDsdMap]   = useState({})
   const [loading, setLoading] = useState(true)
 
   const fid = store.getEffectiveFacilityId()
@@ -29,6 +31,20 @@ export function Dashboard() {
   async function loadData() {
     setLoading(true)
     await loadStock()
+
+    // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity
+    const facId = fid || store.currentFacility?.id
+    const sdpAgg = {}, dsdAgg = {}
+    if (facId) {
+      const [{ data: dsdData }, { data: sdpData }] = await Promise.all([
+        sb.from('dsd_stock').select('commodity_id,quantity').eq('facility_id', facId),
+        sb.from('sdp_stock').select('commodity_id,quantity').eq('facility_id', facId),
+      ])
+      ;(dsdData || []).forEach(d => { dsdAgg[d.commodity_id] = (dsdAgg[d.commodity_id] || 0) + d.quantity })
+      ;(sdpData || []).forEach(d => { sdpAgg[d.commodity_id] = (sdpAgg[d.commodity_id] || 0) + d.quantity })
+    }
+    setDsdMap(dsdAgg)
+    setSdpMap(sdpAgg)
 
     // Load AMC
     const threeMonthsAgo = new Date()
@@ -60,22 +76,33 @@ export function Dashboard() {
     setLoading(false)
   }
 
-  const getAMC  = r => amcMap[r.commodity_id] && amcMap[r.commodity_id] > 0 ? amcMap[r.commodity_id] : (r.baseline_amc || 0)
-  const getStatus = r => getStockStatus(r.quantity, getAMC(r))
+  const getAMC = r => amcMap[r.commodity_id] && amcMap[r.commodity_id] > 0 ? amcMap[r.commodity_id] : (r.baseline_amc || 0)
 
-  const groupedAll = groupStockByComm(store.stockData)
-  const stockRows = groupedAll
+  // Lab total = store + SDP; pharmacy total = store + dispensary + DSD
+  const enrichedAll = groupStockByComm(store.stockData).map(r => {
+    const lab      = isLabCategory(r.commodities?.category)
+    const dsdQty   = dsdMap[r.commodity_id] || 0
+    const sdpQty   = sdpMap[r.commodity_id] || 0
+    const quantity = lab ? (r.storeQty + sdpQty) : (r.storeQty + r.dispensaryQty + dsdQty)
+    const amc      = getAMC(r)
+    return { ...r, dsdQty, sdpQty, _isLab: lab, quantity, amc, mos: getMOS(quantity, amc), status: getStockStatus(quantity, amc) }
+  })
+
+  const statusOrder = { out:0, low:1, unknown:2, ok:3, over:4 }
+  const stockRows = enrichedAll
     .filter(r => (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase()))
               && (!catFilter || r.commodities?.category === catFilter))
-    .map(r => ({ ...r, _amc: getAMC(r), _status: getStatus(r), _mos: getMOS(r.quantity, getAMC(r)) }))
-    .sort((a, b) => {
-      const order = { out:0, low:1, unknown:2, ok:3, over:4 }
-      return order[a._status] - order[b._status]
-    })
+    .sort((a, b) => (statusOrder[a.status] - statusOrder[b.status])
+                 || (a.commodities?.name||'').localeCompare(b.commodities?.name||''))
 
-  const statusBadge = { out:'out', low:'low', ok:'ok', over:'over', unknown:'unknown' }
-  const statusLabel = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No data' }
-  const mosColor    = { out:'text-red-400', low:'text-red-400', ok:'text-green-400', over:'text-blue-400', unknown:'text-gray-500' }
+  // Group by category to mirror the Stock Levels arrangement
+  const byCategory = {}
+  stockRows.forEach(r => {
+    const cat = r.commodities?.category || 'Other'
+    if (!byCategory[cat]) byCategory[cat] = []
+    byCategory[cat].push(r)
+  })
+  const availableCats = [...new Set(enrichedAll.map(r => r.commodities?.category).filter(Boolean))].sort()
 
   return (
     <div>
@@ -90,74 +117,46 @@ export function Dashboard() {
       <FacilityPicker />
 
       <MetricGrid>
-        <Metric label="Commodities tracked" value={groupedAll.length} color="blue" />
-        <Metric label="Well stocked"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" />
-        <Metric label="Low stock"     value={groupedAll.filter(r=>getStatus(r)==='low').length}  color="amber" />
-        <Metric label="Out of stock"  value={groupedAll.filter(r=>getStatus(r)==='out').length}  color="red" />
+        <Metric label="Commodities tracked" value={enrichedAll.length} color="blue" />
+        <Metric label="Well stocked"  value={enrichedAll.filter(r=>r.status==='ok').length}   color="green" />
+        <Metric label="Low stock"     value={enrichedAll.filter(r=>r.status==='low').length}  color="amber" />
+        <Metric label="Out of stock"  value={enrichedAll.filter(r=>r.status==='out').length}  color="red" />
         <Metric label="Stock consumed today" value={todayCount} />
       </MetricGrid>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Stock status — all commodities</CardTitle>
-          <div className="flex gap-2 flex-wrap">
-            <button onClick={loadData} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search commodity…"
-              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 w-48"
-            />
-            <select
-              value={catFilter}
-              onChange={e => setCat(e.target.value)}
-              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"
-            >
-              <option value="">All categories</option>
-              <option>Pharmacy drugs</option>
-              <option>Medical supplies</option>
-            </select>
-          </div>
-        </CardHeader>
-        {loading ? <LoadingState message="Loading stock…" /> : stockRows.length === 0 ? <EmptyState message="No stock records yet." /> : (
-          <div className="table-wrap">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/8 bg-white/2">
-                  {['Commodity','Category','Store SOH','Dispensary SOH','DSD SOH','Total SOH','AMC','MOS','Status'].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {stockRows.map(r => (
-                  <tr key={r.id} className="border-b border-white/5 hover:bg-white/2 transition-colors">
-                    <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name || '—'}</td>
-                    <td className="px-4 py-3"><CatBadge>{r.commodities?.category || '—'}</CatBadge></td>
-                    <td className={`px-4 py-3 font-mono text-sm ${r.storeQty===0?'text-gray-500':'text-gray-200'}`}>
-                      {fmtStockQty(r.storeQty, r.commodities)}
-                    </td>
-                    <td className={`px-4 py-3 font-mono text-sm ${r.dispensaryQty===0?'text-gray-500':'text-blue-300'}`}>
-                      {fmtStockQty(r.dispensaryQty, r.commodities)}
-                    </td>
-                    <td className={`px-4 py-3 font-mono text-sm ${r.dsdQty===0?'text-gray-500':'text-purple-300'}`}>
-                      {fmtStockQty(r.dsdQty, r.commodities)}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-sm text-gray-200">
-                      {fmtStockQty(r.quantity, r.commodities)}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{r._amc > 0 ? r._amc.toFixed(1) : '—'}</td>
-                    <td className={`px-4 py-3 font-mono text-sm font-medium ${mosColor[r._status]}`}>
-                      {r._mos !== null ? `${r._mos}mo` : '—'}
-                    </td>
-                    <td className="px-4 py-3"><Badge type={statusBadge[r._status]}>{statusLabel[r._status]}</Badge></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      <Card className="mb-4">
+        <div className="px-4 py-3 flex gap-2 flex-wrap items-center">
+          <button onClick={loadData} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search commodity…"
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 flex-1 min-w-[200px] max-w-xs"
+          />
+          <select
+            value={catFilter}
+            onChange={e => setCat(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"
+          >
+            <option value="">All categories</option>
+            {availableCats.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
       </Card>
+
+      {loading ? <LoadingState message="Loading stock…" /> : stockRows.length === 0 ? <EmptyState message="No stock records yet." /> : (
+        Object.entries(byCategory).sort().map(([cat, items]) => (
+          <Card key={cat}>
+            <CardHeader>
+              <CardTitle>{cat}</CardTitle>
+              <span className="text-xs text-gray-500">{items.length} commodities</span>
+            </CardHeader>
+            <div className="table-wrap">
+              <StockLevelsTable items={items} />
+            </div>
+          </Card>
+        ))
+      )}
     </div>
   )
 }
