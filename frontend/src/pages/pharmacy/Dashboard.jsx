@@ -78,14 +78,27 @@ export function Dashboard() {
 
   const getAMC = r => amcMap[r.commodity_id] && amcMap[r.commodity_id] > 0 ? amcMap[r.commodity_id] : (r.baseline_amc || 0)
 
-  // Lab total = store + SDP; pharmacy total = store + dispensary + DSD
-  const enrichedAll = groupStockByComm(store.stockData).map(r => {
-    const lab      = isLabCategory(r.commodities?.category)
-    const dsdQty   = dsdMap[r.commodity_id] || 0
-    const sdpQty   = sdpMap[r.commodity_id] || 0
-    const quantity = lab ? (r.storeQty + sdpQty) : (r.storeQty + r.dispensaryQty + dsdQty)
-    const amc      = getAMC(r)
-    return { ...r, dsdQty, sdpQty, _isLab: lab, quantity, amc, mos: getMOS(quantity, amc), status: getStockStatus(quantity, amc) }
+  const grouped = groupStockByComm(store.stockData)
+  const gMap = {}
+  grouped.forEach(g => { gMap[g.commodity_id] = g })
+
+  // Base on every tracked commodity so zero-stock items / categories appear.
+  // Lab total = store + SDP; pharmacy total = store + dispensary + DSD.
+  const enrichedAll = store.allCommodities.map(c => {
+    const g             = gMap[c.id] || {}
+    const comm          = g.commodities || c
+    const storeQty      = g.storeQty || 0
+    const dispensaryQty = g.dispensaryQty || 0
+    const lab           = isLabCategory(comm?.category)
+    const dsdQty        = dsdMap[c.id] || 0
+    const sdpQty        = sdpMap[c.id] || 0
+    const quantity      = lab ? (storeQty + sdpQty) : (storeQty + dispensaryQty + dsdQty)
+    const amc           = getAMC({ commodity_id: c.id, baseline_amc: g.baseline_amc || 0 })
+    return {
+      id: c.id, commodity_id: c.id, commodities: comm,
+      storeQty, dispensaryQty, dsdQty, sdpQty, _isLab: lab,
+      quantity, amc, mos: getMOS(quantity, amc), status: getStockStatus(quantity, amc),
+    }
   })
 
   const statusOrder = { out:0, low:1, unknown:2, ok:3, over:4 }
@@ -118,7 +131,7 @@ export function Dashboard() {
 
       <MetricGrid>
         <Metric label="Commodities tracked" value={enrichedAll.length} color="blue" />
-        <Metric label="Well stocked"  value={enrichedAll.filter(r=>r.status==='ok').length}   color="green" />
+        <Metric label="Optimal stock"  value={enrichedAll.filter(r=>r.status==='ok').length}   color="green" />
         <Metric label="Low stock"     value={enrichedAll.filter(r=>r.status==='low').length}  color="amber" />
         <Metric label="Out of stock"  value={enrichedAll.filter(r=>r.status==='out').length}  color="red" />
         <Metric label="Stock consumed today" value={todayCount} />

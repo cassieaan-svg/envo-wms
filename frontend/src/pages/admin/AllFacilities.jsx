@@ -1,17 +1,24 @@
 import { useEffect, useState } from 'react'
+import { sb } from '../../lib/supabase'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { EmptyState } from '../../components/ui/Loading'
-import { fmtStockQty, getCommodityDispenseUnit } from '../../utils/helpers'
+import { fmtStockQty, getCommodityDispenseUnit, isLabCategory } from '../../utils/helpers'
 
 export function AllFacilities() {
   const store  = useAppStore()
   const [search, setSearch]         = useState('')
   const [commFilter, setCommFilter] = useState('')
   const [selected, setSelected]     = useState(null) // commodity_id being drilled into
+  const [sdpByFac, setSdpByFac]     = useState({})   // facility_id -> SDP qty for the selected lab commodity
 
   const agg = {}
+  // Seed from every tracked commodity so zero-stock items and their
+  // categories (e.g. Lab consumables) still appear in the list and filter.
+  store.allCommodities.forEach(c => {
+    agg[c.id] = { id:c.id, name:c.name, cat:c.category, comm:c, total:0, facs:0, low:0, out:0 }
+  })
   store.stockData.forEach(r => {
     const k = r.commodity_id
     if (!agg[k]) agg[k] = { id:k, name:r.commodities?.name, cat:r.commodities?.category, comm:r.commodities, total:0, facs:0, low:0, out:0 }
@@ -28,21 +35,51 @@ export function AllFacilities() {
 
   const categories = [...new Set(Object.values(agg).map(r=>r.cat).filter(Boolean))].sort()
 
-  // Drill-down: all stock rows for selected commodity, grouped by facility
+  const selectedComm = selected ? agg[selected] : null
+  const isLabSel = !!selectedComm && isLabCategory(selectedComm.cat)
+
+  // Load SDP stock (separate table) for the selected lab commodity
+  useEffect(() => {
+    if (!selected || !isLabSel) { setSdpByFac({}); return }
+    let active = true
+    sb.from('sdp_stock').select('facility_id,quantity').eq('commodity_id', selected).then(({ data }) => {
+      if (!active) return
+      const m = {}
+      ;(data || []).forEach(d => { m[d.facility_id] = (m[d.facility_id] || 0) + d.quantity })
+      setSdpByFac(m)
+    })
+    return () => { active = false }
+  }, [selected, isLabSel])
+
+  // Drill-down: stock rows for the selected commodity, grouped by facility
   const facRows = selected
     ? store.stockData
         .filter(r => r.commodity_id === selected)
         .reduce((acc, r) => {
           const fid = r.facility_id
-          if (!acc[fid]) acc[fid] = { name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, total: 0, comm: r.commodities }
+          if (!acc[fid]) acc[fid] = { name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, comm: r.commodities }
           acc[fid][r.location_type === 'store' ? 'store' : r.location_type === 'dispensary' ? 'dispensary' : 'dsd'] += r.quantity
-          acc[fid].total += r.quantity
           return acc
         }, {})
     : {}
-  const facList = Object.values(facRows).sort((a,b) => b.total - a.total)
 
-  const selectedComm = selected ? agg[selected] : null
+  // For lab commodities, fold in SDP stock (incl. facilities with SDP but no store row)
+  if (isLabSel) {
+    Object.entries(sdpByFac).forEach(([fid, qty]) => {
+      if (!facRows[fid]) {
+        const f = store.allFacilities.find(x => x.id === fid)
+        facRows[fid] = { name: f?.name||'—', state: f?.state||'—', lga: f?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, comm: selectedComm.comm }
+      }
+      facRows[fid].sdp = qty
+    })
+  }
+
+  // Totals: lab = store + SDP; pharmacy = store + dispensary + DSD
+  Object.values(facRows).forEach(f => {
+    f.total = isLabSel ? (f.store + (f.sdp || 0)) : (f.store + f.dispensary + f.dsd)
+  })
+  const facList = Object.values(facRows).sort((a,b) => b.total - a.total)
+  const drillTotal = facList.reduce((s, f) => s + f.total, 0)
 
   if (selected) {
     return (
@@ -60,7 +97,7 @@ export function AllFacilities() {
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           {[
-            { label: 'Total stock', value: fmtStockQty(selectedComm?.total, selectedComm?.comm), color: 'text-gray-100' },
+            { label: 'Total stock', value: fmtStockQty(drillTotal, selectedComm?.comm), color: 'text-gray-100' },
             { label: 'Reporting sites', value: facList.length, color: 'text-blue-400' },
             { label: 'Low stock sites', value: facList.filter(f=>f.total>0&&f.total<10).length, color: 'text-amber-400' },
             { label: 'Out of stock sites', value: facList.filter(f=>f.total===0).length, color: 'text-red-400' },
@@ -77,7 +114,10 @@ export function AllFacilities() {
           {facList.length === 0 ? <EmptyState message="No stock data."/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
-                {['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','Status'].map(h=>(
+                {(isLabSel
+                  ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','Status']
+                  : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','Status']
+                ).map(h=>(
                   <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                 ))}
               </tr></thead>
@@ -89,8 +129,14 @@ export function AllFacilities() {
                     <td className="px-4 py-3 text-xs text-gray-500">{f.state}</td>
                     <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
                     <td className={`px-4 py-3 font-mono text-sm ${f.store===0?'text-gray-600':'text-gray-200'}`}>{fmtStockQty(f.store, f.comm)}</td>
-                    <td className={`px-4 py-3 font-mono text-sm ${f.dispensary===0?'text-gray-600':'text-blue-300'}`}>{fmtStockQty(f.dispensary, f.comm)}</td>
-                    <td className={`px-4 py-3 font-mono text-sm ${f.dsd===0?'text-gray-600':'text-purple-300'}`}>{fmtStockQty(f.dsd, f.comm)}</td>
+                    {isLabSel ? (
+                      <td className={`px-4 py-3 font-mono text-sm ${(f.sdp||0)===0?'text-gray-600':'text-blue-300'}`}>{fmtStockQty(f.sdp||0, f.comm)}</td>
+                    ) : (
+                      <>
+                        <td className={`px-4 py-3 font-mono text-sm ${f.dispensary===0?'text-gray-600':'text-blue-300'}`}>{fmtStockQty(f.dispensary, f.comm)}</td>
+                        <td className={`px-4 py-3 font-mono text-sm ${f.dsd===0?'text-gray-600':'text-purple-300'}`}>{fmtStockQty(f.dsd, f.comm)}</td>
+                      </>
+                    )}
                     <td className="px-4 py-3 font-mono text-sm font-semibold text-gray-100">{fmtStockQty(f.total, f.comm)}</td>
                     <td className="px-4 py-3"><Badge type={status.type}>{status.label}</Badge></td>
                   </tr>

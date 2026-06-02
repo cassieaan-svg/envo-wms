@@ -81,17 +81,28 @@ export function Stock() {
     }
 
     const grouped = groupStockByComm(store.stockData)
-    const enriched = grouped.map(r => {
-      const calcAmc = amcMap[r.commodity_id]
-      const amc     = calcAmc && calcAmc > 0 ? +calcAmc.toFixed(1) : +(r.baseline_amc || 0).toFixed(1)
-      const lab     = isLabCategory(r.commodities?.category)
-      const dsdQty  = dsdMap[r.commodity_id] || 0
-      const sdpQty  = sdpMap[r.commodity_id] || 0
+    const gMap = {}
+    grouped.forEach(g => { gMap[g.commodity_id] = g })
+
+    // Base the list on every tracked commodity (not just those with stock), so
+    // zero-stock items and their categories (e.g. Lab consumables) still appear.
+    const enriched = store.allCommodities.map(c => {
+      const g             = gMap[c.id] || {}
+      const comm          = g.commodities || c
+      const storeQty      = g.storeQty || 0
+      const dispensaryQty = g.dispensaryQty || 0
+      const calcAmc = amcMap[c.id]
+      const amc     = calcAmc && calcAmc > 0 ? +calcAmc.toFixed(1) : +(g.baseline_amc || 0).toFixed(1)
+      const lab     = isLabCategory(comm?.category)
+      const dsdQty  = dsdMap[c.id] || 0
+      const sdpQty  = sdpMap[c.id] || 0
       // Lab total = store + SDP; pharmacy total = store + dispensary + DSD
-      const quantity = lab ? (r.storeQty + sdpQty) : (r.storeQty + r.dispensaryQty + dsdQty)
-      const mos     = getMOS(quantity, amc)
-      const status  = getStockStatus(quantity, amc)
-      return { ...r, dsdQty, sdpQty, _isLab: lab, amc, mos, status, quantity }
+      const quantity = lab ? (storeQty + sdpQty) : (storeQty + dispensaryQty + dsdQty)
+      return {
+        id: c.id, commodity_id: c.id, commodities: comm,
+        storeQty, dispensaryQty, dsdQty, sdpQty, _isLab: lab,
+        amc, mos: getMOS(quantity, amc), status: getStockStatus(quantity, amc), quantity,
+      }
     })
     setRows(enriched)
     setLoading(false)
