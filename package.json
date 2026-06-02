@@ -1,0 +1,24 @@
+{
+  "name": "@envo/workspace",
+  "description": "ENVO Inventory Tracking System - Monorepo with Frontend and Backend",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "install-all": "npm install",
+    "dev": "npm run dev --workspace=frontend",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:both": "npm run dev --workspace=frontend & npm run dev --workspace=backend",
+    "build": "npm run build --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "build:all": "npm run build --workspace=frontend && npm run build --workspace=backend",
+    "lint": "npm run lint --workspace=frontend"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
