@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react'
+import { sb } from '../../lib/supabase'
 import { NavSection, NavItem } from '../../components/NavItem'
 import { useAppStore } from '../../store/appStore'
 
@@ -19,9 +21,34 @@ const icons = {
 export function LabNav() {
   const canManage    = useAppStore(s => s.canManageStock())
   const facilityRole = useAppStore(s => s.facilityRole)
+  const fid          = useAppStore(s => s.currentFacility?.id)
+  const commoditySection = useAppStore(s => s.commoditySection)
   const isDispenser  = facilityRole === 'dispenser'
   const isSDP        = facilityRole === 'sdp'
   const isRestricted = isSDP
+
+  const [pendingCount, setPendingCount] = useState(0)
+
+  useEffect(() => {
+    if (!fid) { setPendingCount(0); return }
+    loadPendingCount()
+    const channel = sb.channel(`lab-nav-transfers-${fid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_transfer_log' }, loadPendingCount)
+      .subscribe()
+    return () => sb.removeChannel(channel)
+  }, [fid, commoditySection])
+
+  async function loadPendingCount() {
+    if (!fid) { setPendingCount(0); return }
+    // Anything still needing this facility's attention: its own open requests /
+    // incoming transfers, plus approvals it owes and its outgoing transfers.
+    let q = sb.from('stock_transfer_log')
+      .select('*', { count: 'exact', head: true })
+      .or(`and(receiving_facility_id.eq.${fid},status.in.(pending,in_transit)),and(sending_facility_id.eq.${fid},status.in.(pending_approval,in_transit))`)
+    if (commoditySection) q = q.eq('section', commoditySection)
+    const { count } = await q
+    setPendingCount(count || 0)
+  }
 
   return (
     <>
@@ -29,12 +56,12 @@ export function LabNav() {
       <NavItem page="dispense"   icon={icons.dispense}>Record Stock Utilized</NavItem>
       {!isRestricted && <NavItem page="intake"     icon={icons.intake}     disabled={!canManage}>Stock Intake</NavItem>}
       {!isRestricted && <NavItem page="adjustment" icon={icons.adjustment} disabled={!canManage}>Adjustment</NavItem>}
-      <NavItem page="transfers" icon={icons.transfers}>Redistribution & Emergency Order</NavItem>
+      <NavItem page="transfers" icon={icons.transfers} badge={pendingCount}>Redistribution & Emergency Order</NavItem>
 
       {!isRestricted && <NavSection>Overview</NavSection>}
       {!isRestricted && <NavItem page="dashboard" icon={icons.dashboard}>Dashboard</NavItem>}
       <NavItem page="stock"     icon={icons.stock}>Stock Levels</NavItem>
-      {!isRestricted && <NavItem page="alerts"    icon={icons.alerts}>Alerts</NavItem>}
+      {!isRestricted && <NavItem page="alerts"    icon={icons.alerts} badge={pendingCount}>Alerts</NavItem>}
 
       {!isRestricted && <NavSection>Reports</NavSection>}
       {!isRestricted && <NavItem page="log"        icon={icons.log}>Activity Log</NavItem>}
