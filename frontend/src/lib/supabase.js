@@ -1,6 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = 'https://iocbitubsokjitkxmlxk.supabase.co'
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlvY2JpdHVic29raml0a3htbHhrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwNDQzNTAsImV4cCI6MjA5MDYyMDM1MH0.VUg6IWy3Vx3kIGhrQoTdMiZ3bYMCd9zaxkidHTE2SMk'
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error(
+    'Missing Supabase configuration. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY ' +
+    '(see frontend/.env.example). For local dev, copy .env.example to .env and fill in your values. ' +
+    'On Netlify, add them under Site settings → Environment variables.'
+  )
+}
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
