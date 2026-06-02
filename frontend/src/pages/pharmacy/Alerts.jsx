@@ -52,6 +52,11 @@ export function Alerts() {
     if (store.isAdmin()) {
       // Facility → admin requests awaiting fulfillment (the set the nav badge counts)
       q = q.eq('status','pending').is('sending_facility_id', null)
+      // Scope to the admin's jurisdiction (overall admin sees everything)
+      if (!store.isOverallAdmin()) {
+        const ids = store.allFacilities.map(f => f.id)
+        q = q.in('receiving_facility_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
+      }
     } else {
       q = q.in('status',['pending','in_transit']).eq('receiving_facility_id', fid)
     }

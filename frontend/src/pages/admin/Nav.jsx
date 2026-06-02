@@ -33,10 +33,17 @@ export function AdminNav() {
   }, [])
 
   async function loadPendingCount() {
-    const { count } = await sb.from('stock_transfer_log')
+    const { accessLevel, allFacilities } = useAppStore.getState()
+    let q = sb.from('stock_transfer_log')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'pending')
       .is('sending_facility_id', null)
+    // Scope to the admin's jurisdiction (overall admin sees everything)
+    if (accessLevel !== 'overall_admin') {
+      const ids = allFacilities.map(f => f.id)
+      q = q.in('receiving_facility_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
+    }
+    const { count } = await q
     setPendingRequestCount(count || 0)
   }
 
