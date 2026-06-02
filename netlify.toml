@@ -1,0 +1,11 @@
+# Root config for the monorepo. Netlify builds from the repo root:
+#   `npm run build` runs the frontend workspace, emitting to frontend/dist.
+[build]
+  command = "npm run build"
+  publish = "frontend/dist"
+
+# SPA fallback so client-side routing works on refresh / deep links.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
