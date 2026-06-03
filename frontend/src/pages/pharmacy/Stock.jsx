@@ -5,7 +5,7 @@ import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
-import { calcAtypicalAMC, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory } from '../../utils/helpers'
+import { calcAtypicalAMC, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Stock() {
@@ -117,7 +117,11 @@ export function Stock() {
       if (sortBy === 'qty')   return b.quantity - a.quantity
       if (sortBy === 'mos')   return (a.mos===null?999:a.mos) - (b.mos===null?999:b.mos)
       const c = (a.commodities?.category||'').localeCompare(b.commodities?.category||'')
-      return c !== 0 ? c : (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
+      if (c !== 0) return c
+      // In-stock commodities before out-of-stock ones within a category
+      const aOut = a.quantity === 0, bOut = b.quantity === 0
+      if (aOut !== bOut) return aOut ? 1 : -1
+      return (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
     })
 
   // Group by category if sorting by category
@@ -129,6 +133,14 @@ export function Stock() {
       byCategory[cat].push(r)
     })
   }
+
+  // Order categories by the canonical section sequence (e.g. Pharmacy drugs
+  // before Medical supplies), with any unknown category falling to the end.
+  const catOrder = SECTION_CATEGORIES[commoditySection] || []
+  const orderedCats = Object.keys(byCategory).sort((a, b) => {
+    const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
+  })
 
   if (isDSD) {
     const dsdFiltered = rows.filter(r =>
@@ -204,14 +216,14 @@ export function Stock() {
 
       {loading ? <LoadingState /> : filtered.length === 0 ? <EmptyState message="No stock records match filters." /> :
         sortBy === 'category' ? (
-          Object.entries(byCategory).sort().map(([cat, items]) => (
+          orderedCats.map(cat => (
             <Card key={cat}>
               <CardHeader>
                 <CardTitle>{cat}</CardTitle>
-                <span className="text-xs text-gray-500">{items.length} commodities</span>
+                <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={items} />
+                <StockLevelsTable items={byCategory[cat]} />
               </div>
             </Card>
           ))

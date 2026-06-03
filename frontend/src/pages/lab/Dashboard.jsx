@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react'
 import { sb } from '../../lib/supabase'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
-import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
+import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
-import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { calcAtypicalAMC, getMOS, getStockStatus, fmtStockQty, groupStockByComm } from '../../utils/helpers'
+import { StockLevelsTable } from '../../components/StockLevelsTable'
+import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
 
 export function Dashboard() {
   const store            = useAppStore()
@@ -86,16 +86,33 @@ export function Dashboard() {
   const stockRows = groupedAll
     .filter(r => (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase()))
               && (!catFilter || r.commodities?.category === catFilter))
-    .map(r => ({ ...r, _amc: getAMC(r), _status: getStatus(r), _mos: getMOS(r.quantity, getAMC(r)) }))
+    .map(r => {
+      const amc = getAMC(r)
+      return { ...r, _isLab: true, amc, status: getStockStatus(r.quantity, amc), mos: getMOS(r.quantity, amc) }
+    })
     .sort((a, b) => {
-      const order = { out:0, low:1, unknown:2, ok:3, over:4 }
-      return (order[a._status] - order[b._status])
-          || (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
+      // In-stock commodities before out-of-stock ones, then by name
+      const aOut = a.quantity === 0, bOut = b.quantity === 0
+      if (aOut !== bOut) return aOut ? 1 : -1
+      return (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
     })
 
-  const statusBadge = { out:'out', low:'low', ok:'ok', over:'over', unknown:'unknown' }
-  const statusLabel = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No data' }
-  const mosColor    = { out:'text-red-400', low:'text-red-400', ok:'text-green-400', over:'text-blue-400', unknown:'text-gray-500' }
+  // Group by category to mirror the pharmacy Dashboard / Stock Levels arrangement
+  const byCategory = {}
+  stockRows.forEach(r => {
+    const cat = r.commodities?.category || 'Other'
+    if (!byCategory[cat]) byCategory[cat] = []
+    byCategory[cat].push(r)
+  })
+  const availableCats = [...new Set(groupedAll.map(r => r.commodities?.category).filter(Boolean))].sort()
+
+  // Order categories by the canonical section sequence (RTKs before Lab
+  // reagents before Lab consumables), with any unknown category last.
+  const catOrder = SECTION_CATEGORIES[commoditySection] || []
+  const orderedCats = Object.keys(byCategory).sort((a, b) => {
+    const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
+  })
 
   return (
     <div>
@@ -115,65 +132,39 @@ export function Dashboard() {
         <Metric label="Overstock"     value={groupedAll.filter(r=>getStatus(r)==='over').length} color="blue" />
       </MetricGrid>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Stock status — all commodities</CardTitle>
-          <div className="flex gap-2 flex-wrap">
-            <button onClick={loadData} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search commodity…"
-              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 w-48"
-            />
-            <select
-              value={catFilter}
-              onChange={e => setCat(e.target.value)}
-              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"
-            >
-              <option value="">All categories</option>
-              <option>RTKs</option>
-              <option>Lab reagents</option>
-              <option>Lab consumables</option>
-            </select>
-          </div>
-        </CardHeader>
-        {loading ? <LoadingState message="Loading stock…" /> : stockRows.length === 0 ? <EmptyState message="No stock records yet." /> : (
-          <div className="table-wrap">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/8 bg-white/2">
-                  {['Commodity','Category','Store SOH','SDP SOH','Total SOH','AMC','MOS','Status'].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {stockRows.map(r => (
-                  <tr key={r.id} className="border-b border-white/5 hover:bg-white/2 transition-colors">
-                    <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name || '—'}</td>
-                    <td className="px-4 py-3"><CatBadge>{r.commodities?.category || '—'}</CatBadge></td>
-                    <td className={`px-4 py-3 font-mono text-sm ${r.storeQty===0?'text-gray-500':'text-gray-200'}`}>
-                      {fmtStockQty(r.storeQty, r.commodities)}
-                    </td>
-                    <td className={`px-4 py-3 font-mono text-sm ${r.sdpQty===0?'text-gray-500':'text-blue-300'}`}>
-                      {fmtStockQty(r.sdpQty, r.commodities)}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-sm text-gray-200">
-                      {fmtStockQty(r.quantity, r.commodities)}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{r._amc > 0 ? r._amc.toFixed(1) : '—'}</td>
-                    <td className={`px-4 py-3 font-mono text-sm font-medium ${mosColor[r._status]}`}>
-                      {r._mos !== null ? `${r._mos}mo` : '—'}
-                    </td>
-                    <td className="px-4 py-3"><Badge type={statusBadge[r._status]}>{statusLabel[r._status]}</Badge></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      <Card className="mb-4">
+        <div className="px-4 py-3 flex gap-2 flex-wrap items-center">
+          <button onClick={loadData} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search commodity…"
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 flex-1 min-w-[200px] max-w-xs"
+          />
+          <select
+            value={catFilter}
+            onChange={e => setCat(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"
+          >
+            <option value="">All categories</option>
+            {availableCats.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
       </Card>
+
+      {loading ? <LoadingState message="Loading stock…" /> : stockRows.length === 0 ? <EmptyState message="No stock records yet." /> : (
+        orderedCats.map(cat => (
+          <Card key={cat}>
+            <CardHeader>
+              <CardTitle>{cat}</CardTitle>
+              <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
+            </CardHeader>
+            <div className="table-wrap">
+              <StockLevelsTable items={byCategory[cat]} />
+            </div>
+          </Card>
+        ))
+      )}
     </div>
   )
 }

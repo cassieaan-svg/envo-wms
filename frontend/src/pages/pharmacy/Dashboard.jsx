@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
-import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
+import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Dashboard() {
@@ -92,12 +92,15 @@ export function Dashboard() {
     }
   })
 
-  const statusOrder = { out:0, low:1, unknown:2, ok:3, over:4 }
   const stockRows = enrichedAll
     .filter(r => (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase()))
               && (!catFilter || r.commodities?.category === catFilter))
-    .sort((a, b) => (statusOrder[a.status] - statusOrder[b.status])
-                 || (a.commodities?.name||'').localeCompare(b.commodities?.name||''))
+    .sort((a, b) => {
+      // In-stock commodities before out-of-stock ones, then by name
+      const aOut = a.quantity === 0, bOut = b.quantity === 0
+      if (aOut !== bOut) return aOut ? 1 : -1
+      return (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
+    })
 
   // Group by category to mirror the Stock Levels arrangement
   const byCategory = {}
@@ -107,6 +110,14 @@ export function Dashboard() {
     byCategory[cat].push(r)
   })
   const availableCats = [...new Set(enrichedAll.map(r => r.commodities?.category).filter(Boolean))].sort()
+
+  // Order categories by the canonical section sequence (Pharmacy drugs before
+  // Medical supplies), with any unknown category last.
+  const catOrder = SECTION_CATEGORIES[commoditySection] || []
+  const orderedCats = Object.keys(byCategory).sort((a, b) => {
+    const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
+  })
 
   return (
     <div>
@@ -149,14 +160,14 @@ export function Dashboard() {
       </Card>
 
       {loading ? <LoadingState message="Loading stock…" /> : stockRows.length === 0 ? <EmptyState message="No stock records yet." /> : (
-        Object.entries(byCategory).sort().map(([cat, items]) => (
+        orderedCats.map(cat => (
           <Card key={cat}>
             <CardHeader>
               <CardTitle>{cat}</CardTitle>
-              <span className="text-xs text-gray-500">{items.length} commodities</span>
+              <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
             </CardHeader>
             <div className="table-wrap">
-              <StockLevelsTable items={items} />
+              <StockLevelsTable items={byCategory[cat]} />
             </div>
           </Card>
         ))
