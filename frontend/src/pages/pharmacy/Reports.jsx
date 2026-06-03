@@ -92,10 +92,6 @@ export function Reports() {
     toast('CSV exported','green')
   }
 
-  function openDailyReport() {
-    store.setCurrentPage('report')
-  }
-
   const categoryLabel = getReportCategoryLabel(category)
   const metrics = getSummaryMetrics(summary?.rows || [], category)
 
@@ -149,10 +145,6 @@ export function Reports() {
                 </div>
               )}
             </div>
-            <button onClick={openDailyReport}
-              className="bg-blue-500 hover:bg-blue-400 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
-              Export summary
-            </button>
           </div>
         </CardBody>
       </Card>

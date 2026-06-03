@@ -71,7 +71,6 @@ export function AdminNav() {
 
       <NavSection>Reports</NavSection>
       <NavItem page="log"          icon={icons.log}>Activity Log</NavItem>
-      <NavItem page="report"       icon={icons.report}>Daily Report</NavItem>
       <NavItem page="reports"      icon={icons.reports}>Weekly / Monthly</NavItem>
       <NavItem page="dailysummary" icon={icons.dailysummary}>Daily Summary</NavItem>
       <NavItem page="monitoring"   icon={icons.monitoring}>Monitoring</NavItem>
