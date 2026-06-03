@@ -276,9 +276,8 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
 
   let csv = `${label}\r\n`
   csv += `S/No,Drugs,Basic Unit,`
-  csv += `Beginning Balance (A),Quantity Received (B),Quantity Dispensed (C),`
-  csv += `Losses & Adj Positive (+),Losses & Adj Negative (-),Losses (D),`
-  csv += `Ending Balance / Physical Count (E),Maximum Stock Qty (F=CX2),Quantity to Order (G=F-E),Remarks\r\n`
+  csv += `Beginning Balance,Quantity Received,Quantity Consumed,`
+  csv += `Adj Positive (+),Adj Negative (-),Losses,Ending Balance\r\n`
 
   const items = Object.values(agg).sort((a, b) => a.category.localeCompare(b.category) || a.commodity.localeCompare(b.commodity))
   let sno = 1
@@ -291,9 +290,7 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
     }
     const E = stockMap[r.commodity] ?? ''
     const A = E !== '' ? E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses : ''
-    const F = r.dispensed * 2
-    const G = E !== '' ? Math.max(0, F - E) : ''
-    csv += `${sno},"${r.commodity}","${r.unit}",${A},${r.received},${r.dispensed},${r.adjPos},${r.adjNeg},${r.losses},${E},${F},${G},\r\n`
+    csv += `${sno},"${r.commodity}","${r.unit}",${A},${r.received},${r.dispensed},${r.adjPos},${r.adjNeg},${r.losses},${E}\r\n`
     sno++
   })
 
