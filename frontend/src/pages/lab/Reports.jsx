@@ -30,6 +30,8 @@ export function Reports() {
     return ['dispense','intake','adjustment','transfer'].includes(c) ? new Set([c]) : new Set(['dispense','intake','adjustment','transfer'])
   })
   const [showActivityDropdown, setShowActivityDropdown] = useState(false)
+  const [facFilter, setFacFilter] = useState('')   // admin: facility id ('' = all facilities)
+  const [catFilter, setCatFilter] = useState('')   // admin: commodity category ('' = all)
 
   // The Activity Types selector is the single source of truth for the report:
   // exactly one type loads that activity; multiple (or all) load everything and
@@ -42,8 +44,16 @@ export function Reports() {
   // every row, which is why the admin report came back empty. Facility users
   // stay scoped to their facility + section commodities.
   const isAdmin = store.isAdmin()
-  const fid     = isAdmin ? store.getEffectiveFacilityId() : store.currentFacility?.id
+  const fid     = isAdmin ? (facFilter || null) : store.currentFacility?.id
   const commIds = isAdmin ? null : store.allCommodities.map(c => c.id)
+
+  // Admin scoping options: every facility they oversee + every commodity
+  // category across both sections.
+  const facilityOptions = isAdmin ? store.allFacilities : []
+  const categoryOptions = isAdmin
+    ? [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
+    : []
+  const matchesCategory = row => !catFilter || row.category === catFilter
 
   const activityTypes = [
     { key: 'dispense', label: 'Consumption' },
@@ -93,7 +103,7 @@ export function Reports() {
       })
     }
 
-    const rows = summary.rows.filter(rowMatchesFilter)
+    const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r))
     const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report — ${summary.label}`
     const csv = category === 'all'
       ? buildCrrfCsv(rows, title, stockMap)
@@ -106,7 +116,7 @@ export function Reports() {
   }
 
   const categoryLabel = getReportCategoryLabel(category)
-  const filteredRows = (summary?.rows || []).filter(rowMatchesFilter)
+  const filteredRows = (summary?.rows || []).filter(r => rowMatchesFilter(r) && matchesCategory(r))
   const metrics = getSummaryMetrics(filteredRows, category)
 
   const TabBtn = ({id,label}) => (
@@ -159,6 +169,26 @@ export function Reports() {
                 </div>
               )}
             </div>
+
+            {isAdmin && (
+              <div className="pt-4">
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Facility</label>
+                <select value={facFilter} onChange={e => { setFacFilter(e.target.value); setSummary(null) }} className={inputCls}>
+                  <option value="">All facilities</option>
+                  {facilityOptions.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+              </div>
+            )}
+
+            {isAdmin && (
+              <div className="pt-4">
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Category</label>
+                <select value={catFilter} onChange={e => setCatFilter(e.target.value)} className={inputCls}>
+                  <option value="">All categories</option>
+                  {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
           </div>
         </CardBody>
       </Card>
