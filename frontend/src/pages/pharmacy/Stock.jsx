@@ -148,7 +148,10 @@ export function Stock() {
 
   // Order categories by the canonical section sequence (e.g. Pharmacy drugs
   // before Medical supplies), with any unknown category falling to the end.
-  const catOrder = SECTION_CATEGORIES[commoditySection] || []
+  // Admins have no section, so use the combined pharmacy→lab order.
+  const catOrder = commoditySection
+    ? (SECTION_CATEGORIES[commoditySection] || [])
+    : [...SECTION_CATEGORIES.pharmacy, ...SECTION_CATEGORIES.lab]
   const orderedCats = Object.keys(byCategory).sort((a, b) => {
     const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)

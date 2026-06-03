@@ -127,8 +127,11 @@ export function Dashboard() {
   const availableCats = [...new Set(enrichedAll.map(r => r.commodities?.category).filter(Boolean))].sort()
 
   // Order categories by the canonical section sequence (Pharmacy drugs before
-  // Medical supplies), with any unknown category last.
-  const catOrder = SECTION_CATEGORIES[commoditySection] || []
+  // Medical supplies), with any unknown category last. Admins have no section,
+  // so use the combined pharmacy→lab order.
+  const catOrder = commoditySection
+    ? (SECTION_CATEGORIES[commoditySection] || [])
+    : [...SECTION_CATEGORIES.pharmacy, ...SECTION_CATEGORIES.lab]
   const orderedCats = Object.keys(byCategory).sort((a, b) => {
     const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
