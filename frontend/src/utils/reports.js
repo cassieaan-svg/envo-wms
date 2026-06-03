@@ -73,7 +73,7 @@ const normalizeTransfer = (row, fid) => {
   }
 }
 
-const queryLog = async ({ sb, table, select, dateField, from, to, fid, commIds, section }) => {
+const queryLog = async ({ sb, table, select, dateField, from, to, fid, scopeIds, commIds, section }) => {
   const { start, end } = toRange(from, to)
 
   // Filter by date SERVER-SIDE and paginate. The previous approach fetched
@@ -89,6 +89,7 @@ const queryLog = async ({ sb, table, select, dateField, from, to, fid, commIds, 
       .range(offset, offset + PAGE - 1)
     if (commIds && commIds.length) q = q.in('commodity_id', commIds)
     if (fid) q = q.eq('facility_id', fid)
+    else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
     if (section) q = q.eq('section', section)
     const { data, error } = await q
     if (error || !data || !data.length) break
@@ -98,11 +99,11 @@ const queryLog = async ({ sb, table, select, dateField, from, to, fid, commIds, 
   return all
 }
 
-export async function fetchReportRows({ sb, category = 'all', from, to, fid, commIds, section }) {
+export async function fetchReportRows({ sb, category = 'all', from, to, fid, scopeIds, commIds, section }) {
   const getDispense = async () => {
     const data = await queryLog({
       sb, table: 'dispense_log', select: '*,commodities(name,category,unit),facilities(name)',
-      dateField: 'dispensed_at', from, to, fid, commIds, section,
+      dateField: 'dispensed_at', from, to, fid, scopeIds, commIds, section,
     })
     return data.map(normalizeDispense)
   }
@@ -110,7 +111,7 @@ export async function fetchReportRows({ sb, category = 'all', from, to, fid, com
   const getIntake = async () => {
     const data = await queryLog({
       sb, table: 'intake_log', select: '*,commodities(name,category,unit),facilities(name)',
-      dateField: 'received_at', from, to, fid, commIds, section,
+      dateField: 'received_at', from, to, fid, scopeIds, commIds, section,
     })
     return data.map(normalizeIntake)
   }
@@ -118,7 +119,7 @@ export async function fetchReportRows({ sb, category = 'all', from, to, fid, com
   const getAdjustment = async () => {
     const data = await queryLog({
       sb, table: 'stock_adjustment_log', select: '*,commodities(name,category,unit),facilities(name)',
-      dateField: 'adjusted_at', from, to, fid, commIds, section,
+      dateField: 'adjusted_at', from, to, fid, scopeIds, commIds, section,
     })
     return data.map(normalizeAdjustment)
   }
@@ -134,6 +135,10 @@ export async function fetchReportRows({ sb, category = 'all', from, to, fid, com
         .range(offset, offset + PAGE - 1)
       if (commIds && commIds.length) q = q.in('commodity_id', commIds)
       if (fid) q = q.or(`sending_facility_id.eq.${fid},receiving_facility_id.eq.${fid}`)
+      else if (scopeIds && scopeIds.length) {
+        const ids = scopeIds.join(',')
+        q = q.or(`sending_facility_id.in.(${ids}),receiving_facility_id.in.(${ids})`)
+      }
       if (section) q = q.eq('section', section)
       const { data, error } = await q
       if (error || !data || !data.length) break

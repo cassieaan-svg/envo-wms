@@ -1,9 +1,10 @@
-﻿import { useState } from 'react'
+﻿import { useState, useEffect } from 'react'
 import { sb } from '../../lib/supabase'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 // Activity Log colour scheme reused for the report table.
 const ACTIVITY_BADGE = { Consumption: 'out', Intake: 'ok', Adjustment: 'info', Transfer: 'low' }
@@ -40,7 +41,6 @@ export function Reports({ embedded = false } = {}) {
     return ['dispense','intake','adjustment','transfer'].includes(c) ? new Set([c]) : new Set(['dispense','intake','adjustment','transfer'])
   })
   const [showActivityDropdown, setShowActivityDropdown] = useState(false)
-  const [facFilter, setFacFilter] = useState('')   // admin: facility id ('' = all facilities)
   const [catFilter, setCatFilter] = useState('')   // admin: commodity category ('' = all)
 
   // The Activity Types selector is the single source of truth for the report:
@@ -48,18 +48,19 @@ export function Reports({ embedded = false } = {}) {
   // the table/CSV are narrowed to the ticked types.
   const category = selectedActivityTypes.size === 1 ? [...selectedActivityTypes][0] : 'all'
 
-  // Admins aggregate across every facility and both sections, so don't scope
-  // the query to one facility or to a section's commodity list — passing the
-  // full catalogue as a `commodity_id` IN() filter is huge and silently drops
-  // every row, which is why the admin report came back empty. Facility users
-  // stay scoped to their facility + section commodities.
+  // Admins span both sections, so don't scope by a section commodity list
+  // (the huge IN() filter silently drops rows). The facility scope follows the
+  // hierarchical filter (facility / LGA / state / all). Facility users stay
+  // scoped to their facility + section commodities.
   const isAdmin = store.isAdmin()
-  const fid     = isAdmin ? (facFilter || null) : store.currentFacility?.id
+  const { fid, scopeIds } = store.getAdminStockScope()
   const commIds = isAdmin ? null : store.allCommodities.map(c => c.id)
 
-  // Admin scoping options: every facility they oversee + every commodity
-  // category across both sections.
-  const facilityOptions = isAdmin ? store.allFacilities : []
+  // Reset the loaded summary whenever the facility scope changes so the report
+  // is reloaded against the new selection.
+  useEffect(() => { setSummary(null) }, [fid, store.adminFilterState, store.adminFilterLGA])
+
+  // Admin commodity-category options (both sections).
   const categoryOptions = isAdmin
     ? [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
     : []
@@ -84,7 +85,7 @@ export function Reports({ embedded = false } = {}) {
 
   async function loadWeekly() {
     setLoading(true)
-    const rows = await fetchReportRows({ sb, category, from: wFrom, to: wTo, fid, commIds })
+    const rows = await fetchReportRows({ sb, category, from: wFrom, to: wTo, fid, scopeIds, commIds })
     setSummary({ rows, label: `${wFrom} → ${wTo}` })
     setLoading(false)
   }
@@ -94,7 +95,7 @@ export function Reports({ embedded = false } = {}) {
     const from = month + '-01'
     const lastDay = new Date(month.split('-')[0], month.split('-')[1], 0).getDate()
     const to = `${month}-${String(lastDay).padStart(2,'0')}`
-    const rows = await fetchReportRows({ sb, category, from, to, fid, commIds })
+    const rows = await fetchReportRows({ sb, category, from, to, fid, scopeIds, commIds })
     setSummary({ rows, label: month })
     setLoading(false)
   }
@@ -110,8 +111,6 @@ export function Reports({ embedded = false } = {}) {
     if (fid || isAdmin) {
       const commLookup = {}
       store.allCommodities.forEach(c => { commLookup[c.id] = c.name })
-      // State/LGA admins aggregate only their facilities; overall admin = all.
-      const scopeIds = (!fid && !store.isOverallAdmin()) ? store.allFacilities.map(f => f.id) : null
       const PAGE = 1000
       for (let offset = 0; ; offset += PAGE) {
         let sq = sb.from('stock').select('commodity_id,quantity').range(offset, offset + PAGE - 1)
@@ -161,6 +160,8 @@ export function Reports({ embedded = false } = {}) {
         </div>
       )}
 
+      <FacilityPicker />
+
       <Card className="mb-20 overflow-visible">
         <CardBody className="overflow-visible">
           <div className="flex flex-wrap gap-3 items-end">
@@ -195,16 +196,6 @@ export function Reports({ embedded = false } = {}) {
                 </div>
               )}
             </div>
-
-            {isAdmin && (
-              <div className="pt-4">
-                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Facility</label>
-                <select value={facFilter} onChange={e => { setFacFilter(e.target.value); setSummary(null) }} className={inputCls}>
-                  <option value="">All facilities</option>
-                  {facilityOptions.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-              </div>
-            )}
 
             {isAdmin && (
               <div className="pt-4">
