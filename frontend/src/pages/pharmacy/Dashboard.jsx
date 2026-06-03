@@ -24,16 +24,13 @@ export function Dashboard() {
   const [drill, setDrill]     = useState(null)
   const [loading, setLoading] = useState(true)
 
-  const fid = store.getEffectiveFacilityId()
-  // Admin viewing all facilities (no fid): aggregate across every facility they
-  // oversee. State/LGA admins are limited to their facility ids; overall admin
-  // spans all.
-  const isAdmin = store.isAdmin()
-  const scopeIds = (!fid && isAdmin && !store.isOverallAdmin()) ? store.allFacilities.map(f => f.id) : null
+  // Admin facility scope: a single facility, an LGA/state worth of facilities,
+  // or all (resolved from the hierarchical filter). Facility users get their own.
+  const { fid, scopeIds } = store.getAdminStockScope()
 
   useEffect(() => {
     loadData()
-  }, [fid])
+  }, [fid, store.adminFilterState, store.adminFilterLGA])
 
   async function loadData() {
     setLoading(true)

@@ -81,6 +81,26 @@ export const useAppStore = create((set, get) => ({
     return s.adminFilterFacility?.id || null
   },
 
+  // Resolve the current facility scope for stock queries into either a single
+  // facility id (`fid`) or a list of facility ids (`scopeIds`). Honours the
+  // admin's hierarchical filter: facility → LGA → state → everything overseen.
+  getAdminStockScope: () => {
+    const s = get()
+    if (s.accessLevel === 'facility') return { fid: s.currentFacility?.id || null, scopeIds: null }
+    if (s.adminFilterFacility) return { fid: s.adminFilterFacility.id, scopeIds: null }
+    if (s.adminFilterState || s.adminFilterLGA) {
+      const ids = s.allFacilities
+        .filter(f => (!s.adminFilterState || f.state === s.adminFilterState) &&
+                     (!s.adminFilterLGA   || f.lga   === s.adminFilterLGA))
+        .map(f => f.id)
+      return { fid: null, scopeIds: ids }
+    }
+    // No narrowing: state/LGA admins span the facilities they oversee; overall
+    // admin spans everything (null = no facility constraint).
+    if (s.accessLevel !== 'overall_admin') return { fid: null, scopeIds: s.allFacilities.map(f => f.id) }
+    return { fid: null, scopeIds: null }
+  },
+
   getSectionLabel: () => {
     const s = get()
     if (s.accessLevel === 'overall_admin') return 'Overall Admin'

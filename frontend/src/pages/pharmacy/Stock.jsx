@@ -22,16 +22,15 @@ export function Stock() {
   const [sortBy, setSortBy]   = useState('category')
   const [drill, setDrill]     = useState(null)
 
-  const fid = store.getEffectiveFacilityId() || store.currentFacility?.id
+  // Admin facility scope: a single facility, an LGA/state worth of facilities,
+  // or all (resolved from the hierarchical filter). Facility users get their own.
+  const { fid, scopeIds } = store.getAdminStockScope()
   const facilityRole = useAppStore(s => s.facilityRole)
   const accessLevel  = useAppStore(s => s.accessLevel)
   const dsdSiteName  = useAppStore(s => s.dsdSiteName)
   const isDSD = accessLevel === 'facility' && facilityRole === 'dsd'
-  // Admin viewing all facilities (no fid): aggregate across their scope.
-  const isAdmin = store.isAdmin()
-  const scopeIds = (!fid && isAdmin && !store.isOverallAdmin()) ? store.allFacilities.map(f => f.id) : null
 
-  useEffect(() => { loadData() }, [fid, dsdSiteName])
+  useEffect(() => { loadData() }, [fid, dsdSiteName, store.adminFilterState, store.adminFilterLGA])
 
   async function loadData() {
     setLoading(true)
