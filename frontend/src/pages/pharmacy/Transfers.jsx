@@ -553,7 +553,7 @@ export function Transfers() {
         sending_facility_id: fid, sending_facility_name: myFac?.name || '',
         receiving_facility_id: fid, receiving_facility_name: myFac?.name || '',
         commodity_id: l.commodity_id, commodity_name: comm?.name || '',
-        quantity: 0, qty_requested: parseInt(l.stock_required), status: 'pending_approval',
+        quantity: parseInt(l.stock_required), qty_requested: parseInt(l.stock_required), status: 'pending_approval',
         initiated_by: intRequestedBy, initiated_at: new Date().toISOString(),
         notes: `[Internal: Store→Dispensary] balance:${l.stock_balance} required:${l.stock_required}${intNotes ? ' ' + intNotes : ''}`,
         section: commoditySection,
@@ -663,7 +663,7 @@ export function Transfers() {
         sending_facility_id: fid, sending_facility_name: myFac?.name || '',
         receiving_facility_id: null, receiving_facility_name: effectiveSiteName,
         commodity_id: l.commodity_id, commodity_name: comm?.name || '',
-        quantity: 0, qty_requested: parseInt(l.stock_required), status: 'pending_approval',
+        quantity: parseInt(l.stock_required), qty_requested: parseInt(l.stock_required), status: 'pending_approval',
         initiated_by: dsdSentBy, initiated_at: new Date().toISOString(),
         notes: `[DSD: ${effectiveSiteName}] type:${isDSD ? 'Community Pharmacy' : dsdType} balance:${l.stock_balance} required:${l.stock_required}${dsdNotes ? ' ' + dsdNotes : ''}`,
         section: commoditySection,
@@ -1003,7 +1003,8 @@ export function Transfers() {
                               From: <span className="text-blue-400">{t.sending_facility_name || '(unassigned)'}</span> → To: <span className="text-green-400">{t.receiving_facility_name}</span>
                             </div>
                             <div className="text-xs text-gray-600 mt-1">Initiated {fmtDate(t.initiated_at)} by {t.initiated_by || '—'}</div>
-                            {t.notes && <div className="text-xs text-gray-500 mt-1">Note: {t.notes}</div>}
+                            {t.notes?.match(/\[Reviewed by: ([^\]]+)\]/)?.[1] && <div className="text-xs text-gray-500 mt-0.5">Reviewed by admin: <span className="text-purple-400">{t.notes.match(/\[Reviewed by: ([^\]]+)\]/)[1]}</span></div>}
+                            {t.notes?.replace(/\[Reviewed by: [^\]]+\]/g, '').trim() && <div className="text-xs text-gray-500 mt-1">Note: {t.notes.replace(/\[Reviewed by: [^\]]+\]/g, '').trim()}</div>}
                           </div>
                           <div className="flex gap-2 items-center flex-wrap">
                             {t.status === 'pending' && needsAssignment && isAdminUser && (
@@ -1151,7 +1152,10 @@ export function Transfers() {
                 </div>
               </CardHeader>
               {myRequests.length === 0 ? <EmptyState message="No pending redistribution requests ✓" /> : (
-                myRequests.map(r => (
+                myRequests.map(r => {
+                  const reviewedBy = r.notes?.match(/\[Reviewed by: ([^\]]+)\]/)?.[1]
+                  const cleanNotes = r.notes?.replace(/\[Reviewed by: [^\]]+\]/g, '').trim()
+                  return (
                   <div key={r.id} className="px-5 py-4 border-b border-white/8 last:border-0">
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div className="flex-1">
@@ -1164,7 +1168,8 @@ export function Transfers() {
                         </div>
                         {r.sending_facility_name && <div className="text-xs text-gray-500 mt-0.5">Transferring facility: <span className="text-blue-400">{r.sending_facility_name}</span></div>}
                         <div className="text-xs text-gray-600 mt-1">Requested {fmtDate(r.initiated_at)} by {r.initiated_by || '—'}</div>
-                        {r.notes && <div className="text-xs text-gray-500 mt-1">{r.notes}</div>}
+                        {reviewedBy && <div className="text-xs text-gray-500 mt-0.5">Reviewed by admin: <span className="text-purple-400">{reviewedBy}</span></div>}
+                        {cleanNotes && <div className="text-xs text-gray-500 mt-1">{cleanNotes}</div>}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         {r.status === 'in_transit' ? (
@@ -1200,7 +1205,7 @@ export function Transfers() {
                       </div>
                     )}
                   </div>
-                ))
+                )})
               )}
             </Card>
           )}
