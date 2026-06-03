@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
-import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, todayLagos, isLabCategory } from '../../utils/helpers'
+import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Dashboard() {
@@ -17,7 +17,6 @@ export function Dashboard() {
   const [amcMap, setAmcMap]   = useState({})
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
-  const [todayCount, setTodayCount] = useState('—')
   const [sdpMap, setSdpMap]   = useState({})
   const [dsdMap, setDsdMap]   = useState({})
   const [loading, setLoading] = useState(true)
@@ -65,14 +64,6 @@ export function Dashboard() {
       amc[id] = calcAtypicalAMC(Object.entries(months).map(([k,v]) => ({ dispensed_at: k+'-01', quantity: v })))
     })
     setAmcMap(amc)
-
-    // Today's dispense count
-    const today = todayLagos()
-    const { count } = await sec(sb.from('dispense_log')
-      .select('*', { count: 'exact', head: true })
-      .gte('dispensed_at', today + 'T00:00:00')
-      .eq('facility_id', fid || store.currentFacility?.id))
-    setTodayCount(count || 0)
     setLoading(false)
   }
 
@@ -134,7 +125,7 @@ export function Dashboard() {
         <Metric label="Optimal stock"  value={enrichedAll.filter(r=>r.status==='ok').length}   color="green" />
         <Metric label="Low stock"     value={enrichedAll.filter(r=>r.status==='low').length}  color="amber" />
         <Metric label="Out of stock"  value={enrichedAll.filter(r=>r.status==='out').length}  color="red" />
-        <Metric label="Stock consumed today" value={todayCount} />
+        <Metric label="Overstock"     value={enrichedAll.filter(r=>r.status==='over').length} color="blue" />
       </MetricGrid>
 
       <Card className="mb-4">

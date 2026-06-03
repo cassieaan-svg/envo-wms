@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { calcAtypicalAMC, getMOS, getStockStatus, fmtStockQty, groupStockByComm, todayLagos } from '../../utils/helpers'
+import { calcAtypicalAMC, getMOS, getStockStatus, fmtStockQty, groupStockByComm } from '../../utils/helpers'
 
 export function Dashboard() {
   const store            = useAppStore()
@@ -17,7 +17,6 @@ export function Dashboard() {
   const [sdpMap, setSdpMap]   = useState({})
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
-  const [todayCount, setTodayCount] = useState('—')
   const [loading, setLoading] = useState(true)
 
   const fid = store.getEffectiveFacilityId()
@@ -61,33 +60,37 @@ export function Dashboard() {
       amc[id] = calcAtypicalAMC(Object.entries(months).map(([k,v]) => ({ dispensed_at: k+'-01', quantity: v })))
     })
     setAmcMap(amc)
-
-    // Today's dispense count
-    const today = todayLagos()
-    const { count } = await sec(sb.from('dispense_log')
-      .select('*', { count: 'exact', head: true })
-      .gte('dispensed_at', today + 'T00:00:00')
-      .eq('facility_id', fid || store.currentFacility?.id))
-    setTodayCount(count || 0)
     setLoading(false)
   }
 
   const getAMC  = r => amcMap[r.commodity_id] && amcMap[r.commodity_id] > 0 ? amcMap[r.commodity_id] : (r.baseline_amc || 0)
   const getStatus = r => getStockStatus(r.quantity, getAMC(r))
 
-  // Lab total = store + SDP (no dispensary/DSD). Override quantity so status/MOS use it.
-  const groupedAll = groupStockByComm(store.stockData).map(r => ({
-    ...r,
-    sdpQty: sdpMap[r.commodity_id] || 0,
-    quantity: r.storeQty + (sdpMap[r.commodity_id] || 0),
-  }))
+  const grouped = groupStockByComm(store.stockData)
+  const gMap = {}
+  grouped.forEach(g => { gMap[g.commodity_id] = g })
+
+  // Base on every tracked commodity so zero-stock / out-of-stock items appear.
+  // Lab total = store + SDP (no dispensary/DSD).
+  const groupedAll = store.allCommodities.map(c => {
+    const g        = gMap[c.id] || {}
+    const comm     = g.commodities || c
+    const storeQty = g.storeQty || 0
+    const sdpQty   = sdpMap[c.id] || 0
+    const quantity = storeQty + sdpQty
+    return {
+      id: c.id, commodity_id: c.id, commodities: comm,
+      storeQty, sdpQty, quantity, baseline_amc: g.baseline_amc || 0,
+    }
+  })
   const stockRows = groupedAll
     .filter(r => (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase()))
               && (!catFilter || r.commodities?.category === catFilter))
     .map(r => ({ ...r, _amc: getAMC(r), _status: getStatus(r), _mos: getMOS(r.quantity, getAMC(r)) }))
     .sort((a, b) => {
       const order = { out:0, low:1, unknown:2, ok:3, over:4 }
-      return order[a._status] - order[b._status]
+      return (order[a._status] - order[b._status])
+          || (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
     })
 
   const statusBadge = { out:'out', low:'low', ok:'ok', over:'over', unknown:'unknown' }
@@ -109,7 +112,7 @@ export function Dashboard() {
         <Metric label="Optimal stock"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" />
         <Metric label="Low stock"     value={groupedAll.filter(r=>getStatus(r)==='low').length}  color="amber" />
         <Metric label="Out of stock"  value={groupedAll.filter(r=>getStatus(r)==='out').length}  color="red" />
-        <Metric label="Stock utilized today" value={todayCount} />
+        <Metric label="Overstock"     value={groupedAll.filter(r=>getStatus(r)==='over').length} color="blue" />
       </MetricGrid>
 
       <Card>

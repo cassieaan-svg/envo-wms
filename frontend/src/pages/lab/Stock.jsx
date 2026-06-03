@@ -3,9 +3,9 @@ import { sb } from '../../lib/supabase'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
-import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { calcAtypicalAMC, getMOS, getStockStatus, fmtStockQty, groupStockByComm } from '../../utils/helpers'
+import { StockLevelsTable } from '../../components/StockLevelsTable'
+import { getMOS, getStockStatus, fmtStockQty, groupStockByComm } from '../../utils/helpers'
 
 export function Stock() {
   const store         = useAppStore()
@@ -92,14 +92,25 @@ export function Stock() {
     }
 
     const grouped = groupStockByComm(store.stockData)
-    const enriched = grouped.map(r => {
-      const calcAmc = amcMap[r.commodity_id]
-      const amc     = calcAmc && calcAmc > 0 ? +calcAmc.toFixed(1) : +(r.baseline_amc || 0).toFixed(1)
-      const mos     = getMOS(r.quantity, amc)
-      const status  = getStockStatus(r.quantity, amc)
-      // Use sdpMap to populate sdpQty from sdp_stock table
+    const gMap = {}
+    grouped.forEach(g => { gMap[g.commodity_id] = g })
+
+    // Base the list on every tracked commodity (not just those with stock), so
+    // zero-stock / out-of-stock items still appear — mirrors the admin view.
+    const enriched = store.allCommodities.map(c => {
+      const g        = gMap[c.id] || {}
+      const comm     = g.commodities || c
+      const storeQty = g.storeQty || 0
+      const sdpQty   = sdpMap[c.id] || 0
+      const calcAmc  = amcMap[c.id]
+      const amc      = calcAmc && calcAmc > 0 ? +calcAmc.toFixed(1) : +(g.baseline_amc || 0).toFixed(1)
       // Lab has no dispensary — total is store + SDP only
-      return { ...r, sdpQty: sdpMap[r.commodity_id] || 0, amc, mos, status, quantity: r.storeQty + (sdpMap[r.commodity_id] || 0) }
+      const quantity = storeQty + sdpQty
+      return {
+        id: c.id, commodity_id: c.id, commodities: comm,
+        storeQty, sdpQty, _isLab: true,
+        amc, mos: getMOS(quantity, amc), status: getStockStatus(quantity, amc), quantity,
+      }
     })
     setRows(enriched)
     setLoading(false)
@@ -117,10 +128,6 @@ export function Stock() {
       return c !== 0 ? c : (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
     })
 
-  const statusBadge = { out:'out', low:'low', ok:'ok', over:'over', unknown:'unknown' }
-  const statusLabel = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No AMC data' }
-  const mosColor    = { out:'text-red-400', low:'text-red-400', ok:'text-green-400', over:'text-blue-400', unknown:'text-gray-500' }
-
   // Group by category if sorting by category
   const byCategory = {}
   if (sortBy === 'category') {
@@ -130,37 +137,6 @@ export function Stock() {
       byCategory[cat].push(r)
     })
   }
-
-  const TableRows = ({ items }) => items.map(r => (
-    <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-      <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
-      <td className="px-4 py-3 text-xs text-gray-400">{r.commodities?.unit||'—'}</td>
-      <td className={`px-4 py-3 font-mono text-sm ${r.storeQty===0?'text-gray-500':'text-gray-200'}`}>
-        {fmtStockQty(r.storeQty, r.commodities)}
-      </td>
-      <td className={`px-4 py-3 font-mono text-sm ${r.dsdQty===0?'text-gray-500':'text-purple-300'}`}>
-        {fmtStockQty(r.dsdQty, r.commodities)}
-      </td>
-      <td className="px-4 py-3 font-mono text-sm text-gray-200">
-        {fmtStockQty(r.quantity, r.commodities)}
-      </td>
-      <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.amc > 0 ? r.amc : '—'}</td>
-      <td className={`px-4 py-3 font-mono text-sm font-medium ${mosColor[r.status]}`}>
-        {r.mos !== null ? `${r.mos}mo` : '—'}
-      </td>
-      <td className="px-4 py-3"><Badge type={statusBadge[r.status]}>{statusLabel[r.status]}</Badge></td>
-    </tr>
-  ))
-
-  const THead = () => (
-    <thead>
-      <tr className="border-b border-white/8 bg-white/2">
-        {['Commodity','Unit','Store SOH','SDP SOH','Total SOH','AMC','MOS','Status'].map(h => (
-          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-        ))}
-      </tr>
-    </thead>
-  )
 
   if (isSDP || isDSD) {
     const sdpFiltered = rows.filter(r =>
@@ -241,14 +217,14 @@ export function Stock() {
                 <span className="text-xs text-gray-500">{items.length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <table className="w-full text-sm"><THead /><tbody><TableRows items={items} /></tbody></table>
+                <StockLevelsTable items={items} />
               </div>
             </Card>
           ))
         ) : (
           <Card>
             <div className="table-wrap">
-              <table className="w-full text-sm"><THead /><tbody><TableRows items={filtered} /></tbody></table>
+              <StockLevelsTable items={filtered} />
             </div>
           </Card>
         )
