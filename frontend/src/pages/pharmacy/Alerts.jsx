@@ -7,7 +7,7 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -138,7 +138,6 @@ export function Alerts() {
   }
 
   async function loadStockAlerts() {
-    const grouped = groupStockByComm(store.stockData)
     const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth()-3)
     let amcMap = {}
     if (commIds.length && fid) {
@@ -159,15 +158,40 @@ export function Alerts() {
         amcMap[cid]=vals.length>=2?(vals[0]+vals[1])/2:vals[0]||0
       })
     }
-    const enriched = grouped.map(r=>{
-      const amc = amcMap[r.commodity_id]&&amcMap[r.commodity_id]>0?amcMap[r.commodity_id]:(r.baseline_amc||0)
-      const mos = getMOS(r.storeQty,amc)
-      return {...r,_amc:amc,_mos:mos}
+
+    // Aggregate DSD (pharmacy) and SDP (lab) stock so the total matches the Dashboard.
+    let dsdMap = {}, sdpMap = {}
+    if (fid) {
+      const [{ data: dsdData }, { data: sdpData }] = await Promise.all([
+        sb.from('dsd_stock').select('commodity_id,quantity').eq('facility_id', fid),
+        sb.from('sdp_stock').select('commodity_id,quantity').eq('facility_id', fid),
+      ])
+      ;(dsdData||[]).forEach(d=>{ dsdMap[d.commodity_id]=(dsdMap[d.commodity_id]||0)+d.quantity })
+      ;(sdpData||[]).forEach(d=>{ sdpMap[d.commodity_id]=(sdpMap[d.commodity_id]||0)+d.quantity })
+    }
+
+    const grouped = groupStockByComm(store.stockData)
+    const gMap = {}
+    grouped.forEach(g=>{ gMap[g.commodity_id]=g })
+
+    // Seed from every tracked commodity (not just those with a stock row) so
+    // zero-stock / out-of-stock items are counted — keeps these alerts
+    // consistent with the Dashboard.
+    const enriched = store.allCommodities.map(c=>{
+      const g             = gMap[c.id] || {}
+      const comm          = g.commodities || c
+      const storeQty      = g.storeQty || 0
+      const dispensaryQty = g.dispensaryQty || 0
+      const lab           = isLabCategory(comm?.category)
+      const quantity      = lab ? (storeQty + (sdpMap[c.id]||0)) : (storeQty + dispensaryQty + (dsdMap[c.id]||0))
+      const amc           = amcMap[c.id]&&amcMap[c.id]>0?amcMap[c.id]:(g.baseline_amc||0)
+      return { id:c.id, commodity_id:c.id, commodities:comm, storeQty, dispensaryQty, quantity,
+               _amc:amc, _mos:getMOS(quantity,amc), _status:getStockStatus(quantity,amc) }
     })
     setStock({
-      out:  enriched.filter(r=>r.storeQty===0),
-      low:  enriched.filter(r=>r._mos!==null&&r._mos<2&&r.storeQty>0),
-      over: enriched.filter(r=>r._mos!==null&&r._mos>4),
+      out:  enriched.filter(r=>r._status==='out'),
+      low:  enriched.filter(r=>r._status==='low'),
+      over: enriched.filter(r=>r._status==='over'),
     })
   }
 
@@ -202,7 +226,7 @@ export function Alerts() {
             <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
             <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
             <td className="px-4 py-3 text-xs text-gray-500">{r.commodities?.unit||'—'}</td>
-            <td className={`px-4 py-3 font-mono text-sm font-semibold ${qtyClass}`}>{r.storeQty}</td>
+            <td className={`px-4 py-3 font-mono text-sm font-semibold ${qtyClass}`}>{r.quantity}</td>
             <td className="px-4 py-3 font-mono text-xs text-gray-500">{r._amc>0?r._amc.toFixed(1):'—'}</td>
             <td className={`px-4 py-3 font-mono text-sm font-medium ${mosColor}`}>{r._mos!==null?r._mos+'mo':'—'}</td>
           </tr>
