@@ -3,7 +3,17 @@ import { sb } from '../../lib/supabase'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
-import { CatBadge } from '../../components/ui/Badge'
+import { Badge, CatBadge } from '../../components/ui/Badge'
+
+// Activity Log colour scheme reused for the report table.
+const ACTIVITY_BADGE = { Consumption: 'out', Intake: 'ok', Adjustment: 'info', Transfer: 'low' }
+function renderQty(row) {
+  const n = Math.abs(row.quantity || 0)
+  if (row.activity === 'Consumption') return <span className="font-mono text-sm text-red-400">-{n} {row.unit || ''}</span>
+  if (row.activity === 'Intake')      return <span className="font-mono text-sm text-green-400">+{n} {row.unit || ''}</span>
+  const pos = (row.quantity || 0) >= 0   // Adjustment / Transfer keep their sign
+  return <span className={`font-mono text-sm ${pos ? 'text-green-400' : 'text-red-400'}`}>{pos ? '+' : '-'}{n} {row.unit || ''}</span>
+}
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { REPORT_CATEGORIES, getReportCategoryLabel, fetchReportRows, buildCrrfCsv, buildActivityCsv, getSummaryMetrics } from '../../utils/reports'
@@ -299,10 +309,10 @@ export function Reports() {
                             />
                           </td>
                           <td className="px-4 py-3 font-medium text-gray-100">{row.date?.slice(0,10) || '—'}</td>
-                          <td className="px-4 py-3">{row.activity}</td>
+                          <td className="px-4 py-3"><Badge type={ACTIVITY_BADGE[row.activity] || 'info'}>{row.activity}</Badge></td>
                           <td className="px-4 py-3 font-medium text-gray-100">{row.commodity}</td>
                           <td className="px-4 py-3"><CatBadge>{row.category}</CatBadge></td>
-                          <td className="px-4 py-3 font-mono text-sm text-gray-100">{row.quantity}</td>
+                          <td className="px-4 py-3">{renderQty(row)}</td>
                           <td className="px-4 py-3 text-gray-300">{row.unit}</td>
                           <td className="px-4 py-3 text-gray-300">{row.facility}</td>
                           <td className="px-4 py-3 text-gray-300">{row.status}</td>
