@@ -191,10 +191,10 @@ export function buildActivityCsv(rows, category, title, stockMap = {}) {
 
   if (category === 'transfer') {
     let csv = `${label}\r\n`
-    csv += `S/No,Date,Commodity,Category,Quantity,Direction,Unit,From,To,Status,Notes\r\n`
+    csv += `S/No,Date,Category,Commodity,Unit,Quantity,Direction,From,To,Status,Notes\r\n`
     rows.forEach((row, i) => {
       const [from = '', to = ''] = row.facility.includes('→') ? row.facility.split('→').map(s => s.trim()) : [row.facility, '']
-      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.commodity}","${row.category}",${Math.abs(row.quantity)},"${row.direction || ''}","${row.unit}","${from}","${to}","${row.status}","${(row.notes || '').replace(/"/g, '""')}"\r\n`
+      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.category}","${row.commodity}","${row.unit}",${Math.abs(row.quantity)},"${row.direction || ''}","${from}","${to}","${row.status}","${(row.notes || '').replace(/"/g, '""')}"\r\n`
     })
     return csv
   }
