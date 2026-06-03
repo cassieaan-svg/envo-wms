@@ -76,24 +76,26 @@ const normalizeTransfer = (row, fid) => {
 const queryLog = async ({ sb, table, select, dateField, from, to, fid, commIds, section }) => {
   const { start, end } = toRange(from, to)
 
-  // Fetch all records and filter on client side for reliability
-  let q = sb.from(table).select(select)
-
-  if (commIds && commIds.length) q = q.in('commodity_id', commIds)
-  if (fid) q = q.eq('facility_id', fid)
-  if (section) q = q.eq('section', section)
-
-  const { data } = await q
-
-  // Filter by date using whichever field has a value (dateField first, then created_at)
-  return (data || []).filter(row => {
-    const checkDate = row[dateField] || row.created_at
-    if (!checkDate) return false
-    const d = new Date(checkDate)
-    const startDate = new Date(start)
-    const endDate = new Date(end)
-    return d >= startDate && d <= endDate
-  })
+  // Filter by date SERVER-SIDE and paginate. The previous approach fetched
+  // without a date filter and narrowed client-side, but PostgREST caps results
+  // at 1000 rows — so once a table grew large (e.g. an admin report spanning
+  // every facility) the recent rows fell outside that first page and the report
+  // silently showed nothing. Pull only the date range, in 1000-row pages.
+  const PAGE = 1000
+  let all = []
+  for (let offset = 0; ; offset += PAGE) {
+    let q = sb.from(table).select(select)
+      .gte(dateField, start).lte(dateField, end)
+      .range(offset, offset + PAGE - 1)
+    if (commIds && commIds.length) q = q.in('commodity_id', commIds)
+    if (fid) q = q.eq('facility_id', fid)
+    if (section) q = q.eq('section', section)
+    const { data, error } = await q
+    if (error || !data || !data.length) break
+    all = all.concat(data)
+    if (data.length < PAGE) break
+  }
+  return all
 }
 
 export async function fetchReportRows({ sb, category = 'all', from, to, fid, commIds, section }) {
@@ -123,14 +125,22 @@ export async function fetchReportRows({ sb, category = 'all', from, to, fid, com
 
   const getTransfer = async () => {
     const { start, end } = toRange(from, to)
-    let q = sb.from('stock_transfer_log')
-      .select('*,commodities(name,category,unit)')
-      .gte('initiated_at', start).lte('initiated_at', end)
-    if (commIds && commIds.length) q = q.in('commodity_id', commIds)
-    if (fid) q = q.or(`sending_facility_id.eq.${fid},receiving_facility_id.eq.${fid}`)
-    if (section) q = q.eq('section', section)
-    const { data } = await q
-    return (data || []).map(row => normalizeTransfer(row, fid))
+    const PAGE = 1000
+    let all = []
+    for (let offset = 0; ; offset += PAGE) {
+      let q = sb.from('stock_transfer_log')
+        .select('*,commodities(name,category,unit)')
+        .gte('initiated_at', start).lte('initiated_at', end)
+        .range(offset, offset + PAGE - 1)
+      if (commIds && commIds.length) q = q.in('commodity_id', commIds)
+      if (fid) q = q.or(`sending_facility_id.eq.${fid},receiving_facility_id.eq.${fid}`)
+      if (section) q = q.eq('section', section)
+      const { data, error } = await q
+      if (error || !data || !data.length) break
+      all = all.concat(data)
+      if (data.length < PAGE) break
+    }
+    return all.map(row => normalizeTransfer(row, fid))
   }
 
   if (category === 'all') {
