@@ -18,7 +18,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { REPORT_CATEGORIES, getReportCategoryLabel, fetchReportRows, buildCrrfCsv, buildActivityCsv, getSummaryMetrics } from '../../utils/reports'
 
-export function Reports() {
+export function Reports({ embedded = false } = {}) {
   const store = useAppStore()
   const [tab, setTab]       = useState('weekly')
   const now   = new Date()
@@ -154,10 +154,12 @@ export function Reports() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-xl font-medium text-gray-100">Reports</h1>
-        <p className="text-sm text-gray-500 mt-1">Weekly and monthly activity reports for {categoryLabel.toLowerCase()}</p>
-      </div>
+      {!embedded && (
+        <div className="mb-6">
+          <h1 className="text-xl font-medium text-gray-100">Reports</h1>
+          <p className="text-sm text-gray-500 mt-1">Weekly and monthly activity reports for {categoryLabel.toLowerCase()}</p>
+        </div>
+      )}
 
       <Card className="mb-20 overflow-visible">
         <CardBody className="overflow-visible">

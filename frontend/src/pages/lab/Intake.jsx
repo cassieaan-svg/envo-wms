@@ -300,7 +300,7 @@ export function Intake() {
               <Button type="submit" variant="success" size="lg" disabled={saving}>
                 {saving ? 'Saving…' : 'Confirm intake'}
               </Button>
-              <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('intake'); store.setCurrentPage('reports') }}>
+              <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('intake'); store.setPendingReportsTab(true); store.setCurrentPage('log') }}>
                 Export summary
               </Button>
             </div>

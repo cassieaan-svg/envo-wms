@@ -328,7 +328,7 @@ export function Adjustment() {
               <Button type="submit" variant="success" size="lg" disabled={saving}>
                 {saving ? 'Saving…' : 'Save adjustment'}
               </Button>
-              <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('adjustment'); store.setCurrentPage('reports') }}>
+              <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('adjustment'); store.setPendingReportsTab(true); store.setCurrentPage('log') }}>
                 Export summary
               </Button>
             </div>

@@ -15,7 +15,6 @@ import { Intake     as PharmIntake     } from './pages/pharmacy/Intake'
 import { Adjustment as PharmAdjustment } from './pages/pharmacy/Adjustment'
 import { Transfers  as PharmTransfers  } from './pages/pharmacy/Transfers'
 import { Log        as PharmLog        } from './pages/pharmacy/Log'
-import { Reports    as PharmReports    } from './pages/pharmacy/Reports'
 import { Alerts     as PharmAlerts     } from './pages/pharmacy/Alerts'
 import { Monitoring as PharmMonitoring } from './pages/pharmacy/Monitoring'
 
@@ -27,7 +26,6 @@ import { Intake     as LabIntake     } from './pages/lab/Intake'
 import { Adjustment as LabAdjustment } from './pages/lab/Adjustment'
 import { Transfers  as LabTransfers  } from './pages/lab/Transfers'
 import { Log        as LabLog        } from './pages/lab/Log'
-import { Reports    as LabReports    } from './pages/lab/Reports'
 import { Alerts     as LabAlerts     } from './pages/lab/Alerts'
 import { Monitoring as LabMonitoring } from './pages/lab/Monitoring'
 
@@ -57,13 +55,13 @@ const sdpMap = {
 const pharmMap = {
   dashboard: PharmDashboard, stock: PharmStock, dispense: PharmDispense,
   intake: PharmIntake, adjustment: PharmAdjustment, transfers: PharmTransfers,
-  log: PharmLog, reports: PharmReports, crrf: PharmCRRF,
+  log: PharmLog, crrf: PharmCRRF,
   alerts: PharmAlerts, monitoring: PharmMonitoring,
 }
 const labMap = {
   dashboard: LabDashboard, stock: LabStock, dispense: LabDispense,
   intake: LabIntake, adjustment: LabAdjustment, transfers: LabTransfers,
-  log: LabLog, reports: LabReports, crrf: LabCRRF,
+  log: LabLog, crrf: LabCRRF,
   alerts: LabAlerts, monitoring: LabMonitoring,
 }
 const adminMap = { ...pharmMap, 'all-facilities': AllFacilities }
@@ -78,10 +76,10 @@ function PageRouter() {
   const isSDP        = accessLevel === 'facility' && facilityRole === 'sdp'
   const isLab        = section === 'lab'
   const map          = isSDP ? sdpMap : isDSD ? dsdMap : isLab ? labMap : isAdmin ? adminMap : pharmMap
-  // Daily Report and admin Daily Summary were removed; fall back to
-  // Weekly/Monthly for any persisted page so existing sessions don't land on
-  // "Page not found".
-  const PageComponent = map[page] || (['report','dailysummary'].includes(page) ? map['reports'] : undefined)
+  // Daily Report, the standalone Weekly/Monthly page and admin Daily Summary
+  // were folded into the Activity Log; route any persisted legacy page there so
+  // existing sessions don't land on "Page not found".
+  const PageComponent = map[page] || (['report','reports','dailysummary'].includes(page) ? map['log'] : undefined)
   if (!PageComponent) return (
     <div className="flex items-center justify-center h-64 text-gray-500 text-sm">Page not found</div>
   )

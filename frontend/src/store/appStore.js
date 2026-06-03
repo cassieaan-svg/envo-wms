@@ -28,6 +28,7 @@ export const useAppStore = create((set, get) => ({
   theme:          localStorage.getItem('ct_theme') || 'dark',
   currentPage:    sessionStorage.getItem('ct_page') || 'dashboard',
   currentReportCategory: 'all',
+  pendingReportsTab: false,   // one-shot: open the Activity Log's Weekly/Monthly tab
 
   // Setters
   setUser:             (user)             => set({ user }),
@@ -49,6 +50,7 @@ export const useAppStore = create((set, get) => ({
     set({ currentPage: page })
   },
   setCurrentReportCategory: (currentReportCategory) => set({ currentReportCategory }),
+  setPendingReportsTab: (pendingReportsTab) => set({ pendingReportsTab }),
   setTheme: (theme) => {
     localStorage.setItem('ct_theme', theme)
     set({ theme })
@@ -101,6 +103,6 @@ export const useAppStore = create((set, get) => ({
     adminState:null, adminLGA:null, currentFacility:null,
     adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
     allFacilities:[], allCommodities:[], stockData:[], dsdFacilities:[],
-    currentPage:'dashboard', currentReportCategory:'all'
+    currentPage:'dashboard', currentReportCategory:'all', pendingReportsTab:false
   }),
 }))

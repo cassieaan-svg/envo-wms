@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
+import { Reports } from './Reports'
 import { fmtDateTime, fmtDate, fmtDispenseQty, fmtStockQty, getCommodityPackSize } from '../../utils/helpers'
 
 export function Log() {
@@ -17,6 +18,10 @@ export function Log() {
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
   const [editRecord, setEditRecord] = useState(null)
+  // Weekly/Monthly now lives here as a second tab. The one-shot store flag lets
+  // the operation pages' "Export summary" buttons open straight onto it.
+  const [view, setView] = useState(store.pendingReportsTab ? 'reports' : 'activity')
+  useEffect(() => { if (store.pendingReportsTab) store.setPendingReportsTab(false) }, [])
 
   const fid    = store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
@@ -51,10 +56,21 @@ export function Log() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-xl font-medium text-gray-100">Activity Log</h1>
-        <p className="text-sm text-gray-500 mt-1">All stock, intake and adjustment events at your facility</p>
+        <h1 className="text-xl font-medium text-gray-100">{view === 'reports' ? 'Reports' : 'Activity Log'}</h1>
+        <p className="text-sm text-gray-500 mt-1">{view === 'reports' ? 'Weekly and monthly activity summaries' : 'All stock, intake and adjustment events at your facility'}</p>
       </div>
 
+      <div className="flex gap-2 mb-4">
+        {[['activity','Activity Log'],['reports','Weekly / Monthly']].map(([id,label]) => (
+          <button key={id} onClick={() => setView(id)}
+            className={`px-4 py-2 text-sm rounded-lg border transition-colors ${view===id ? 'bg-white/8 border-white/15 text-gray-100 font-medium' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'reports' ? <Reports embedded /> : (
+      <>
       {editRecord && (
         <EditModal record={editRecord} onClose={()=>setEditRecord(null)} onSave={()=>{setEditRecord(null);loadAll()}}/>
       )}
@@ -115,6 +131,8 @@ export function Log() {
           </table></div>
         )}
       </Card>
+      </>
+      )}
     </div>
   )
 }

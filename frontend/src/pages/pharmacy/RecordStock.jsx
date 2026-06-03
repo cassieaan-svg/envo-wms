@@ -249,7 +249,7 @@ export function RecordStock() {
                 {saving ? 'Saving…' : 'Record stock'}
               </Button>
               {!isDSD && (
-                <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('dispense'); store.setCurrentPage('reports') }}>
+                <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('dispense'); store.setPendingReportsTab(true); store.setCurrentPage('log') }}>
                   Export summary
                 </Button>
               )}
