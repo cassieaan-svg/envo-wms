@@ -25,6 +25,11 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true)
 
   const fid = store.getEffectiveFacilityId()
+  // Admin viewing all facilities (no fid): aggregate across every facility they
+  // oversee. State/LGA admins are limited to their facility ids; overall admin
+  // spans all.
+  const isAdmin = store.isAdmin()
+  const scopeIds = (!fid && isAdmin && !store.isOverallAdmin()) ? store.allFacilities.map(f => f.id) : null
 
   useEffect(() => {
     loadData()
@@ -34,17 +39,23 @@ export function Dashboard() {
     setLoading(true)
     await loadStock()
 
-    // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity
-    const facId = fid || store.currentFacility?.id
-    const sdpAgg = {}, dsdAgg = {}
-    if (facId) {
-      const [{ data: dsdData }, { data: sdpData }] = await Promise.all([
-        sb.from('dsd_stock').select('commodity_id,quantity').eq('facility_id', facId),
-        sb.from('sdp_stock').select('commodity_id,quantity').eq('facility_id', facId),
-      ])
-      ;(dsdData || []).forEach(d => { dsdAgg[d.commodity_id] = (dsdAgg[d.commodity_id] || 0) + d.quantity })
-      ;(sdpData || []).forEach(d => { sdpAgg[d.commodity_id] = (sdpAgg[d.commodity_id] || 0) + d.quantity })
+    // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility
+    // scoped, use it; for an admin viewing all facilities, aggregate across the
+    // whole scope (paginated past the 1000-row cap).
+    const aggSiteStock = async (table) => {
+      const map = {}
+      for (let offset = 0; ; offset += 1000) {
+        let q = sb.from(table).select('commodity_id,quantity').range(offset, offset + 999)
+        if (fid) q = q.eq('facility_id', fid)
+        else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
+        const { data, error } = await q
+        if (error || !data || !data.length) break
+        data.forEach(d => { map[d.commodity_id] = (map[d.commodity_id] || 0) + d.quantity })
+        if (data.length < 1000) break
+      }
+      return map
     }
+    const [dsdAgg, sdpAgg] = await Promise.all([aggSiteStock('dsd_stock'), aggSiteStock('sdp_stock')])
     setDsdMap(dsdAgg)
     setSdpMap(sdpAgg)
 
@@ -178,7 +189,7 @@ export function Dashboard() {
       )}
 
       {drill && (
-        <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid || store.currentFacility?.id} onClose={() => setDrill(null)} />
+        <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid} scopeIds={scopeIds} onClose={() => setDrill(null)} />
       )}
     </div>
   )

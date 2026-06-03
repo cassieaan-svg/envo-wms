@@ -27,6 +27,9 @@ export function Stock() {
   const accessLevel  = useAppStore(s => s.accessLevel)
   const dsdSiteName  = useAppStore(s => s.dsdSiteName)
   const isDSD = accessLevel === 'facility' && facilityRole === 'dsd'
+  // Admin viewing all facilities (no fid): aggregate across their scope.
+  const isAdmin = store.isAdmin()
+  const scopeIds = (!fid && isAdmin && !store.isOverallAdmin()) ? store.allFacilities.map(f => f.id) : null
 
   useEffect(() => { loadData() }, [fid, dsdSiteName])
 
@@ -71,16 +74,23 @@ export function Stock() {
       })
     }
 
-    // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity
-    let dsdMap = {}, sdpMap = {}
-    if (fid) {
-      const [{ data: dsdData }, { data: sdpData }] = await Promise.all([
-        sb.from('dsd_stock').select('commodity_id,quantity').eq('facility_id', fid),
-        sb.from('sdp_stock').select('commodity_id,quantity').eq('facility_id', fid),
-      ])
-      ;(dsdData || []).forEach(d => { dsdMap[d.commodity_id] = (dsdMap[d.commodity_id] || 0) + d.quantity })
-      ;(sdpData || []).forEach(d => { sdpMap[d.commodity_id] = (sdpMap[d.commodity_id] || 0) + d.quantity })
+    // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility
+    // scoped, use it; for an admin viewing all facilities, aggregate across the
+    // whole scope (paginated past the 1000-row cap).
+    const aggSiteStock = async (table) => {
+      const map = {}
+      for (let offset = 0; ; offset += 1000) {
+        let q = sb.from(table).select('commodity_id,quantity').range(offset, offset + 999)
+        if (fid) q = q.eq('facility_id', fid)
+        else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
+        const { data, error } = await q
+        if (error || !data || !data.length) break
+        data.forEach(d => { map[d.commodity_id] = (map[d.commodity_id] || 0) + d.quantity })
+        if (data.length < 1000) break
+      }
+      return map
     }
+    const [dsdMap, sdpMap] = await Promise.all([aggSiteStock('dsd_stock'), aggSiteStock('sdp_stock')])
 
     const grouped = groupStockByComm(store.stockData)
     const gMap = {}
@@ -239,7 +249,7 @@ export function Stock() {
       }
 
       {drill && (
-        <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid} onClose={() => setDrill(null)} />
+        <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid} scopeIds={scopeIds} onClose={() => setDrill(null)} />
       )}
     </div>
   )
