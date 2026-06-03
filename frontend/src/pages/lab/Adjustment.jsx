@@ -10,12 +10,18 @@ import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
 import { fmtDate, fmtStockQty, todayLagos } from '../../utils/helpers'
 
+// Returns stock from an SDP site back to the store: positive adjustment to the
+// store, negative adjustment to the selected site's stock.
+const RETURN_REASON = 'Returned from SDP'
+const SITE_CFG = { table: 'sdp_stock', col: 'sdp_name', label: 'SDP site' }
+
 const RULES = {
   'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock' },
   'Damaged':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase damaged stock' },
   'Lost / Stolen':             { type:'Decrease', lock:true,  label:'Negative — cannot increase lost/stolen stock' },
   'Physical count correction': { type:null,       lock:false, label:'Can be positive or negative' },
   'Returned to store':         { type:'Increase', lock:true,  label:'Positive — stock is being returned' },
+  [RETURN_REASON]:             { type:'Increase', lock:true,  label:'Positive to store — deducts from the selected SDP site' },
   'State Office':              { type:'Increase', lock:true,  label:'Positive — stock adjustment from state office' },
   'Other':                     { type:null,       lock:false, label:'Specify type manually' },
 }
@@ -36,6 +42,9 @@ export function Adjustment() {
   const [adjNotes, setAdjNotes]= useState('')
   const [adjExpiry, setAdjExpiry] = useState('')
   const [adjBatch, setAdjBatch]   = useState('')
+  const [returnSite, setReturnSite] = useState('')
+  const [siteOptions, setSiteOptions] = useState([])
+  const [loadingSites, setLoadingSites] = useState(false)
   const [saving, setSaving]   = useState(false)
   const [msg, setMsg]         = useState(null)
   const [recent, setRecent]   = useState([])
@@ -46,9 +55,31 @@ export function Adjustment() {
   const [historyRecord, setHistoryRecord] = useState(null)
 
   const fid = store.currentFacility?.id
+  const isReturn = reason === RETURN_REASON
 
   useEffect(() => { loadRecent() }, [fid])
   useEffect(() => { if(fid) loadRecent() }, [historyDate])
+
+  // For a "Returned from site" adjustment, list the sites that currently hold
+  // the selected commodity (the valid return sources) with their available qty.
+  useEffect(() => {
+    let active = true
+    if (!isReturn || !fid || !commId) { setSiteOptions([]); return }
+    setLoadingSites(true)
+    sb.from(SITE_CFG.table).select(`${SITE_CFG.col},quantity`)
+      .eq('facility_id', fid).eq('commodity_id', commId)
+      .then(({ data }) => {
+        if (!active) return
+        const opts = (data || [])
+          .filter(r => r.quantity > 0)
+          .map(r => ({ site: r[SITE_CFG.col], quantity: r.quantity }))
+          .sort((a, b) => b.quantity - a.quantity)
+        setSiteOptions(opts)
+        setReturnSite(prev => opts.some(o => o.site === prev) ? prev : '')
+        setLoadingSites(false)
+      })
+    return () => { active = false }
+  }, [isReturn, fid, commId])
 
   const rule      = RULES[reason]
   // Adjustments target the main store inventory. Prefer the 'store' location
@@ -69,6 +100,7 @@ export function Adjustment() {
     const rule = RULES[r]
     if (rule?.type) setAdjType(rule.type)
     else setAdjType('')
+    if (r !== RETURN_REASON) { setReturnSite(''); setSiteOptions([]) }
   }
 
   if (!canManage) return (
@@ -94,6 +126,50 @@ export function Adjustment() {
     if (!adjExpiry) { setMsg({type:'error',text:'Expiry date is required.'}); return }
     if (rule?.lock && rule.type && adjType !== rule.type) {
       setMsg({type:'error',text:`${reason} must be a ${rule.type} adjustment.`}); return
+    }
+
+    const qtyN = parseInt(qty)
+
+    // ── Returned from an SDP site ─────────────────────────────────────────
+    // Credits the store and debits the chosen site. Validate the site holds
+    // enough before mutating either side.
+    if (isReturn) {
+      if (!returnSite) { setMsg({type:'error',text:`Select the ${SITE_CFG.label} the stock is returned from.`}); return }
+      setSaving(true)
+      const { data: siteStk } = await sb.from(SITE_CFG.table).select('id,quantity')
+        .eq('facility_id', fid).eq(SITE_CFG.col, returnSite).eq('commodity_id', commId).maybeSingle()
+      if (!siteStk || siteStk.quantity < qtyN) {
+        setMsg({type:'error',text:`${returnSite} only has ${siteStk?.quantity || 0} in stock — cannot return ${qtyN}.`}); setSaving(false); return
+      }
+
+      const returnNote = `Returned from ${SITE_CFG.label}: ${returnSite}${adjNotes ? ' — ' + adjNotes : ''}`
+      const { error: logErr } = await sb.from('stock_adjustment_log').insert({
+        facility_id:fid, commodity_id:commId, quantity:qtyN,
+        adjustment_type:'Increase', reason, adjusted_by:adjBy||null,
+        reference_number:adjRef||null, notes:returnNote, adjusted_at:new Date().toISOString(),
+        expiry_date:adjExpiry||null, batch_number:adjBatch||null,
+        section:commoditySection,
+      })
+      if (logErr) { setMsg({type:'error',text:'Error: '+logErr.message}); setSaving(false); return }
+
+      // Credit the store (create the row if the store holds none yet).
+      const { data: storeStk } = await sb.from('stock').select('id,quantity')
+        .eq('facility_id', fid).eq('commodity_id', commId).eq('location_type', 'store').maybeSingle()
+      const newStoreQty = (storeStk?.quantity || 0) + qtyN
+      if (storeStk) {
+        await sb.from('stock').update({ quantity:newStoreQty, updated_at:new Date().toISOString() }).eq('id', storeStk.id)
+      } else {
+        await sb.from('stock').insert({ facility_id:fid, commodity_id:commId, quantity:qtyN, location_type:'store', updated_at:new Date().toISOString() })
+      }
+
+      // Debit the site.
+      await sb.from(SITE_CFG.table).update({ quantity: Math.max(0, siteStk.quantity - qtyN), updated_at:new Date().toISOString() }).eq('id', siteStk.id)
+
+      toast('Return recorded','green')
+      setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from ${returnSite} to store. Store stock: ${fmtStockQty(newStoreQty, selectedComm)}`})
+      setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setReturnSite(''); setSiteOptions([])
+      await loadStock(); loadRecent(); setSaving(false)
+      return
     }
 
     setSaving(true)
@@ -198,6 +274,19 @@ export function Adjustment() {
                 {rule && <p className={`text-xs mt-1 ${rule.type==='Increase'?'text-green-400':rule.type==='Decrease'?'text-red-400':'text-gray-500'}`}>{rule.label}</p>}
               </div>
             </div>
+
+            {isReturn && (
+              <div>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">{SITE_CFG.label} *</label>
+                <select value={returnSite} onChange={e=>setReturnSite(e.target.value)}
+                  disabled={!commId || loadingSites}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500 disabled:opacity-50">
+                  <option value="">{!commId ? 'Select a commodity first…' : loadingSites ? 'Loading sites…' : siteOptions.length ? `Select ${SITE_CFG.label}…` : `No ${SITE_CFG.label} holds this commodity`}</option>
+                  {siteOptions.map(o => <option key={o.site} value={o.site}>{o.site} — {fmtStockQty(o.quantity, selectedComm)} available</option>)}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Adds to store stock and deducts the same quantity from the selected {SITE_CFG.label}.</p>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
