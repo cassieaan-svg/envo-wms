@@ -10,7 +10,6 @@ import { REPORT_CATEGORIES, getReportCategoryLabel, fetchReportRows, buildCrrfCs
 
 export function Reports() {
   const store = useAppStore()
-  const category = store.currentReportCategory || 'all'
   const [tab, setTab]       = useState('weekly')
   const now   = new Date()
   const dayOfWeek = now.getDay() || 7
@@ -26,8 +25,16 @@ export function Reports() {
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(false)
   const [selectedActivities, setSelectedActivities] = useState(new Set())
-  const [selectedActivityTypes, setSelectedActivityTypes] = useState(new Set(['dispense', 'intake', 'adjustment', 'transfer']))
+  const [selectedActivityTypes, setSelectedActivityTypes] = useState(() => {
+    const c = store.currentReportCategory
+    return ['dispense','intake','adjustment','transfer'].includes(c) ? new Set([c]) : new Set(['dispense','intake','adjustment','transfer'])
+  })
   const [showActivityDropdown, setShowActivityDropdown] = useState(false)
+
+  // The Activity Types selector is the single source of truth for the report:
+  // exactly one type loads that activity; multiple (or all) load everything and
+  // the table/CSV are narrowed to the ticked types.
+  const category = selectedActivityTypes.size === 1 ? [...selectedActivityTypes][0] : 'all'
 
   const fid     = store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
@@ -80,10 +87,11 @@ export function Reports() {
       })
     }
 
+    const rows = summary.rows.filter(rowMatchesFilter)
     const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report — ${summary.label}`
     const csv = category === 'all'
-      ? buildCrrfCsv(summary.rows, title, stockMap)
-      : buildActivityCsv(summary.rows, category, title, stockMap)
+      ? buildCrrfCsv(rows, title, stockMap)
+      : buildActivityCsv(rows, category, title, stockMap)
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = `${tab}-${category}-report-${summary.label}.csv`
@@ -92,7 +100,8 @@ export function Reports() {
   }
 
   const categoryLabel = getReportCategoryLabel(category)
-  const metrics = getSummaryMetrics(summary?.rows || [], category)
+  const filteredRows = (summary?.rows || []).filter(rowMatchesFilter)
+  const metrics = getSummaryMetrics(filteredRows, category)
 
   const TabBtn = ({id,label}) => (
     <button onClick={()=>setTab(id)}
@@ -194,27 +203,22 @@ export function Reports() {
             <CardHeader>
               <CardTitle>{tab === 'weekly' ? 'Weekly' : 'Monthly'} {categoryLabel} summary</CardTitle>
             </CardHeader>
-            {summary?.rows?.length ? (
+            {filteredRows.length ? (
               <>
-                {(() => {
-                  const filteredRows = summary.rows.filter(rowMatchesFilter)
-                  return (
-                    <div className="px-4 py-3 flex gap-2 items-center border-b border-white/5">
-                      <input type="checkbox"
-                        checked={selectedActivities.size === filteredRows.length && filteredRows.length > 0}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedActivities(new Set(filteredRows.map((_, i) => i)))
-                          } else {
-                            setSelectedActivities(new Set())
-                          }
-                        }}
-                        className="w-4 h-4 cursor-pointer"
-                      />
-                      <span className="text-xs text-gray-400">{selectedActivities.size > 0 ? `${selectedActivities.size} selected` : 'Select all'}</span>
-                    </div>
-                  )
-                })()}
+                <div className="px-4 py-3 flex gap-2 items-center border-b border-white/5">
+                  <input type="checkbox"
+                    checked={selectedActivities.size === filteredRows.length && filteredRows.length > 0}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedActivities(new Set(filteredRows.map((_, i) => i)))
+                      } else {
+                        setSelectedActivities(new Set())
+                      }
+                    }}
+                    className="w-4 h-4 cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-400">{selectedActivities.size > 0 ? `${selectedActivities.size} selected` : 'Select all'}</span>
+                </div>
                 <div className="table-wrap"><table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-white/8 bg-white/2">
@@ -225,7 +229,7 @@ export function Reports() {
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.rows.filter(rowMatchesFilter).map((row, index) => {
+                    {filteredRows.map((row, index) => {
                       const isSelected = selectedActivities.has(index)
                       return (
                         <tr key={`${row.id}-${index}`} className={`border-b border-white/5 hover:bg-white/2 ${isSelected ? 'bg-white/5' : ''}`}>
@@ -259,7 +263,7 @@ export function Reports() {
                   </tbody>
                 </table></div>
               </>
-            ) : <EmptyState message={`No ${categoryLabel.toLowerCase()} recorded for this ${tab}.`} />}
+            ) : <EmptyState message={`No ${category === 'all' ? 'activity' : categoryLabel.toLowerCase()} recorded for this ${tab}.`} />}
           </Card>
         </>
       )}
