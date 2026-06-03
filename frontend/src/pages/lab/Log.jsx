@@ -26,19 +26,29 @@ export function Log() {
 
   const fid    = store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
+  const isAdmin = store.isAdmin()
 
-  useEffect(() => { loadAll() }, [fid])
+  useEffect(() => { loadAll() }, [fid, store.adminFilterFacility?.id])
 
   // Reload when commodity section changes to ensure proper filtering
   useEffect(() => { if(fid) loadAll() }, [store.commoditySection])
 
   async function loadAll() {
     setLoading(true)
-    const selComm = 'commodities(name,unit,dispensing_unit,pack_size)'
+    const selComm = 'commodities(name,unit,dispensing_unit,pack_size),facilities(name)'
+    // Admins span every facility (or the one they've filtered to) and both
+    // sections, so don't scope by a single facility or the full commodity list.
+    const scopeFid = isAdmin ? (store.adminFilterFacility?.id || null) : fid
+    const loadTable = (table, dateField) => {
+      let q = sec(sb.from(table).select('*,'+selComm))
+      if (scopeFid) q = q.eq('facility_id', scopeFid)
+      if (!isAdmin) q = q.in('commodity_id', commIds)
+      return q.order(dateField, { ascending: false }).limit(50).then(r => r.data || [])
+    }
     const [disp, intake, adj] = await Promise.all([
-      (!typeFilter||typeFilter==='dispense') ? sec(sb.from('dispense_log').select('*,'+selComm).eq('facility_id',fid)).in('commodity_id',commIds).order('dispensed_at',{ascending:false}).limit(50).then(r=>r.data||[]) : [],
-      (!typeFilter||typeFilter==='intake')   ? sec(sb.from('intake_log').select('*,'+selComm).eq('facility_id',fid)).in('commodity_id',commIds).order('received_at',{ascending:false}).limit(50).then(r=>r.data||[]) : [],
-      (!typeFilter||typeFilter==='adjustment')? sec(sb.from('stock_adjustment_log').select('*,'+selComm).eq('facility_id',fid)).in('commodity_id',commIds).order('adjusted_at',{ascending:false}).limit(50).then(r=>r.data||[]) : [],
+      (!typeFilter||typeFilter==='dispense')    ? loadTable('dispense_log','dispensed_at') : [],
+      (!typeFilter||typeFilter==='intake')      ? loadTable('intake_log','received_at') : [],
+      (!typeFilter||typeFilter==='adjustment')  ? loadTable('stock_adjustment_log','adjusted_at') : [],
     ])
     const merged = [
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
@@ -93,7 +103,7 @@ export function Log() {
         {loading ? <LoadingState/> : allRecords.length===0 ? <EmptyState message="No activity recorded yet."/> : (
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
-              {['Date','Type','Commodity','Qty','Details',...(canManage?['']:[''])].map((h,i)=>(
+              {['Date','Type','Commodity',...(isAdmin?['Facility']:[]),'Qty','Details',...(canManage?['']:[''])].map((h,i)=>(
                 <th key={i} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
               ))}
               {canManage && <th className="px-4 py-3"/>}
@@ -116,6 +126,7 @@ export function Log() {
                   <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r._time)}</td>
                   <td className="px-4 py-3"><Badge type={typeBadge[r._type]}>{typeLabel[r._type]}</Badge></td>
                   <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
+                  {isAdmin && <td className="px-4 py-3 text-xs text-gray-400">{r.facilities?.name||'—'}</td>}
                   <td className="px-4 py-3">{qty}</td>
                   <td className="px-4 py-3 text-xs text-gray-500">{details}</td>
                   {canManage && (
