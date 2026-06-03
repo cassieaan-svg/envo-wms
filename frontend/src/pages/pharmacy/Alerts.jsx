@@ -243,11 +243,11 @@ export function Alerts() {
       </div>
 
       <MetricGrid>
-        {store.isAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber"/>}
-        <Metric label="Out of stock"   value={stockRows.out.length}   color="red"/>
-        <Metric label="Low stock"      value={stockRows.low.length}   color="amber"/>
-        <Metric label="Overstock"      value={stockRows.over.length}  color="blue"/>
-        <Metric label="Expiry alerts"  value={expiryRows.filter(r=>(new Date(r.expiry_date)-today)/86400000<=30).length} color="red"/>
+        {store.isAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" onClick={()=>setTab('fac-requests')} active={tab==='fac-requests'}/>}
+        <Metric label="Out of stock"   value={stockRows.out.length}   color="red"   onClick={()=>setTab('out')}       active={tab==='out'}/>
+        <Metric label="Low stock"      value={stockRows.low.length}   color="amber" onClick={()=>setTab('low')}       active={tab==='low'}/>
+        <Metric label="Overstock"      value={stockRows.over.length}  color="blue"  onClick={()=>setTab('overstock')} active={tab==='overstock'}/>
+        <Metric label="Expiry alerts"  value={expiryRows.filter(r=>(new Date(r.expiry_date)-today)/86400000<=30).length} color="red" onClick={()=>setTab('expiry')} active={tab==='expiry'}/>
       </MetricGrid>
 
       <div className="flex gap-2 mb-4 flex-wrap">
