@@ -218,9 +218,9 @@ export function buildActivityCsv(rows, category, title, stockMap = {}) {
 
   if (category === 'intake') {
     let csv = `${label}\r\n`
-    csv += `S/No,Date,Commodity,Category,Quantity Received,Unit,Facility,Status,Notes\r\n`
+    csv += `S/No,Date,Facility,Category,Commodity,Unit,Quantity Received\r\n`
     rows.forEach((row, i) => {
-      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.commodity}","${row.category}",${row.quantity},"${row.unit}","${row.facility}","${row.status}","${(row.notes || '').replace(/"/g, '""')}"\r\n`
+      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.category}","${row.commodity}","${row.unit}",${row.quantity}\r\n`
     })
     return csv
   }
