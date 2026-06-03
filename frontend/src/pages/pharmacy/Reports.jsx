@@ -92,16 +92,29 @@ export function Reports() {
   async function exportCSV() {
     if (!summary?.rows) { toast('Load data first','red'); return }
 
-    // Build stock map (commodity name → total SOH) for ending balance column
+    // Build stock map (commodity name → total SOH) for the ending-balance
+    // column. A single facility uses its own rows; an admin viewing "All
+    // facilities" aggregates every overseen facility's stock. Paginate past the
+    // 1000-row PostgREST cap so the cross-facility totals are complete.
     const stockMap = {}
-    if (fid) {
-      const { data: stockRows } = await sb.from('stock').select('commodity_id,quantity').eq('facility_id', fid)
+    if (fid || isAdmin) {
       const commLookup = {}
       store.allCommodities.forEach(c => { commLookup[c.id] = c.name })
-      ;(stockRows || []).forEach(r => {
-        const name = commLookup[r.commodity_id]
-        if (name) stockMap[name] = (stockMap[name] || 0) + r.quantity
-      })
+      // State/LGA admins aggregate only their facilities; overall admin = all.
+      const scopeIds = (!fid && !store.isOverallAdmin()) ? store.allFacilities.map(f => f.id) : null
+      const PAGE = 1000
+      for (let offset = 0; ; offset += PAGE) {
+        let sq = sb.from('stock').select('commodity_id,quantity').range(offset, offset + PAGE - 1)
+        if (fid) sq = sq.eq('facility_id', fid)
+        else if (scopeIds && scopeIds.length) sq = sq.in('facility_id', scopeIds)
+        const { data, error } = await sq
+        if (error || !data || !data.length) break
+        data.forEach(r => {
+          const name = commLookup[r.commodity_id]
+          if (name) stockMap[name] = (stockMap[name] || 0) + r.quantity
+        })
+        if (data.length < PAGE) break
+      }
     }
 
     const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r))
