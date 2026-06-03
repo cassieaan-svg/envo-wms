@@ -33,7 +33,6 @@ import { Monitoring as LabMonitoring } from './pages/lab/Monitoring'
 
 // Admin pages
 import { AllFacilities } from './pages/admin/AllFacilities'
-import { DailySummary  } from './pages/admin/DailySummary'
 
 // DSD pages
 import { Dispense  as DsdDispense  } from './pages/dsd/Dispense'
@@ -67,7 +66,7 @@ const labMap = {
   log: LabLog, reports: LabReports, crrf: LabCRRF,
   alerts: LabAlerts, monitoring: LabMonitoring,
 }
-const adminMap = { ...pharmMap, 'all-facilities': AllFacilities, 'dailysummary': DailySummary }
+const adminMap = { ...pharmMap, 'all-facilities': AllFacilities }
 
 function PageRouter() {
   const section      = useAppStore(s => s.commoditySection)
@@ -79,9 +78,10 @@ function PageRouter() {
   const isSDP        = accessLevel === 'facility' && facilityRole === 'sdp'
   const isLab        = section === 'lab'
   const map          = isSDP ? sdpMap : isDSD ? dsdMap : isLab ? labMap : isAdmin ? adminMap : pharmMap
-  // Daily Report was removed; fall back to Weekly/Monthly for any persisted
-  // 'report' page so existing sessions don't land on "Page not found".
-  const PageComponent = map[page] || (page === 'report' ? map['reports'] : undefined)
+  // Daily Report and admin Daily Summary were removed; fall back to
+  // Weekly/Monthly for any persisted page so existing sessions don't land on
+  // "Page not found".
+  const PageComponent = map[page] || (['report','dailysummary'].includes(page) ? map['reports'] : undefined)
   if (!PageComponent) return (
     <div className="flex items-center justify-center h-64 text-gray-500 text-sm">Page not found</div>
   )
