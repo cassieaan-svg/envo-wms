@@ -27,6 +27,7 @@ export const useAppStore = create((set, get) => ({
   sidebarOpen:    false,
   theme:          localStorage.getItem('ct_theme') || 'dark',
   currentPage:    sessionStorage.getItem('ct_page') || 'dashboard',
+  currentReportCategory: 'all',
 
   // Setters
   setUser:             (user)             => set({ user }),
@@ -47,6 +48,7 @@ export const useAppStore = create((set, get) => ({
     sessionStorage.setItem('ct_page', page)
     set({ currentPage: page })
   },
+  setCurrentReportCategory: (currentReportCategory) => set({ currentReportCategory }),
   setTheme: (theme) => {
     localStorage.setItem('ct_theme', theme)
     set({ theme })
@@ -99,6 +101,6 @@ export const useAppStore = create((set, get) => ({
     adminState:null, adminLGA:null, currentFacility:null,
     adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
     allFacilities:[], allCommodities:[], stockData:[], dsdFacilities:[],
-    currentPage:'dashboard'
+    currentPage:'dashboard', currentReportCategory:'all'
   }),
 }))
