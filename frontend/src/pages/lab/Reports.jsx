@@ -36,8 +36,14 @@ export function Reports() {
   // the table/CSV are narrowed to the ticked types.
   const category = selectedActivityTypes.size === 1 ? [...selectedActivityTypes][0] : 'all'
 
-  const fid     = store.currentFacility?.id
-  const commIds = store.allCommodities.map(c => c.id)
+  // Admins aggregate across every facility and both sections, so don't scope
+  // the query to one facility or to a section's commodity list — passing the
+  // full catalogue as a `commodity_id` IN() filter is huge and silently drops
+  // every row, which is why the admin report came back empty. Facility users
+  // stay scoped to their facility + section commodities.
+  const isAdmin = store.isAdmin()
+  const fid     = isAdmin ? store.getEffectiveFacilityId() : store.currentFacility?.id
+  const commIds = isAdmin ? null : store.allCommodities.map(c => c.id)
 
   const activityTypes = [
     { key: 'dispense', label: 'Consumption' },
