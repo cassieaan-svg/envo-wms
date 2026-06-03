@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
+import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
 
 export function Dashboard() {
@@ -17,6 +18,8 @@ export function Dashboard() {
   const [sdpMap, setSdpMap]   = useState({})
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
+  const [stsFilter, setSts]   = useState('')
+  const [drill, setDrill]     = useState(null)
   const [loading, setLoading] = useState(true)
 
   const fid = store.getEffectiveFacilityId()
@@ -90,6 +93,7 @@ export function Dashboard() {
       const amc = getAMC(r)
       return { ...r, _isLab: true, amc, status: getStockStatus(r.quantity, amc), mos: getMOS(r.quantity, amc) }
     })
+    .filter(r => !stsFilter || r.status === stsFilter)
     .sort((a, b) => {
       // In-stock commodities before out-of-stock ones, then by name
       const aOut = a.quantity === 0, bOut = b.quantity === 0
@@ -125,11 +129,11 @@ export function Dashboard() {
       </div>
 
       <MetricGrid>
-        <Metric label="Commodities tracked" value={groupedAll.length} color="blue" />
-        <Metric label="Optimal stock"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" />
-        <Metric label="Low stock"     value={groupedAll.filter(r=>getStatus(r)==='low').length}  color="amber" />
-        <Metric label="Out of stock"  value={groupedAll.filter(r=>getStatus(r)==='out').length}  color="red" />
-        <Metric label="Overstock"     value={groupedAll.filter(r=>getStatus(r)==='over').length} color="blue" />
+        <Metric label="Commodities tracked" value={groupedAll.length} color="blue" onClick={()=>setSts('')} active={stsFilter===''} />
+        <Metric label="Optimal stock"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" onClick={()=>setSts(s=>s==='ok'?'':'ok')}     active={stsFilter==='ok'} />
+        <Metric label="Low stock"     value={groupedAll.filter(r=>getStatus(r)==='low').length}  color="amber" onClick={()=>setSts(s=>s==='low'?'':'low')}   active={stsFilter==='low'} />
+        <Metric label="Out of stock"  value={groupedAll.filter(r=>getStatus(r)==='out').length}  color="red"   onClick={()=>setSts(s=>s==='out'?'':'out')}   active={stsFilter==='out'} />
+        <Metric label="Overstock"     value={groupedAll.filter(r=>getStatus(r)==='over').length} color="blue"  onClick={()=>setSts(s=>s==='over'?'':'over')} active={stsFilter==='over'} />
       </MetricGrid>
 
       <Card className="mb-4">
@@ -160,10 +164,14 @@ export function Dashboard() {
               <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
             </CardHeader>
             <div className="table-wrap">
-              <StockLevelsTable items={byCategory[cat]} />
+              <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} />
             </div>
           </Card>
         ))
+      )}
+
+      {drill && (
+        <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid || store.currentFacility?.id} onClose={() => setDrill(null)} />
       )}
     </div>
   )

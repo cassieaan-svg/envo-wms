@@ -32,14 +32,36 @@ function buildCols(items) {
   return cols
 }
 
-function renderCell(r, key) {
+// A DSD/SDP SOH cell. When onDrill is provided and the aggregate is non-zero,
+// the number becomes a button that opens the per-site breakdown.
+function SohCell({ r, kind, qty, onDrill }) {
+  const color = kind === 'dsd' ? 'text-purple-300' : 'text-blue-300'
+  const drillable = typeof onDrill === 'function' && qty > 0
+  if (!drillable) {
+    return <td className={`px-4 py-3 font-mono text-sm ${qty === 0 ? 'text-gray-500' : color}`}>{fmtStockQty(qty, r.commodities)}</td>
+  }
+  return (
+    <td className="px-4 py-3 font-mono text-sm">
+      <button
+        type="button"
+        onClick={() => onDrill(r, kind)}
+        title="View stock by site"
+        className={`${color} underline decoration-dotted underline-offset-2 hover:decoration-solid hover:text-white focus:outline-none`}
+      >
+        {fmtStockQty(qty, r.commodities)}
+      </button>
+    </td>
+  )
+}
+
+function renderCell(r, key, onDrill) {
   switch (key) {
     case 'name':       return <td key={key} className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
     case 'unit':       return <td key={key} className="px-4 py-3 text-xs text-gray-400">{r.commodities?.unit||'—'}</td>
     case 'store':      return <td key={key} className={`px-4 py-3 font-mono text-sm ${r.storeQty===0?'text-gray-500':'text-gray-200'}`}>{fmtStockQty(r.storeQty, r.commodities)}</td>
     case 'dispensary': return <td key={key} className={`px-4 py-3 font-mono text-sm ${r.dispensaryQty===0?'text-gray-500':'text-blue-300'}`}>{fmtStockQty(r.dispensaryQty, r.commodities)}</td>
-    case 'sdp':        return <td key={key} className={`px-4 py-3 font-mono text-sm ${(r.sdpQty||0)===0?'text-gray-500':'text-blue-300'}`}>{fmtStockQty(r.sdpQty||0, r.commodities)}</td>
-    case 'dsd':        return <td key={key} className={`px-4 py-3 font-mono text-sm ${(r.dsdQty||0)===0?'text-gray-500':'text-purple-300'}`}>{fmtStockQty(r.dsdQty||0, r.commodities)}</td>
+    case 'sdp':        return <SohCell key={key} r={r} kind="sdp" qty={r.sdpQty||0} onDrill={onDrill} />
+    case 'dsd':        return <SohCell key={key} r={r} kind="dsd" qty={r.dsdQty||0} onDrill={onDrill} />
     case 'total':      return <td key={key} className="px-4 py-3 font-mono text-sm text-gray-200">{fmtStockQty(r.quantity, r.commodities)}</td>
     case 'amc':        return <td key={key} className="px-4 py-3 font-mono text-xs text-gray-500">{r.amc > 0 ? r.amc : '—'}</td>
     case 'mos':        return <td key={key} className={`px-4 py-3 font-mono text-sm font-medium ${mosColor[r.status]}`}>{r.mos !== null && r.mos !== undefined ? `${r.mos}mo` : '—'}</td>
@@ -48,7 +70,9 @@ function renderCell(r, key) {
   }
 }
 
-export function StockLevelsTable({ items }) {
+// onDrill(row, kind) — optional. When supplied, DSD/SDP SOH cells with stock
+// become clickable to reveal the per-site breakdown.
+export function StockLevelsTable({ items, onDrill }) {
   const cols = buildCols(items)
   return (
     <table className="w-full text-sm">
@@ -62,7 +86,7 @@ export function StockLevelsTable({ items }) {
       <tbody>
         {items.map(r => (
           <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-            {cols.map(c => renderCell(r, c.key))}
+            {cols.map(c => renderCell(r, c.key, onDrill))}
           </tr>
         ))}
       </tbody>

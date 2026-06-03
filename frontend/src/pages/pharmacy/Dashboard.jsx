@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
+import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
@@ -17,8 +18,10 @@ export function Dashboard() {
   const [amcMap, setAmcMap]   = useState({})
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
+  const [stsFilter, setSts]   = useState('')
   const [sdpMap, setSdpMap]   = useState({})
   const [dsdMap, setDsdMap]   = useState({})
+  const [drill, setDrill]     = useState(null)
   const [loading, setLoading] = useState(true)
 
   const fid = store.getEffectiveFacilityId()
@@ -94,7 +97,8 @@ export function Dashboard() {
 
   const stockRows = enrichedAll
     .filter(r => (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase()))
-              && (!catFilter || r.commodities?.category === catFilter))
+              && (!catFilter || r.commodities?.category === catFilter)
+              && (!stsFilter || r.status === stsFilter))
     .sort((a, b) => {
       // In-stock commodities before out-of-stock ones, then by name
       const aOut = a.quantity === 0, bOut = b.quantity === 0
@@ -132,11 +136,11 @@ export function Dashboard() {
       <FacilityPicker />
 
       <MetricGrid>
-        <Metric label="Commodities tracked" value={enrichedAll.length} color="blue" />
-        <Metric label="Optimal stock"  value={enrichedAll.filter(r=>r.status==='ok').length}   color="green" />
-        <Metric label="Low stock"     value={enrichedAll.filter(r=>r.status==='low').length}  color="amber" />
-        <Metric label="Out of stock"  value={enrichedAll.filter(r=>r.status==='out').length}  color="red" />
-        <Metric label="Overstock"     value={enrichedAll.filter(r=>r.status==='over').length} color="blue" />
+        <Metric label="Commodities tracked" value={enrichedAll.length} color="blue" onClick={()=>setSts('')} active={stsFilter===''} />
+        <Metric label="Optimal stock"  value={enrichedAll.filter(r=>r.status==='ok').length}   color="green" onClick={()=>setSts(s=>s==='ok'?'':'ok')}     active={stsFilter==='ok'} />
+        <Metric label="Low stock"     value={enrichedAll.filter(r=>r.status==='low').length}  color="amber" onClick={()=>setSts(s=>s==='low'?'':'low')}   active={stsFilter==='low'} />
+        <Metric label="Out of stock"  value={enrichedAll.filter(r=>r.status==='out').length}  color="red"   onClick={()=>setSts(s=>s==='out'?'':'out')}   active={stsFilter==='out'} />
+        <Metric label="Overstock"     value={enrichedAll.filter(r=>r.status==='over').length} color="blue"  onClick={()=>setSts(s=>s==='over'?'':'over')} active={stsFilter==='over'} />
       </MetricGrid>
 
       <Card className="mb-4">
@@ -167,10 +171,14 @@ export function Dashboard() {
               <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
             </CardHeader>
             <div className="table-wrap">
-              <StockLevelsTable items={byCategory[cat]} />
+              <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} />
             </div>
           </Card>
         ))
+      )}
+
+      {drill && (
+        <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid || store.currentFacility?.id} onClose={() => setDrill(null)} />
       )}
     </div>
   )

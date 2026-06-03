@@ -5,6 +5,7 @@ import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
+import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
 
 export function Stock() {
@@ -18,6 +19,7 @@ export function Stock() {
   const [catFilter, setCat]   = useState('')
   const [stsFilter, setSts]   = useState('')
   const [sortBy, setSortBy]   = useState('category')
+  const [drill, setDrill]     = useState(null)
 
   const fid        = store.getEffectiveFacilityId() || store.currentFacility?.id
   const facilityRole = useAppStore(s => s.facilityRole)
@@ -229,18 +231,22 @@ export function Stock() {
                 <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={byCategory[cat]} />
+                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} />
               </div>
             </Card>
           ))
         ) : (
           <Card>
             <div className="table-wrap">
-              <StockLevelsTable items={filtered} />
+              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} />
             </div>
           </Card>
         )
       }
+
+      {drill && (
+        <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid} onClose={() => setDrill(null)} />
+      )}
     </div>
   )
 }
