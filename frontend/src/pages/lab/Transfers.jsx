@@ -11,11 +11,11 @@ import { fmtDate, SECTION_CATEGORIES } from '../../utils/helpers'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
 
-function MultiCommodityLines({ lines, updateLine, addLine, removeLine, categories, label = 'commodity' }) {
+function MultiCommodityLines({ lines, updateLine, addLine, removeLine, categories, label = 'commodity', hideStockIssued = false }) {
   return (
     <div className="space-y-3">
       {lines.map((line, idx) => (
-        <div key={line.id} className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end p-3 bg-white/3 rounded-lg border border-white/8">
+        <div key={line.id} className={`grid gap-3 items-end p-3 bg-white/3 rounded-lg border border-white/8 ${hideStockIssued ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-5'}`}>
           <div className="col-span-2 sm:col-span-2">
             <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Commodity *</label>
             <select value={line.commodity_id} onChange={e => updateLine(line.id, 'commodity_id', e.target.value)?.catch?.()} required className={inputCls}>
@@ -33,11 +33,13 @@ function MultiCommodityLines({ lines, updateLine, addLine, removeLine, categorie
             <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Stock required *</label>
             <input type="number" min="1" value={line.stock_required} onChange={e => updateLine(line.id, 'stock_required', e.target.value)} required className={inputCls} />
           </div>
-          <div>
-            <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Stock issued *</label>
-            <input type="number" min="1" value={line.stock_issued} onChange={e => updateLine(line.id, 'stock_issued', e.target.value)} required className={inputCls} />
-          </div>
-          <div className="col-span-2 sm:col-span-5 flex gap-2 justify-end">
+          {!hideStockIssued && (
+            <div>
+              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Stock issued *</label>
+              <input type="number" min="1" value={line.stock_issued} onChange={e => updateLine(line.id, 'stock_issued', e.target.value)} required className={inputCls} />
+            </div>
+          )}
+          <div className={`${hideStockIssued ? 'col-span-2 sm:col-span-4' : 'col-span-2 sm:col-span-5'} flex gap-2 justify-end`}>
             {lines.length > 1 && <button type="button" onClick={() => removeLine(line.id)} className="text-xs text-red-400 hover:text-red-300">Remove line</button>}
             {idx === lines.length - 1 && <button type="button" onClick={addLine} className="text-xs text-blue-400 hover:text-blue-300">+ Add {label}</button>}
           </div>
@@ -145,6 +147,7 @@ export function Transfers() {
   const [loadingIntPending, setLoadingIntPending] = useState(false)
   const [intApprovingId, setIntApprovingId] = useState(null)
   const [intApprovedBy, setIntApprovedBy] = useState('')
+  const [intIssuedQty, setIntIssuedQty] = useState('')
   const [intApproving, setIntApproving] = useState(false)
   const [intHistory, setIntHistory] = useState([])
   const [loadingI, setLoadingI] = useState(false)
@@ -161,6 +164,7 @@ export function Transfers() {
   const [loadingDsdPending, setLoadingDsdPending] = useState(false)
   const [dsdApprovingId, setDsdApprovingId] = useState(null)
   const [dsdApprovedBy, setDsdApprovedBy] = useState('')
+  const [dsdIssuedQty, setDsdIssuedQty] = useState('')
   const [dsdReceivedBy, setDsdReceivedBy] = useState('')
   const [dsdApproving, setDsdApproving] = useState(false)
   const [dsdHistory, setDsdHistory] = useState([])
@@ -544,14 +548,8 @@ export function Transfers() {
   async function submitInternal(e) {
     e?.preventDefault(); setIntMsg(null)
     if (!intRequestedBy.trim()) { setIntMsg({ type: 'error', text: 'Requested by is required.' }); return }
-    const lines = intLines.filter(l => l.commodity_id && l.stock_issued > 0)
-    if (!lines.length) { setIntMsg({ type: 'error', text: 'Add at least one commodity with stock issued.' }); return }
-    for (const l of lines) {
-      if (parseInt(l.stock_issued) > l.stock_balance) {
-        const comm = allCommodities.find(c => c.id === l.commodity_id)
-        setIntMsg({ type: 'error', text: `Stock issued for ${comm?.name || 'commodity'} exceeds balance (${l.stock_balance}).` }); return
-      }
-    }
+    const lines = intLines.filter(l => l.commodity_id && l.stock_required > 0)
+    if (!lines.length) { setIntMsg({ type: 'error', text: 'Add at least one commodity with stock required.' }); return }
     setIntSending(true)
     const payload = lines.map(l => {
       const comm = allCommodities.find(c => c.id === l.commodity_id)
@@ -559,7 +557,7 @@ export function Transfers() {
         sending_facility_id: fid, sending_facility_name: myFac?.name || '',
         receiving_facility_id: fid, receiving_facility_name: myFac?.name || '',
         commodity_id: l.commodity_id, commodity_name: comm?.name || '',
-        quantity: parseInt(l.stock_issued), status: 'pending_approval',
+        quantity: 0, qty_requested: parseInt(l.stock_required), status: 'pending_approval',
         initiated_by: intRequestedBy, initiated_at: new Date().toISOString(),
         notes: `[Internal: Store→Dispensary] balance:${l.stock_balance} required:${l.stock_required}${intNotes ? ' ' + intNotes : ''}`,
         section: commoditySection,
@@ -574,21 +572,23 @@ export function Transfers() {
     loadIntPendingApprovals(); setIntSending(false)
   }
 
-  async function approveInternal(record) {
+  async function approveInternal(record, issuedQty) {
     if (!intApprovedBy.trim()) { toast('Approved by is required', 'red'); return }
+    const parsedQty = parseInt(issuedQty)
+    if (!parsedQty || parsedQty < 1) { toast('Stock issued quantity is required', 'red'); return }
     setIntApproving(true)
     const storeStk = stockData.find(r => r.commodity_id === record.commodity_id && r.facility_id === fid && r.location_type === 'store')
-    if (!storeStk || storeStk.quantity < record.quantity) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setIntApproving(false); return }
-    await sb.from('stock').update({ quantity: storeStk.quantity - record.quantity, updated_at: new Date().toISOString() }).eq('id', storeStk.id)
+    if (!storeStk || storeStk.quantity < parsedQty) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setIntApproving(false); return }
+    await sb.from('stock').update({ quantity: storeStk.quantity - parsedQty, updated_at: new Date().toISOString() }).eq('id', storeStk.id)
     const { data: dispStk } = await sb.from('stock').select('id,quantity').eq('facility_id', fid).eq('commodity_id', record.commodity_id).eq('location_type', 'dispensary').maybeSingle()
     if (dispStk) {
-      await sb.from('stock').update({ quantity: dispStk.quantity + record.quantity, updated_at: new Date().toISOString() }).eq('id', dispStk.id)
+      await sb.from('stock').update({ quantity: dispStk.quantity + parsedQty, updated_at: new Date().toISOString() }).eq('id', dispStk.id)
     } else {
-      await sb.from('stock').insert({ facility_id: fid, commodity_id: record.commodity_id, quantity: record.quantity, location_type: 'dispensary', updated_at: new Date().toISOString() })
+      await sb.from('stock').insert({ facility_id: fid, commodity_id: record.commodity_id, quantity: parsedQty, location_type: 'dispensary', updated_at: new Date().toISOString() })
     }
-    await sb.from('stock_transfer_log').update({ status: 'accepted', resolved_at: new Date().toISOString(), resolved_by: intApprovedBy }).eq('id', record.id)
+    await sb.from('stock_transfer_log').update({ status: 'accepted', quantity: parsedQty, resolved_at: new Date().toISOString(), resolved_by: intApprovedBy }).eq('id', record.id)
     const comm = allCommodities.find(c => c.id === record.commodity_id)
-    toast(`${record.quantity} ${comm?.unit || 'units'} moved to dispensary`, 'green')
+    toast(`${parsedQty} ${comm?.unit || 'units'} moved to dispensary`, 'green')
     setIntApprovingId(null); setIntApprovedBy('')
     await loadStock(); loadIntPendingApprovals(); loadIntHistory(); loadAllIntHistory(); setIntApproving(false)
   }
@@ -647,14 +647,8 @@ export function Transfers() {
       setDsdMsg({ type: 'error', text: 'Select service delivery point.' }); return
     }
     if (!dsdSentBy) { setDsdMsg({ type: 'error', text: 'Sent by is required.' }); return }
-    const lines = dsdLines.filter(l => l.commodity_id && l.stock_issued > 0)
-    if (!lines.length) { setDsdMsg({ type: 'error', text: 'Add at least one commodity with stock issued.' }); return }
-    for (const l of lines) {
-      if (parseInt(l.stock_issued) > l.stock_balance) {
-        const comm = allCommodities.find(c => c.id === l.commodity_id)
-        setDsdMsg({ type: 'error', text: `Stock issued for ${comm?.name || 'commodity'} exceeds balance (${l.stock_balance}).` }); return
-      }
-    }
+    const lines = dsdLines.filter(l => l.commodity_id && l.stock_required > 0)
+    if (!lines.length) { setDsdMsg({ type: 'error', text: 'Add at least one commodity with stock required.' }); return }
     setDsdSending(true)
     const payload = lines.map(l => {
       const comm = allCommodities.find(c => c.id === l.commodity_id)
@@ -662,7 +656,7 @@ export function Transfers() {
         sending_facility_id: fid, sending_facility_name: myFac?.name || '',
         receiving_facility_id: null, receiving_facility_name: effectiveDsdType,
         commodity_id: l.commodity_id, commodity_name: comm?.name || '',
-        quantity: parseInt(l.stock_issued), status: 'pending_approval',
+        quantity: 0, qty_requested: parseInt(l.stock_required), status: 'pending_approval',
         initiated_by: dsdSentBy, initiated_at: new Date().toISOString(),
         notes: `[SDP: ${effectiveDsdType}] balance:${l.stock_balance} required:${l.stock_required}${dsdNotes ? ' ' + dsdNotes : ''}`,
         section: commoditySection,
@@ -677,22 +671,25 @@ export function Transfers() {
     loadDsdPendingApprovals(); setDsdSending(false)
   }
 
-  async function approveDsd(record) {
+  async function approveDsd(record, issuedQty) {
     if (!dsdApprovedBy.trim()) { toast('Approved by store manager is required', 'red'); return }
+    const parsedQty = parseInt(issuedQty)
+    if (!parsedQty || parsedQty < 1) { toast('Stock issued quantity is required', 'red'); return }
     setDsdApproving(true)
     const storeStk = stockData.find(r => r.commodity_id === record.commodity_id && r.facility_id === fid && r.location_type === 'store')
-    if (!storeStk || storeStk.quantity < record.quantity) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setDsdApproving(false); return }
+    if (!storeStk || storeStk.quantity < parsedQty) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setDsdApproving(false); return }
     // Deduct from store and dispatch to the SDP. The SDP user confirms receipt
     // (entering "Received by") which credits sdp_stock and finalises the transfer.
-    await sb.from('stock').update({ quantity: storeStk.quantity - record.quantity, updated_at: new Date().toISOString() }).eq('id', storeStk.id)
+    await sb.from('stock').update({ quantity: storeStk.quantity - parsedQty, updated_at: new Date().toISOString() }).eq('id', storeStk.id)
     await sb.from('stock_transfer_log').update({
       status: 'dispatched',
+      quantity: parsedQty,
       resolved_by: `[Approved: ${dsdApprovedBy}]`,
     }).eq('id', record.id)
     const comm = allCommodities.find(c => c.id === record.commodity_id)
     const sdpPointName = record.notes?.match(/\[(?:SDP|DSD): ([^\]]+)\]/)?.[1] || record.receiving_facility_name || ''
-    toast(`${record.quantity} ${comm?.unit || 'units'} approved & dispatched to ${sdpPointName || 'service delivery point'} — awaiting receipt`, 'green')
-    setDsdApprovingId(null); setDsdApprovedBy('')
+    toast(`${parsedQty} ${comm?.unit || 'units'} approved & dispatched to ${sdpPointName || 'service delivery point'} — awaiting receipt`, 'green')
+    setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty('')
     await loadStock(); loadDsdPendingApprovals(); loadDsdHistory(); loadAllIntHistory(); setDsdApproving(false)
   }
 
@@ -1260,7 +1257,7 @@ export function Transfers() {
                         )}
                       </div>
                     )}
-                    <MultiCommodityLines lines={dsdLines} updateLine={updateDsdLine} addLine={addDsdLine} removeLine={removeDsdLine} categories={categories} label="commodity" />
+                    <MultiCommodityLines lines={dsdLines} updateLine={updateDsdLine} addLine={addDsdLine} removeLine={removeDsdLine} categories={categories} label="commodity" hideStockIssued={true} />
                     <div>
                       <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Sent by *</label>
                       <input type="text" value={dsdSentBy} onChange={e => setDsdSentBy(e.target.value)} placeholder="Staff name or ID" required className={inputCls} />
@@ -1288,7 +1285,9 @@ export function Transfers() {
                           <div className="flex-1">
                             <div className="font-medium text-gray-100 mb-1">{r.commodity_name}</div>
                             <div className="text-sm text-gray-400">
-                              <span className="font-medium text-gray-200">{r.quantity}</span>{commUnit(r.commodity_id) ? ` ${commUnit(r.commodity_id)}` : ''} → <span className="text-purple-400">{r.receiving_facility_name}</span>
+                              <span className="text-gray-500">Required:</span> <span className="font-medium text-gray-200">{r.notes?.match(/required:(\d+)/)?.[1] ?? r.qty_requested ?? r.quantity}</span>{commUnit(r.commodity_id) ? ` ${commUnit(r.commodity_id)}` : ''}
+                              {r.notes?.match(/balance:(\d+)/)?.[1] && <span className="ml-3 text-gray-600">Balance: {r.notes.match(/balance:(\d+)/)[1]}</span>}
+                              <span className="ml-3">→ <span className="text-purple-400">{r.receiving_facility_name}</span></span>
                             </div>
                             <div className="text-xs text-gray-600 mt-1">Submitted {fmtDate(r.initiated_at)} by {r.initiated_by || '—'}</div>
                             {r.notes && <div className="text-xs text-gray-500 mt-1">{r.notes}</div>}
@@ -1296,18 +1295,25 @@ export function Transfers() {
                           <div className="flex gap-2 flex-wrap">
                             {dsdApprovingId === r.id ? (
                               <div className="flex flex-col gap-2">
-                                <div>
-                                  <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Approved by store manager *</label>
-                                  <input type="text" value={dsdApprovedBy} onChange={e => setDsdApprovedBy(e.target.value)} placeholder="Store manager name"
-                                    className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500 w-52" />
+                                <div className="flex items-end gap-2 flex-wrap">
+                                  <div>
+                                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Stock issued *</label>
+                                    <input type="number" min="1" value={dsdIssuedQty} onChange={e => setDsdIssuedQty(e.target.value)} placeholder={r.qty_requested || r.quantity}
+                                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500 w-28" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Approved by store manager *</label>
+                                    <input type="text" value={dsdApprovedBy} onChange={e => setDsdApprovedBy(e.target.value)} placeholder="Store manager name"
+                                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500 w-52" />
+                                  </div>
                                 </div>
                                 <div className="flex gap-2">
-                                  <Button variant="success" size="sm" onClick={() => approveDsd(r)} disabled={dsdApproving}>{dsdApproving ? 'Approving…' : 'Approve & dispatch'}</Button>
-                                  <Button variant="ghost" size="sm" onClick={() => { setDsdApprovingId(null); setDsdApprovedBy('') }}>Cancel</Button>
+                                  <Button variant="success" size="sm" onClick={() => approveDsd(r, dsdIssuedQty)} disabled={dsdApproving}>{dsdApproving ? 'Approving…' : 'Approve & dispatch'}</Button>
+                                  <Button variant="ghost" size="sm" onClick={() => { setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty('') }}>Cancel</Button>
                                 </div>
                               </div>
                             ) : (
-                              <><Button variant="success" size="sm" onClick={() => { setDsdApprovingId(r.id); setDsdApprovedBy('') }}>Approve</Button>
+                              <><Button variant="success" size="sm" onClick={() => { setDsdApprovingId(r.id); setDsdApprovedBy(''); setDsdIssuedQty('') }}>Approve</Button>
                                 <Button variant="danger" size="sm" onClick={() => rejectDsd(r.id)}>Reject</Button></>
                             )}
                           </div>
