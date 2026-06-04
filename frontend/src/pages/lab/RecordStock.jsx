@@ -348,7 +348,7 @@ export function RecordStock() {
         </CardHeader>
         {loadingRecent ? <LoadingState /> : recent.length === 0 ? <EmptyState message="No dispense records for this date" /> : (
           <div className="table-wrap">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm cards-sm">
               <thead>
                 <tr className="border-b border-white/8 bg-white/2">
                   {['Date','Commodity','Service Delivery Point','Qty','By','Actions'].map((h,i) => (
@@ -361,12 +361,12 @@ export function RecordStock() {
                   const sdpMatch = r.notes?.match(/\[SDP:\s*([^\]]+)\]/)
                   return (
                   <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDate(r.dispensed_at)}</td>
-                    <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
-                    <td className="px-4 py-3 text-xs text-gray-400">{sdpMatch ? sdpMatch[1].trim() : '—'}</td>
-                    <td className="px-4 py-3 font-mono text-sm text-red-400">-{fmtDispenseQty(r.quantity, r.commodities)}</td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{r.dispensed_by||'—'}</td>
-                    <td className="px-4 py-3">
+                    <td data-label="Date" className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDate(r.dispensed_at)}</td>
+                    <td data-label="Commodity" className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
+                    <td data-label="Service Delivery Point" className="px-4 py-3 text-xs text-gray-400">{sdpMatch ? sdpMatch[1].trim() : '—'}</td>
+                    <td data-label="Qty" className="px-4 py-3 font-mono text-sm text-red-400">-{fmtDispenseQty(r.quantity, r.commodities)}</td>
+                    <td data-label="By" className="px-4 py-3 text-xs text-gray-500">{r.dispensed_by||'—'}</td>
+                    <td data-label="" className="px-4 py-3">
                       <div className="flex gap-2">
                         <button onClick={()=>setHistoryRecord(r)} className="text-xs text-gray-400 border border-white/10 rounded px-2 py-1 hover:bg-white/5 transition-colors">
                           History

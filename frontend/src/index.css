@@ -7,6 +7,47 @@ body { font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; 
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
 
+/* On phones, tables tagged .cards-sm stack each row into a card (label : value)
+   instead of scrolling horizontally. Each <td> carries a data-label. */
+@media (max-width: 640px) {
+  table.cards-sm { display: block; }
+  table.cards-sm thead { display: none; }
+  table.cards-sm tbody { display: block; }
+  table.cards-sm tr {
+    display: block;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 0.7rem;
+    background: rgba(255,255,255,0.02);
+    margin-bottom: 0.6rem;
+    padding: 0.15rem 0.6rem;
+  }
+  table.cards-sm td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    width: 100%;
+    border: none !important;
+    padding: 0.45rem 0 !important;
+    text-align: right;
+    white-space: normal !important;
+  }
+  table.cards-sm td + td { border-top: 1px solid rgba(255,255,255,0.05) !important; }
+  table.cards-sm td::before {
+    content: attr(data-label);
+    color: #6b7280;
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 600;
+    text-align: left;
+    flex-shrink: 0;
+  }
+  table.cards-sm td[data-label=""]::before,
+  table.cards-sm td:not([data-label])::before { content: none; }
+  table.cards-sm td[data-label=""] { justify-content: flex-end; }
+}
+
 select {
   color: #f3f4f6;
   background-color: rgba(255, 255, 255, 0.05);
