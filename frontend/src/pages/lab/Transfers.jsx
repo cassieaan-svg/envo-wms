@@ -5,6 +5,7 @@ import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { fmtDate, SECTION_CATEGORIES } from '../../utils/helpers'
@@ -18,12 +19,7 @@ function MultiCommodityLines({ lines, updateLine, addLine, removeLine, categorie
         <div key={line.id} className={`grid gap-3 items-end p-3 bg-white/3 rounded-lg border border-white/8 ${hideStockIssued ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-5'}`}>
           <div className="col-span-2 sm:col-span-2">
             <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Commodity *</label>
-            <select value={line.commodity_id} onChange={e => updateLine(line.id, 'commodity_id', e.target.value)?.catch?.()} required className={inputCls}>
-              <option value="">Select commodity…</option>
-              {Object.entries(categories).sort().map(([cat, comms]) => (
-                <optgroup key={cat} label={cat}>{comms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>
-              ))}
-            </select>
+            <CommoditySelect categories={categories} value={line.commodity_id} onChange={id => updateLine(line.id, 'commodity_id', id)?.catch?.()} className={inputCls} />
           </div>
           <div>
             <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Stock balance</label>
@@ -880,12 +876,7 @@ export function Transfers() {
                       <div key={line.id} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
                         <div className="sm:col-span-2">
                           <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Commodity *</label>
-                          <select value={line.commodity_id} onChange={e => updateRequestLine(line.id, 'commodity_id', e.target.value)} required className={inputCls}>
-                            <option value="">Select commodity…</option>
-                            {Object.entries(categories).sort().map(([cat, comms]) => (
-                              <optgroup key={cat} label={cat}>{comms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>
-                            ))}
-                          </select>
+                          <CommoditySelect categories={categories} value={line.commodity_id} onChange={id => updateRequestLine(line.id, 'commodity_id', id)} className={inputCls} />
                         </div>
                         <div>
                           <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Qty requested *</label>
@@ -1361,12 +1352,7 @@ export function Transfers() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Commodity</label>
-                      <select value={commId} onChange={e => setCommId(e.target.value)} className={inputCls}>
-                        <option value="">Select commodity…</option>
-                        {Object.entries(categories).sort().map(([cat, comms]) => (
-                          <optgroup key={cat} label={cat}>{comms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>
-                        ))}
-                      </select>
+                      <CommoditySelect categories={categories} value={commId} onChange={setCommId} className={inputCls} />
                       {commId && stockRow && <p className="text-xs text-gray-500 mt-1">Available: {stockRow.quantity} {selectedComm?.unit || 'units'}</p>}
                     </div>
                     <div>

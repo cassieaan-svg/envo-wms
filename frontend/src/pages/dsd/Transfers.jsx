@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { toast } from '../../components/ui/Toast'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { fmtDate } from '../../utils/helpers'
 
@@ -480,13 +481,7 @@ export function Transfers() {
                       <div key={line.id} className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end p-3 bg-white/3 rounded-lg border border-white/8">
                         <div className="col-span-2 sm:col-span-2">
                           <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Commodity *</label>
-                          <select value={line.commodity_id} onChange={e => updateRequestLine(line.id, 'commodity_id', e.target.value)} required
-                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
-                            <option value="">Select commodity…</option>
-                            {Object.entries(categories).sort().map(([cat, comms]) => (
-                              <optgroup key={cat} label={cat}>{comms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>
-                            ))}
-                          </select>
+                          <CommoditySelect categories={categories} value={line.commodity_id} onChange={id => updateRequestLine(line.id, 'commodity_id', id)} />
                         </div>
                         <div>
                           <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Stock balance</label>

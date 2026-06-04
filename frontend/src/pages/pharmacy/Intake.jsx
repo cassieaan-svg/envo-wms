@@ -5,6 +5,7 @@ import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
@@ -185,14 +186,7 @@ export function Intake() {
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Commodity *</label>
                 <div className="flex gap-1.5">
-                  <select value={commId} onChange={e=>setCommId(e.target.value)} required className={inputCls}>
-                    <option value="">Select commodity…</option>
-                    {Object.entries(categories).sort().map(([cat,comms])=>(
-                      <optgroup key={cat} label={cat}>
-                        {comms.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-                      </optgroup>
-                    ))}
-                  </select>
+                  <CommoditySelect categories={categories} value={commId} onChange={setCommId} className={inputCls} />
                   {commId && (
                     <button type="button" onClick={() => { setCommId(''); setShowDispDetails(false); setDispUnitInput(''); setPackSzInput('') }}
                       className="shrink-0 text-gray-500 hover:text-gray-300 border border-white/10 rounded-lg px-2.5 transition-colors text-sm" title="Clear">

@@ -5,6 +5,7 @@ import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, todayLagos } from '../../utils/helpers'
@@ -127,15 +128,7 @@ export function Dispense() {
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">
                   Commodity
                 </label>
-                <select value={commId} onChange={e => setCommId(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
-                  <option value="">Select commodity…</option>
-                  {Object.entries(categories).sort().map(([cat, comms]) => (
-                    <optgroup key={cat} label={cat}>
-                      {comms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </optgroup>
-                  ))}
-                </select>
+                <CommoditySelect categories={categories} value={commId} onChange={setCommId} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">
