@@ -25,6 +25,7 @@ const normalizeDispense = row => ({
   unit: row.commodities?.unit || '',
   date: row.dispensed_at || row.created_at || '',
   facility: row.facilities?.name || row.facility_name || '',
+  lga: row.facilities?.lga || '',
   status: row.status || '',
   notes: row.notes || '',
 })
@@ -38,6 +39,7 @@ const normalizeIntake = row => ({
   unit: row.commodities?.unit || '',
   date: row.received_at || row.created_at || '',
   facility: row.facilities?.name || row.facility_name || '',
+  lga: row.facilities?.lga || '',
   status: row.status || '',
   notes: row.notes || '',
 })
@@ -51,6 +53,7 @@ const normalizeAdjustment = row => ({
   unit: row.commodities?.unit || '',
   date: row.adjusted_at || row.created_at || '',
   facility: row.facilities?.name || row.facility_name || '',
+  lga: row.facilities?.lga || '',
   status: row.adjustment_type || row.status || '',
   reason: row.reason || '',
   notes: row.notes || '',
@@ -58,6 +61,11 @@ const normalizeAdjustment = row => ({
 
 const normalizeTransfer = (row, fid) => {
   const isOut = fid && row.sending_facility_id === fid
+  // External redistribution = a move between two different facilities. Internal
+  // moves (Store→Dispensary, same facility) and SDP/DSD dispatches (no
+  // receiving facility) are NOT external and must not affect CRRF adjustments.
+  const external = !!row.sending_facility_id && !!row.receiving_facility_id &&
+                   row.sending_facility_id !== row.receiving_facility_id
   return {
     id: row.id,
     activity: 'Transfer',
@@ -68,6 +76,7 @@ const normalizeTransfer = (row, fid) => {
     date: row.resolved_at || row.initiated_at || '',
     facility: `${row.sending_facility_name || ''} → ${row.receiving_facility_name || ''}`.trim(),
     direction: isOut ? 'Stock out' : 'Stock in',
+    external,
     status: row.status || '',
     notes: row.notes || '',
   }
@@ -102,7 +111,7 @@ const queryLog = async ({ sb, table, select, dateField, from, to, fid, scopeIds,
 export async function fetchReportRows({ sb, category = 'all', from, to, fid, scopeIds, commIds, section }) {
   const getDispense = async () => {
     const data = await queryLog({
-      sb, table: 'dispense_log', select: '*,commodities(name,category,unit),facilities(name)',
+      sb, table: 'dispense_log', select: '*,commodities(name,category,unit),facilities(name,lga)',
       dateField: 'dispensed_at', from, to, fid, scopeIds, commIds, section,
     })
     return data.map(normalizeDispense)
@@ -110,7 +119,7 @@ export async function fetchReportRows({ sb, category = 'all', from, to, fid, sco
 
   const getIntake = async () => {
     const data = await queryLog({
-      sb, table: 'intake_log', select: '*,commodities(name,category,unit),facilities(name)',
+      sb, table: 'intake_log', select: '*,commodities(name,category,unit),facilities(name,lga)',
       dateField: 'received_at', from, to, fid, scopeIds, commIds, section,
     })
     return data.map(normalizeIntake)
@@ -118,7 +127,7 @@ export async function fetchReportRows({ sb, category = 'all', from, to, fid, sco
 
   const getAdjustment = async () => {
     const data = await queryLog({
-      sb, table: 'stock_adjustment_log', select: '*,commodities(name,category,unit),facilities(name)',
+      sb, table: 'stock_adjustment_log', select: '*,commodities(name,category,unit),facilities(name,lga)',
       dateField: 'adjusted_at', from, to, fid, scopeIds, commIds, section,
     })
     return data.map(normalizeAdjustment)
@@ -233,18 +242,18 @@ export function buildActivityCsv(rows, category, title, stockMap = {}) {
 
   if (category === 'intake') {
     let csv = `${label}\r\n`
-    csv += `S/No,Date,Facility,Category,Commodity,Unit,Quantity Received\r\n`
+    csv += `S/No,Date,Facility,LGA,Category,Commodity,Unit,Quantity Received\r\n`
     rows.forEach((row, i) => {
-      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.category}","${row.commodity}","${row.unit}",${row.quantity}\r\n`
+      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.lga || ''}","${row.category}","${row.commodity}","${row.unit}",${row.quantity}\r\n`
     })
     return csv
   }
 
   if (category === 'adjustment') {
     let csv = `${label}\r\n`
-    csv += `S/No,Date,Facility,Category,Commodity,Unit,Quantity Received,Reason\r\n`
+    csv += `S/No,Date,Facility,LGA,Category,Commodity,Unit,Quantity Received,Reason\r\n`
     rows.forEach((row, i) => {
-      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.category}","${row.commodity}","${row.unit}",${row.quantity},"${(row.reason || '').replace(/"/g, '""')}"\r\n`
+      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.lga || ''}","${row.category}","${row.commodity}","${row.unit}",${row.quantity},"${(row.reason || '').replace(/"/g, '""')}"\r\n`
     })
     return csv
   }
@@ -283,7 +292,8 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
       else if (LOSS_REASONS.includes(row.reason)) agg[key].losses += Math.abs(row.quantity)
       else                                        agg[key].adjNeg += Math.abs(row.quantity)
     }
-    if (row.activity === 'Transfer') {
+    // Only external redistribution (facility → another facility) adjusts CRRF.
+    if (row.activity === 'Transfer' && row.external) {
       if (row.quantity > 0) agg[key].adjPos += row.quantity
       else                  agg[key].adjNeg += Math.abs(row.quantity)
     }
