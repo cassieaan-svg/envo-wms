@@ -7,7 +7,7 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, calcAMC, amcWindowStart, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, calcAMC, amcWindowStart, amcWindowEnd, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -188,11 +188,13 @@ export function Alerts() {
 
   async function loadStockAlerts() {
     const amcStart = amcWindowStart()
+    const amcEnd = amcWindowEnd()
     let amcMap = {}
     if (commIds.length && fid) {
       let q = sb.from('dispense_log')
         .select('commodity_id,quantity,dispensed_at')
         .gte('dispensed_at',amcStart.toISOString())
+        .lt('dispensed_at',amcEnd.toISOString())
         .in('commodity_id',commIds).eq('facility_id',fid)
       q = sec(q)
       const { data } = await q

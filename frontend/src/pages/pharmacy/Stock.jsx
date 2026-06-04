@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { calcAMC, amcWindowStart, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { calcAMC, amcWindowStart, amcWindowEnd, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Stock() {
@@ -50,6 +50,7 @@ export function Stock() {
     await loadStock()
 
     const amcStart = amcWindowStart()
+    const amcEnd = amcWindowEnd()
     const commIds = store.stockData.map(r => r.commodity_id)
 
     let amcMap = {}
@@ -57,6 +58,7 @@ export function Stock() {
       const { data } = await sec(sb.from('dispense_log')
         .select('commodity_id,quantity,dispensed_at')
         .gte('dispensed_at', amcStart.toISOString())
+        .lt('dispensed_at', amcEnd.toISOString())
         .in('commodity_id', commIds)
         .eq('facility_id', fid))
 

@@ -7,7 +7,7 @@ import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { calcAMC, amcWindowStart, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
+import { calcAMC, amcWindowStart, amcWindowEnd, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
 
 export function Dashboard() {
   const store            = useAppStore()
@@ -44,11 +44,13 @@ export function Dashboard() {
     }
     setSdpMap(sdpAgg)
 
-    // Load AMC = total dispensed in the 2-month window ÷ 2.
+    // Load AMC = total dispensed in the completed 3-month period ÷ 2.
     const amcStart = amcWindowStart()
+    const amcEnd = amcWindowEnd()
     const { data: dispData } = await sec(sb.from('dispense_log')
       .select('commodity_id,quantity,dispensed_at')
       .gte('dispensed_at', amcStart.toISOString())
+      .lt('dispensed_at', amcEnd.toISOString())
       .eq('facility_id', fid || store.currentFacility?.id))
 
     const sums = {}

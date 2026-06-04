@@ -60,15 +60,26 @@ export function getMOS(qty, amc) {
   return +(qty / amc).toFixed(1)
 }
 
-// ── AMC ── Average Monthly Consumption: total quantity dispensed over a fixed
-// 2-month period, divided by 2 (the two "typical" months, not the 2 highest).
-export const AMC_PERIOD_MONTHS = 2
+// ── AMC ── Average Monthly Consumption: total quantity dispensed over a
+// 3-month period, divided by 2. The period is anchored to fixed calendar
+// quarters (Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec) and AMC uses the most recently
+// COMPLETED quarter, so the value stays fixed and only changes every 3 months.
+export const AMC_WINDOW_MONTHS = 3
+export const AMC_DIVISOR = 2
 
-// Start of the AMC window (2 months before `from`).
+// Start of the calendar quarter containing `from`.
+function quarterStart(from) {
+  const m = Math.floor(from.getMonth() / AMC_WINDOW_MONTHS) * AMC_WINDOW_MONTHS
+  return new Date(from.getFullYear(), m, 1)
+}
+
+// AMC window = the previous completed quarter, i.e. [start, end).
 export function amcWindowStart(from = new Date()) {
-  const d = new Date(from)
-  d.setMonth(d.getMonth() - AMC_PERIOD_MONTHS)
-  return d
+  const s = quarterStart(from)
+  return new Date(s.getFullYear(), s.getMonth() - AMC_WINDOW_MONTHS, 1)
+}
+export function amcWindowEnd(from = new Date()) {
+  return quarterStart(from)
 }
 
 // Total dispensed over the window ÷ 2. Accepts dispense rows or a raw total.
@@ -76,7 +87,7 @@ export function calcAMC(dispenseRowsOrTotal) {
   const total = Array.isArray(dispenseRowsOrTotal)
     ? dispenseRowsOrTotal.reduce((s, d) => s + (d.quantity || 0), 0)
     : (dispenseRowsOrTotal || 0)
-  return total / AMC_PERIOD_MONTHS
+  return total / AMC_DIVISOR
 }
 
 // ── Section categories ────────────────────────────
