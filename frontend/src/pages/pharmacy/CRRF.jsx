@@ -93,8 +93,13 @@ export function CRRF() {
     ;(stockRes.data || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
     ;(transferRes.data || []).forEach(r => {
       if (!agg[r.commodity_id]) return
-      if (r.receiving_facility_id === fid) agg[r.commodity_id].adjPos += r.quantity
-      else                                  agg[r.commodity_id].adjNeg += r.quantity
+      // Only EXTERNAL redistribution (facility → another facility) affects the
+      // CRRF positive/negative adjustment. Internal moves (Store→Dispensary,
+      // same facility) and SDP/DSD dispatches (no receiving facility) are excluded.
+      if (!r.sending_facility_id || !r.receiving_facility_id) return
+      if (r.sending_facility_id === r.receiving_facility_id) return
+      if (r.receiving_facility_id === fid)     agg[r.commodity_id].adjPos += r.quantity
+      else if (r.sending_facility_id === fid)  agg[r.commodity_id].adjNeg += r.quantity
     })
 
     // Only include commodities that have any activity or current stock
@@ -119,7 +124,7 @@ export function CRRF() {
     const facilityName = facility?.name || 'Facility'
     const title = `CRRF — ${facilityName} — ${period.label} ${year}`
     let csv = `${title}\r\n`
-    csv += `S/No,Drugs,Basic Unit,Beginning Balance (A),Quantity Received (B),Quantity Dispensed (C),Losses & Adj Positive (+),Losses & Adj Negative (-),Losses (D),Ending Balance / Physical Count (E),Maximum Stock Qty (F=CX2),Quantity to Order (G=F-E),Remarks\r\n`
+    csv += `S/No,Drugs,Basic Unit,Beginning Balance (A),Quantity Received (B),Quantity Dispensed (C),Adj Positive (+),Adj Negative (-),Losses (D),Ending Balance / Physical Count (E),Maximum Stock Qty (F=CX2),Quantity to Order (G=F-E),Remarks\r\n`
 
     let currentCat = null
     rows.forEach(r => {
@@ -199,7 +204,7 @@ export function CRRF() {
             <th rowspan="2">Drugs</th>
             <th rowspan="2">Basic Unit</th>
             <th>A</th><th>B</th><th>C</th>
-            <th>Losses &amp; Adj (+)</th><th>Losses &amp; Adj (−)</th><th>D</th>
+            <th>Adj (+)</th><th>Adj (−)</th><th>D</th>
             <th>E</th><th>F</th><th>G</th>
             <th rowspan="2">Remarks</th>
           </tr>
@@ -320,7 +325,7 @@ export function CRRF() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-white/8 bg-white/2">
-                    {['S/No','Drugs','Unit','A: Beg. Balance','B: Received','C: Dispensed','Adj +','Adj –','E: Ending Bal.','F: Max Stock','G: To Order','Remarks'].map(h => (
+                    {['S/No','Drugs','Unit','A: Beg. Balance','B: Received','C: Dispensed','Adj +','Adj –','D: Losses','E: Ending Bal.','F: Max Stock','G: To Order','Remarks'].map(h => (
                       <th key={h} className="text-left px-3 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -328,7 +333,7 @@ export function CRRF() {
                 <tbody>
                   {grouped.map((item, idx) => item.type === 'cat' ? (
                     <tr key={`cat-${idx}`} className="bg-white/3">
-                      <td colSpan={12} className="px-3 py-2 text-xs font-semibold text-gray-300 uppercase tracking-widest">{item.label}</td>
+                      <td colSpan={13} className="px-3 py-2 text-xs font-semibold text-gray-300 uppercase tracking-widest">{item.label}</td>
                     </tr>
                   ) : (
                     <tr key={`row-${item.sno}`} className="border-b border-white/5 hover:bg-white/2">
@@ -340,6 +345,7 @@ export function CRRF() {
                       <td className="px-3 py-3 font-mono text-blue-400">{item.dispensed}</td>
                       <td className="px-3 py-3 font-mono text-amber-400">{item.adjPos}</td>
                       <td className="px-3 py-3 font-mono text-red-400">{item.adjNeg}</td>
+                      <td className="px-3 py-3 font-mono text-red-400">{item.losses}</td>
                       <td className="px-3 py-3 font-mono text-gray-100 font-medium">{item.E}</td>
                       <td className="px-3 py-3 font-mono text-gray-300">{item.F}</td>
                       <td className="px-3 py-3 font-mono text-purple-400">{item.G}</td>
