@@ -77,6 +77,9 @@ const normalizeTransfer = (row, fid) => {
     facility: `${row.sending_facility_name || ''} → ${row.receiving_facility_name || ''}`.trim(),
     direction: isOut ? 'Stock out' : 'Stock in',
     external,
+    sendingName: row.sending_facility_name || '',
+    receivingName: row.receiving_facility_name || '',
+    qtyAbs: row.quantity || 0,
     status: row.status || '',
     notes: row.notes || '',
   }
@@ -319,5 +322,80 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
     sno++
   })
 
+  return csv
+}
+
+// Per-facility CRRF for an admin spanning multiple facilities: one section per
+// facility (with its LGA) instead of one rolled-up total per commodity.
+//   facStock:  { facilityName: { commodityName: SOH } }
+//   lgaByName: { facilityName: lga }
+export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {}) {
+  const LOSS_REASONS = ['Expired', 'Damaged', 'Lost / Stolen']
+  const agg = {}   // facilityName → commodityName → tallies
+  const ensure = (fac, commodity, category, unit) => {
+    if (!fac) return null
+    if (!agg[fac]) agg[fac] = {}
+    if (!agg[fac][commodity]) agg[fac][commodity] = { commodity, category, unit, received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0 }
+    return agg[fac][commodity]
+  }
+
+  rows.forEach(row => {
+    if (row.activity === 'Transfer') {
+      if (!row.external) return   // internal moves / SDP-DSD dispatches don't count
+      const qty = row.qtyAbs || 0
+      const s = ensure(row.sendingName, row.commodity, row.category, row.unit);   if (s) s.adjNeg += qty
+      const r = ensure(row.receivingName, row.commodity, row.category, row.unit); if (r) r.adjPos += qty
+      return
+    }
+    const a = ensure(row.facility, row.commodity, row.category, row.unit)
+    if (!a) return
+    if (row.activity === 'Intake')           a.received  += row.quantity
+    else if (row.activity === 'Consumption') a.dispensed += row.quantity
+    else if (row.activity === 'Adjustment') {
+      if (row.quantity > 0)                       a.adjPos += row.quantity
+      else if (LOSS_REASONS.includes(row.reason)) a.losses += Math.abs(row.quantity)
+      else                                        a.adjNeg += Math.abs(row.quantity)
+    }
+  })
+
+  let csv = `${title}\r\n`
+  const facs = Object.keys(agg).sort((a, b) => (lgaByName[a] || '').localeCompare(lgaByName[b] || '') || a.localeCompare(b))
+  facs.forEach(fac => {
+    csv += `\r\n"${fac}${lgaByName[fac] ? ' — ' + lgaByName[fac] : ''}"\r\n`
+    csv += `S/No,Drugs,Basic Unit,Beginning Balance,Quantity Received,Quantity Consumed,Adj Positive (+),Adj Negative (-),Losses,Ending Balance\r\n`
+    const stock = facStock[fac] || {}
+    const items = Object.values(agg[fac]).sort((a, b) => a.category.localeCompare(b.category) || a.commodity.localeCompare(b.commodity))
+    items.forEach((r, i) => {
+      const E = stock[r.commodity] ?? ''
+      const A = E !== '' ? E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses : ''
+      csv += `${i + 1},"${r.commodity}","${r.unit}",${A},${r.received},${r.dispensed},${r.adjPos},${r.adjNeg},${r.losses},${E}\r\n`
+    })
+  })
+  return csv
+}
+
+// Per-facility consumption summary for a multi-facility admin export.
+export function buildConsumptionByFacilityCsv(rows, title, facStock = {}, lgaByName = {}) {
+  const agg = {}   // facilityName → commodityName → { category, unit, consumed }
+  rows.forEach(row => {
+    if (row.activity !== 'Consumption' || !row.facility) return
+    if (!agg[row.facility]) agg[row.facility] = {}
+    if (!agg[row.facility][row.commodity]) agg[row.facility][row.commodity] = { commodity: row.commodity, category: row.category, unit: row.unit, consumed: 0 }
+    agg[row.facility][row.commodity].consumed += row.quantity
+  })
+
+  let csv = `${title}\r\n`
+  const facs = Object.keys(agg).sort((a, b) => (lgaByName[a] || '').localeCompare(lgaByName[b] || '') || a.localeCompare(b))
+  facs.forEach(fac => {
+    csv += `\r\n"${fac}${lgaByName[fac] ? ' — ' + lgaByName[fac] : ''}"\r\n`
+    csv += `S/No,Commodity,Category,Unit,Beginning Balance,Quantity Consumed,Ending Balance\r\n`
+    const stock = facStock[fac] || {}
+    const items = Object.values(agg[fac]).sort((a, b) => a.commodity.localeCompare(b.commodity))
+    items.forEach((r, i) => {
+      const ending = stock[r.commodity] ?? ''
+      const beginning = ending !== '' ? ending + r.consumed : ''
+      csv += `${i + 1},"${r.commodity}","${r.category}","${r.unit}",${beginning},${r.consumed},${ending}\r\n`
+    })
+  })
   return csv
 }

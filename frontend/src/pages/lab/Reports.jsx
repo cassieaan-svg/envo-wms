@@ -17,7 +17,7 @@ function renderQty(row) {
 }
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
-import { REPORT_CATEGORIES, getReportCategoryLabel, fetchReportRows, buildCrrfCsv, buildActivityCsv, getSummaryMetrics } from '../../utils/reports'
+import { REPORT_CATEGORIES, getReportCategoryLabel, fetchReportRows, buildCrrfCsv, buildActivityCsv, buildCrrfByFacilityCsv, buildConsumptionByFacilityCsv, getSummaryMetrics } from '../../utils/reports'
 
 export function Reports({ embedded = false } = {}) {
   const store = useAppStore()
@@ -100,17 +100,52 @@ export function Reports({ embedded = false } = {}) {
     setLoading(false)
   }
 
+  // Download helper.
+  function downloadCsv(csv, name) {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    a.download = name
+    a.click()
+    toast('CSV exported','green')
+  }
+
   async function exportCSV() {
     if (!summary?.rows) { toast('Load data first','red'); return }
+    const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r))
+    const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report — ${summary.label}`
+    const commLookup = {}
+    store.allCommodities.forEach(c => { commLookup[c.id] = c.name })
 
-    // Build stock map (commodity name → total SOH) for the ending-balance
-    // column. A single facility uses its own rows; an admin viewing "All
-    // facilities" aggregates every overseen facility's stock. Paginate past the
-    // 1000-row PostgREST cap so the cross-facility totals are complete.
+    // Admin spanning multiple facilities: break the CRRF / Consumption summary
+    // down per facility (with LGA) rather than one rolled-up total.
+    if (isAdmin && !fid && (category === 'all' || category === 'dispense')) {
+      const facStock = {}   // facilityName → { commodityName → SOH }
+      const lgaByName = {}
+      store.allFacilities.forEach(f => { lgaByName[f.name] = f.lga || '' })
+      const PAGE = 1000
+      for (let offset = 0; ; offset += PAGE) {
+        let sq = sb.from('stock').select('commodity_id,quantity,facilities(name)').range(offset, offset + PAGE - 1)
+        if (scopeIds && scopeIds.length) sq = sq.in('facility_id', scopeIds)
+        const { data, error } = await sq
+        if (error || !data || !data.length) break
+        data.forEach(r => {
+          const fname = r.facilities?.name, cname = commLookup[r.commodity_id]
+          if (!fname || !cname) return
+          if (!facStock[fname]) facStock[fname] = {}
+          facStock[fname][cname] = (facStock[fname][cname] || 0) + r.quantity
+        })
+        if (data.length < PAGE) break
+      }
+      const csv = category === 'dispense'
+        ? buildConsumptionByFacilityCsv(rows, title, facStock, lgaByName)
+        : buildCrrfByFacilityCsv(rows, title, facStock, lgaByName)
+      downloadCsv(csv, `${tab}-${category}-by-facility-${summary.label}.csv`)
+      return
+    }
+
+    // Single facility (or per-transaction activity): commodity total + balance.
     const stockMap = {}
     if (fid || isAdmin) {
-      const commLookup = {}
-      store.allCommodities.forEach(c => { commLookup[c.id] = c.name })
       const PAGE = 1000
       for (let offset = 0; ; offset += PAGE) {
         let sq = sb.from('stock').select('commodity_id,quantity').range(offset, offset + PAGE - 1)
@@ -126,16 +161,10 @@ export function Reports({ embedded = false } = {}) {
       }
     }
 
-    const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r))
-    const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report — ${summary.label}`
     const csv = category === 'all'
       ? buildCrrfCsv(rows, title, stockMap)
       : buildActivityCsv(rows, category, title, stockMap)
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-    a.download = `${tab}-${category}-report-${summary.label}.csv`
-    a.click()
-    toast('CSV exported','green')
+    downloadCsv(csv, `${tab}-${category}-report-${summary.label}.csv`)
   }
 
   const categoryLabel = getReportCategoryLabel(category)
