@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { sb } from '../../lib/supabase'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
+import { Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { EmptyState } from '../../components/ui/Loading'
 import { fmtStockQty, getCommodityDispenseUnit, isLabCategory, getStockStatus, getMOS } from '../../utils/helpers'
@@ -11,7 +12,10 @@ export function AllFacilities() {
   const [search, setSearch]         = useState('')
   const [commFilter, setCommFilter] = useState('')
   const [selected, setSelected]     = useState(null) // commodity_id being drilled into
-  const [sdpByFac, setSdpByFac]     = useState({})   // facility_id -> SDP qty for the selected lab commodity
+  // Per-commodity SDP/DSD site stock (separate tables) across the admin's
+  // facilities, so overview totals include them — not just the main store.
+  const [siteByComm, setSiteByComm] = useState({ sdp: {}, dsd: {} })
+  const [siteFilter, setSiteFilter] = useState('')   // breakdown card filter: '', low, out, over
 
   const agg = {}
   // Seed from every tracked commodity so zero-stock items and their
@@ -28,6 +32,16 @@ export function AllFacilities() {
     if (!agg[k].facMap[fid]) agg[k].facMap[fid] = { total:0, amc:0 }
     agg[k].facMap[fid].total += r.quantity
     if ((r.baseline_amc || 0) > agg[k].facMap[fid].amc) agg[k].facMap[fid].amc = r.baseline_amc || 0
+  })
+  // Fold in SDP (lab) and DSD (pharmacy) site stock so totals/status reflect
+  // the full picture, not just the main store.
+  Object.values(agg).forEach(c => {
+    const siteMap = isLabCategory(c.cat) ? siteByComm.sdp[c.id] : siteByComm.dsd[c.id]
+    if (!siteMap) return
+    Object.entries(siteMap).forEach(([fid, qty]) => {
+      if (!c.facMap[fid]) c.facMap[fid] = { total:0, amc:0 }
+      c.facMap[fid].total += qty
+    })
   })
   // Derive per-commodity totals + status-site counts (out / low / over).
   Object.values(agg).forEach(c => {
@@ -54,18 +68,35 @@ export function AllFacilities() {
   const selectedComm = selected ? agg[selected] : null
   const isLabSel = !!selectedComm && isLabCategory(selectedComm.cat)
 
-  // Load SDP stock (separate table) for the selected lab commodity
+  // Load all SDP / DSD site stock once (paginated, scoped to the admin's
+  // facilities) so both the overview and the drill-down can include them.
   useEffect(() => {
-    if (!selected || !isLabSel) { setSdpByFac({}); return }
     let active = true
-    sb.from('sdp_stock').select('facility_id,quantity').eq('commodity_id', selected).then(({ data }) => {
-      if (!active) return
-      const m = {}
-      ;(data || []).forEach(d => { m[d.facility_id] = (m[d.facility_id] || 0) + d.quantity })
-      setSdpByFac(m)
+    const facIds = store.isOverallAdmin() ? null : store.allFacilities.map(f => f.id)
+    const fetchAll = async (table) => {
+      const map = {}
+      const PAGE = 1000
+      for (let offset = 0; ; offset += PAGE) {
+        let q = sb.from(table).select('commodity_id,facility_id,quantity').range(offset, offset + PAGE - 1)
+        if (facIds && facIds.length) q = q.in('facility_id', facIds)
+        const { data, error } = await q
+        if (error || !data || !data.length) break
+        data.forEach(d => {
+          if (!map[d.commodity_id]) map[d.commodity_id] = {}
+          map[d.commodity_id][d.facility_id] = (map[d.commodity_id][d.facility_id] || 0) + d.quantity
+        })
+        if (data.length < PAGE) break
+      }
+      return map
+    }
+    Promise.all([fetchAll('sdp_stock'), fetchAll('dsd_stock')]).then(([sdp, dsd]) => {
+      if (active) setSiteByComm({ sdp, dsd })
     })
     return () => { active = false }
-  }, [selected, isLabSel])
+  }, [])
+
+  // Reset the breakdown card filter when switching commodity.
+  useEffect(() => { setSiteFilter('') }, [selected])
 
   // Drill-down: stock rows for the selected commodity, grouped by facility
   const facRows = selected
@@ -80,14 +111,21 @@ export function AllFacilities() {
         }, {})
     : {}
 
-  // For lab commodities, fold in SDP stock (incl. facilities with SDP but no store row)
-  if (isLabSel) {
-    Object.entries(sdpByFac).forEach(([fid, qty]) => {
+  // Fold in the selected commodity's SDP (lab) / DSD (pharmacy) site stock,
+  // including facilities that only have site stock (no store row).
+  if (selected) {
+    const ensure = fid => {
       if (!facRows[fid]) {
         const f = store.allFacilities.find(x => x.id === fid)
-        facRows[fid] = { name: f?.name||'—', state: f?.state||'—', lga: f?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, comm: selectedComm.comm }
+        facRows[fid] = { name: f?.name||'—', state: f?.state||'—', lga: f?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: selectedComm?.comm }
       }
-      facRows[fid].sdp = qty
+      return facRows[fid]
+    }
+    const siteMap = isLabSel ? (siteByComm.sdp[selected] || {}) : (siteByComm.dsd[selected] || {})
+    Object.entries(siteMap).forEach(([fid, qty]) => {
+      const f = ensure(fid)
+      if (isLabSel) f.sdp += qty
+      else          f.dsd += qty
     })
   }
 
@@ -97,6 +135,15 @@ export function AllFacilities() {
   })
   const facList = Object.values(facRows).sort((a,b) => b.total - a.total)
   const drillTotal = facList.reduce((s, f) => s + f.total, 0)
+  const siteCounts = {
+    low:  facList.filter(f => getStockStatus(f.total, f.amc) === 'low').length,
+    out:  facList.filter(f => getStockStatus(f.total, f.amc) === 'out').length,
+    over: facList.filter(f => getStockStatus(f.total, f.amc) === 'over').length,
+  }
+  // Clicking a status card filters the breakdown table to those sites.
+  const shownFacs = siteFilter
+    ? facList.filter(f => getStockStatus(f.total, f.amc) === siteFilter)
+    : facList
 
   if (selected) {
     return (
@@ -113,23 +160,19 @@ export function AllFacilities() {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-          {[
-            { label: 'Total stock', value: fmtStockQty(drillTotal, selectedComm?.comm), color: 'text-gray-100' },
-            { label: 'Reporting sites', value: facList.length, color: 'text-blue-400' },
-            { label: 'Low stock sites', value: facList.filter(f=>getStockStatus(f.total,f.amc)==='low').length, color: 'text-amber-400' },
-            { label: 'Out of stock sites', value: facList.filter(f=>f.total===0).length, color: 'text-red-400' },
-            { label: 'Overstock sites', value: facList.filter(f=>getStockStatus(f.total,f.amc)==='over').length, color: 'text-blue-400' },
-          ].map(m => (
-            <div key={m.label} className="bg-white/3 border border-white/8 rounded-xl px-4 py-3">
-              <div className="text-xs text-gray-500 uppercase tracking-widest mb-1">{m.label}</div>
-              <div className={`text-xl font-bold font-mono ${m.color}`}>{m.value}</div>
-            </div>
-          ))}
+          <Metric label="Total stock" value={fmtStockQty(drillTotal, selectedComm?.comm)} />
+          <Metric label="Reporting sites" value={facList.length} color="blue" />
+          <Metric label="Low stock sites" value={siteCounts.low} color="amber"
+            onClick={() => setSiteFilter(siteFilter === 'low' ? '' : 'low')} active={siteFilter === 'low'} />
+          <Metric label="Out of stock sites" value={siteCounts.out} color="red"
+            onClick={() => setSiteFilter(siteFilter === 'out' ? '' : 'out')} active={siteFilter === 'out'} />
+          <Metric label="Overstock sites" value={siteCounts.over} color="blue"
+            onClick={() => setSiteFilter(siteFilter === 'over' ? '' : 'over')} active={siteFilter === 'over'} />
         </div>
 
         <Card>
           <CardHeader><CardTitle>Facility breakdown</CardTitle></CardHeader>
-          {facList.length === 0 ? <EmptyState message="No stock data."/> : (
+          {shownFacs.length === 0 ? <EmptyState message={siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
                 {(isLabSel
@@ -139,7 +182,7 @@ export function AllFacilities() {
                   <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                 ))}
               </tr></thead>
-              <tbody>{facList.map((f,i) => {
+              <tbody>{shownFacs.map((f,i) => {
                 const st = getStockStatus(f.total, f.amc)
                 const statusLabel = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No AMC data' }[st] || st
                 const mos = getMOS(f.total, f.amc)
