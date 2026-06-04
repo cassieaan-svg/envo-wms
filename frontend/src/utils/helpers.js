@@ -60,17 +60,23 @@ export function getMOS(qty, amc) {
   return +(qty / amc).toFixed(1)
 }
 
-// ── AMC (atypical — avg of 2 highest months) ──────
-export function calcAtypicalAMC(dispenseRows) {
-  const monthly = {}
-  dispenseRows.forEach(d => {
-    const key = d.dispensed_at?.slice(0, 7)
-    if (key) monthly[key] = (monthly[key] || 0) + d.quantity
-  })
-  const vals = Object.values(monthly).sort((a, b) => b - a)
-  if (vals.length >= 2) return (vals[0] + vals[1]) / 2
-  if (vals.length === 1) return vals[0]
-  return 0
+// ── AMC ── Average Monthly Consumption: total quantity dispensed over a fixed
+// 2-month period, divided by 2 (the two "typical" months, not the 2 highest).
+export const AMC_PERIOD_MONTHS = 2
+
+// Start of the AMC window (2 months before `from`).
+export function amcWindowStart(from = new Date()) {
+  const d = new Date(from)
+  d.setMonth(d.getMonth() - AMC_PERIOD_MONTHS)
+  return d
+}
+
+// Total dispensed over the window ÷ 2. Accepts dispense rows or a raw total.
+export function calcAMC(dispenseRowsOrTotal) {
+  const total = Array.isArray(dispenseRowsOrTotal)
+    ? dispenseRowsOrTotal.reduce((s, d) => s + (d.quantity || 0), 0)
+    : (dispenseRowsOrTotal || 0)
+  return total / AMC_PERIOD_MONTHS
 }
 
 // ── Section categories ────────────────────────────

@@ -7,7 +7,7 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, calcAMC, amcWindowStart, getMOS, getStockStatus, groupStockByComm } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -120,25 +120,19 @@ export function Alerts() {
   }
 
   async function loadStockAlerts() {
-    const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth()-3)
+    const amcStart = amcWindowStart()
     let amcMap = {}
     if (commIds.length && fid) {
       let q = sb.from('dispense_log')
         .select('commodity_id,quantity,dispensed_at')
-        .gte('dispensed_at',threeMonthsAgo.toISOString())
+        .gte('dispensed_at',amcStart.toISOString())
         .in('commodity_id',commIds).eq('facility_id',fid)
       q = sec(q)
       const { data } = await q
-      const groupedDays = {}
-      ;(data||[]).forEach(d=>{
-        const m=d.dispensed_at.slice(0,7)
-        if(!groupedDays[d.commodity_id]) groupedDays[d.commodity_id]={}
-        groupedDays[d.commodity_id][m]=(groupedDays[d.commodity_id][m]||0)+d.quantity
-      })
-      Object.entries(groupedDays).forEach(([cid,months])=>{
-        const vals=Object.values(months).sort((a,b)=>b-a)
-        amcMap[cid]=vals.length>=2?(vals[0]+vals[1])/2:vals[0]||0
-      })
+      // AMC = total dispensed in the 2-month window ÷ 2.
+      const sums = {}
+      ;(data||[]).forEach(d=>{ sums[d.commodity_id]=(sums[d.commodity_id]||0)+(d.quantity||0) })
+      Object.entries(sums).forEach(([cid,total])=>{ amcMap[cid]=calcAMC(total) })
     }
 
     // Aggregate SDP stock (lab total = store + SDP) so totals match the Dashboard.

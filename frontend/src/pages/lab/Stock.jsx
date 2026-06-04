@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
+import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES, calcAMC, amcWindowStart } from '../../utils/helpers'
 
 export function Stock() {
   const store         = useAppStore()
@@ -58,28 +58,21 @@ export function Stock() {
 
     await loadStock()
 
-    const threeMonthsAgo = new Date()
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
+    const amcStart = amcWindowStart()
     const commIds = store.stockData.map(r => r.commodity_id)
 
     let amcMap = {}
     if (commIds.length && fid) {
       const { data } = await sec(sb.from('dispense_log')
         .select('commodity_id,quantity,dispensed_at')
-        .gte('dispensed_at', threeMonthsAgo.toISOString())
+        .gte('dispensed_at', amcStart.toISOString())
         .in('commodity_id', commIds)
         .eq('facility_id', fid))
 
-      const grouped = {}
-      ;(data || []).forEach(d => {
-        const month = d.dispensed_at.slice(0, 7)
-        if (!grouped[d.commodity_id]) grouped[d.commodity_id] = {}
-        grouped[d.commodity_id][month] = (grouped[d.commodity_id][month] || 0) + d.quantity
-      })
-      Object.entries(grouped).forEach(([id, months]) => {
-        const vals = Object.values(months).sort((a,b) => b-a)
-        amcMap[id] = vals.length >= 2 ? (vals[0]+vals[1])/2 : vals[0] || 0
-      })
+      // AMC = total dispensed in the 2-month window ÷ 2.
+      const sums = {}
+      ;(data || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
+      Object.entries(sums).forEach(([id, total]) => { amcMap[id] = calcAMC(total) })
     }
 
     // Fetch SDP stock data and aggregate by commodity

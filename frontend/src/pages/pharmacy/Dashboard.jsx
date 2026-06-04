@@ -7,7 +7,7 @@ import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { calcAtypicalAMC, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { calcAMC, amcWindowStart, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Dashboard() {
@@ -56,24 +56,17 @@ export function Dashboard() {
     setDsdMap(dsdAgg)
     setSdpMap(sdpAgg)
 
-    // Load AMC
-    const threeMonthsAgo = new Date()
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
+    // Load AMC = total dispensed in the 2-month window ÷ 2.
+    const amcStart = amcWindowStart()
     const { data: dispData } = await sec(sb.from('dispense_log')
       .select('commodity_id,quantity,dispensed_at')
-      .gte('dispensed_at', threeMonthsAgo.toISOString())
+      .gte('dispensed_at', amcStart.toISOString())
       .eq('facility_id', fid || store.currentFacility?.id))
 
-    const grouped = {}
-    ;(dispData || []).forEach(d => {
-      const month = d.dispensed_at.slice(0, 7)
-      if (!grouped[d.commodity_id]) grouped[d.commodity_id] = {}
-      grouped[d.commodity_id][month] = (grouped[d.commodity_id][month] || 0) + d.quantity
-    })
+    const sums = {}
+    ;(dispData || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
     const amc = {}
-    Object.entries(grouped).forEach(([id, months]) => {
-      amc[id] = calcAtypicalAMC(Object.entries(months).map(([k,v]) => ({ dispensed_at: k+'-01', quantity: v })))
-    })
+    Object.entries(sums).forEach(([id, total]) => { amc[id] = calcAMC(total) })
     setAmcMap(amc)
     setLoading(false)
   }
