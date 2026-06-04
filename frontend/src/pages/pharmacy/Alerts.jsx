@@ -137,19 +137,10 @@ export function Alerts() {
   async function confirmAccept(req) {
     if (!acceptReceiverName.trim()) { toast('Receiver name is required','red'); return }
     setAcceptLoading(true)
-    const { data: allSenderStk, error: stkErr } = await sb.from('stock').select('id,quantity,location_type')
-      .eq('facility_id', req.sending_facility_id).eq('commodity_id', req.commodity_id)
-    if (stkErr) { toast('Error checking sender stock: ' + stkErr.message,'red'); setAcceptLoading(false); return }
-    const senderRows = allSenderStk || []
-    const storeRow = senderRows.find(r => r.location_type === 'store')
-    const senderStk = (storeRow && storeRow.quantity >= req.quantity)
-      ? storeRow
-      : senderRows.sort((a,b) => b.quantity - a.quantity).find(r => r.quantity >= req.quantity)
-    if (!senderStk) {
-      const total = senderRows.reduce((s,r) => s + r.quantity, 0)
-      toast(`Insufficient stock at sending facility (available: ${total})`, 'red'); setAcceptLoading(false); return
-    }
-    await sb.from('stock').update({ quantity: senderStk.quantity - req.quantity, updated_at: new Date().toISOString() }).eq('id', senderStk.id)
+    // The sending facility's stock was already deducted when it dispatched the
+    // transfer (confirmDispatch). The receiver only credits its own stock — it
+    // cannot read another facility's stock rows under RLS, which previously made
+    // this re-check see 0 and wrongly report "insufficient stock".
     const { data: recStk } = await sb.from('stock').select('id,quantity')
       .eq('facility_id', req.receiving_facility_id).eq('commodity_id', req.commodity_id).eq('location_type','store').maybeSingle()
     if (recStk) {
