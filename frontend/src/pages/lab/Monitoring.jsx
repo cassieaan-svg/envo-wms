@@ -307,7 +307,7 @@ export function Monitoring() {
             </Card>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+          <div className={`grid grid-cols-1 ${isAdm ? 'lg:grid-cols-2' : ''} gap-4 mb-4`}>
             <Card>
               <CardHeader><CardTitle>Daily utilization</CardTitle></CardHeader>
               <CardBody>
@@ -335,8 +335,9 @@ export function Monitoring() {
               </CardBody>
             </Card>
 
+            {isAdm && (
             <Card>
-              <CardHeader><CardTitle>By category</CardTitle>{isAdm && <span className="text-xs text-gray-500">click to drill down</span>}</CardHeader>
+              <CardHeader><CardTitle>By category</CardTitle><span className="text-xs text-gray-500">click to drill down</span></CardHeader>
               <CardBody>
                 {(() => {
                   const catEntries = Object.entries(consData.byCat).sort((a,b)=>b[1]-a[1])
@@ -383,6 +384,7 @@ export function Monitoring() {
                 })()}
               </CardBody>
             </Card>
+            )}
           </div>
 
           <Card>
