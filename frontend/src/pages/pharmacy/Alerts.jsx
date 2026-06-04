@@ -24,6 +24,22 @@ export function Alerts() {
   const [acceptReceiverName, setAcceptReceiverName] = useState('')
   const [acceptLoading, setAcceptLoading]   = useState(false)
 
+  // Admin: review & arrange (assign a source facility) inline, plus history + filters
+  const [reqView, setReqView]       = useState('active')   // 'active' | 'history'
+  const [filterComm, setFilterComm] = useState('')
+  const [filterLga, setFilterLga]   = useState('')
+  const [assigningId, setAssigningId]           = useState(null)
+  const [assignFacState, setAssignFacState]     = useState('')
+  const [assignFacLga, setAssignFacLga]         = useState('')
+  const [assignFacId, setAssignFacId]           = useState('')
+  const [assignReviewedBy, setAssignReviewedBy] = useState('')
+  const [assignQty, setAssignQty]               = useState(1)
+  const [assignLoading, setAssignLoading]       = useState(false)
+  const [reqHistory, setReqHistory]   = useState([])
+  const [loadingHist, setLoadingHist] = useState(false)
+  const [histFrom, setHistFrom] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10))
+  const [histTo, setHistTo]     = useState(() => new Date().toISOString().slice(0, 10))
+
   const fid     = store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
 
@@ -74,6 +90,48 @@ export function Alerts() {
     if (error) { toast('Error cancelling request','red'); return }
     toast('Request cancelled','green')
     loadFacReqAlerts()
+  }
+
+  // Admin reviews a facility request and assigns a source facility to fulfil it.
+  // Setting sending_facility_id hands the request off to that facility to dispatch.
+  async function confirmAssignFacility(req) {
+    if (!assignFacId) { toast('Select a source facility','red'); return }
+    if (!assignReviewedBy.trim()) { toast('Reviewed by is required','red'); return }
+    const parsedQty = parseInt(assignQty)
+    if (!parsedQty || parsedQty < 1) { toast('Qty must be at least 1','red'); return }
+    setAssignLoading(true)
+    const srcFac = store.allFacilities.find(f => f.id === assignFacId)
+    const reviewNote = `[Reviewed by: ${assignReviewedBy.trim()}]`
+    const newNotes = req.notes ? req.notes + ' ' + reviewNote : reviewNote
+    const { error } = await sb.from('stock_transfer_log').update({
+      sending_facility_id: assignFacId,
+      sending_facility_name: srcFac?.name || '',
+      quantity: parsedQty,
+      notes: newNotes,
+    }).eq('id', req.id)
+    if (error) { toast('Error assigning facility: ' + error.message,'red'); setAssignLoading(false); return }
+    toast(`Request sent to ${srcFac?.name || 'facility'}`,'green')
+    setAssigningId(null); setAssignFacState(''); setAssignFacLga(''); setAssignFacId('')
+    setAssignReviewedBy(''); setAssignQty(1); setAssignLoading(false)
+    loadFacReqAlerts()
+  }
+
+  // Resolved redistribution requests within the admin's jurisdiction (excludes
+  // internal Store→Dispensary and DSD transfers, which aren't request-driven).
+  async function loadHistory() {
+    setLoadingHist(true)
+    let q = sb.from('stock_transfer_log').select('*')
+      .in('status', ['accepted','cancelled','disputed'])
+      .gte('initiated_at', histFrom + 'T00:00:00').lte('initiated_at', histTo + 'T23:59:59')
+      .order('initiated_at', { ascending: false }).limit(300)
+    if (!store.isOverallAdmin()) {
+      const ids = store.allFacilities.map(f => f.id)
+      q = q.in('receiving_facility_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
+    }
+    q = sec(q)
+    const { data } = await q
+    setReqHistory((data || []).filter(t => !t.notes?.includes('[Internal:') && !t.notes?.includes('[DSD:')))
+    setLoadingHist(false)
   }
 
   async function confirmAccept(req) {
@@ -196,6 +254,17 @@ export function Alerts() {
   }
 
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
+  useEffect(()=>{ if(store.isAdmin() && reqView==='history') loadHistory() },[reqView, histFrom, histTo])
+
+  // ── Admin request filters (commodity + LGA) ───────────────────────────────
+  const facLgaById = {}
+  store.allFacilities.forEach(f => { facLgaById[f.id] = f.lga || '—' })
+  const lgaOptions = [...new Set(store.allFacilities.map(f => f.lga).filter(Boolean))].sort()
+  const applyReqFilters = list => list.filter(r =>
+    (!filterComm || r.commodity_id === filterComm) &&
+    (!filterLga  || facLgaById[r.receiving_facility_id] === filterLga))
+  const activeReqs = applyReqFilters(facReqAlerts)
+  const histReqs   = applyReqFilters(reqHistory)
 
   const today = new Date()
   const urgency = r => {
@@ -307,30 +376,144 @@ export function Alerts() {
       {tab==='fac-requests' && (
         <Card>
           <CardHeader>
-            <CardTitle>{store.isAdmin() ? 'Facility redistribution requests' : 'My redistribution requests'}</CardTitle>
+            <CardTitle>{store.isAdmin() ? (reqView==='history' ? 'Redistribution request history' : 'Facility redistribution requests') : 'My redistribution requests'}</CardTitle>
             <div className="flex gap-2">
-              <button onClick={loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
-              <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>{store.isAdmin() ? 'Open Redistribution' : 'Submit new request'}</Button>
+              {store.isAdmin() ? (
+                <>
+                  <button onClick={reqView==='history' ? loadHistory : loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
+                  <Button variant="primary" size="sm" onClick={()=>{ setReqView(reqView==='history'?'active':'history'); setAssigningId(null) }}>{reqView==='history' ? '← Active requests' : 'History'}</Button>
+                </>
+              ) : (
+                <>
+                  <button onClick={loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
+                  <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>Submit new request</Button>
+                </>
+              )}
             </div>
           </CardHeader>
-          {facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : store.isAdmin() ? (
-            facReqAlerts.map(req => (
-              <div key={req.id} className="px-5 py-4 border-b border-white/8 last:border-0">
-                <div className="flex items-start justify-between gap-4 flex-wrap">
-                  <div className="flex-1">
-                    <div className="font-medium text-gray-100 mb-1">{req.commodity_name}</div>
-                    <div className="text-sm text-gray-400">
-                      Requested: <span className="font-medium text-gray-200">{req.qty_requested ?? req.quantity}</span>
-                      {' '}· From: <span className="text-blue-400">{req.receiving_facility_name || '—'}</span>
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">Submitted {fmtDateTime(req.initiated_at)} by {req.initiated_by||'—'}</div>
-                    {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
-                  </div>
-                  <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>Review &amp; fulfill</Button>
-                </div>
+
+          {store.isAdmin() && (
+            <div className="px-5 py-3 border-b border-white/8 flex flex-wrap gap-3 items-end">
+              <div>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Commodity</label>
+                <select value={filterComm} onChange={e=>setFilterComm(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 min-w-[160px]">
+                  <option value="">All commodities</option>
+                  {[...store.allCommodities].sort((a,b)=>a.name.localeCompare(b.name)).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
               </div>
-            ))
-          ) : (
+              <div>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">LGA</label>
+                <select value={filterLga} onChange={e=>setFilterLga(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 min-w-[140px]">
+                  <option value="">All LGAs</option>
+                  {lgaOptions.map(l=><option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+              {reqView==='history' && (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">From</label>
+                    <input type="date" value={histFrom} onChange={e=>setHistFrom(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">To</label>
+                    <input type="date" value={histTo} onChange={e=>setHistTo(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500" />
+                  </div>
+                </>
+              )}
+              {(filterComm || filterLga) && (
+                <button onClick={()=>{ setFilterComm(''); setFilterLga('') }} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Clear filters</button>
+              )}
+            </div>
+          )}
+
+          {store.isAdmin() ? (
+            reqView==='history' ? (
+              loadingHist ? <LoadingState/> : histReqs.length===0 ? <EmptyState message="No matching resolved requests"/> : (
+                <div className="table-wrap"><table className="w-full text-sm">
+                  <thead><tr className="border-b border-white/8 bg-white/2">
+                    {['Date','Commodity','Qty','Requesting facility','LGA','Source facility','Status'].map(h=>(
+                      <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{histReqs.map(r=>(
+                    <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r.initiated_at)}</td>
+                      <td className="px-4 py-3 font-medium text-gray-100">{r.commodity_name}</td>
+                      <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity}</td>
+                      <td className="px-4 py-3 text-xs text-gray-400">{r.receiving_facility_name||'—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{facLgaById[r.receiving_facility_id]||'—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-400">{r.sending_facility_name||'—'}</td>
+                      <td className="px-4 py-3"><Badge type={r.status==='accepted'?'ok':r.status==='disputed'?'out':'amber'}>{r.status}</Badge></td>
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+              )
+            ) : activeReqs.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
+              activeReqs.map(req => {
+                const assignFacGroups = {}
+                store.allFacilities.filter(f => f.id !== req.receiving_facility_id).forEach(f => {
+                  const s=f.state||'Other', l=f.lga||'Other'
+                  if(!assignFacGroups[s]) assignFacGroups[s]={}
+                  if(!assignFacGroups[s][l]) assignFacGroups[s][l]=[]
+                  assignFacGroups[s][l].push(f)
+                })
+                return (
+                <div key={req.id} className="px-5 py-4 border-b border-white/8 last:border-0">
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-100 mb-1">{req.commodity_name}</div>
+                      <div className="text-sm text-gray-400">
+                        Requested: <span className="font-medium text-gray-200">{req.qty_requested ?? req.quantity}</span>
+                        {' '}· From: <span className="text-blue-400">{req.receiving_facility_name || '—'}</span>
+                        {facLgaById[req.receiving_facility_id] && facLgaById[req.receiving_facility_id]!=='—' && <> · LGA: <span className="text-gray-300">{facLgaById[req.receiving_facility_id]}</span></>}
+                      </div>
+                      <div className="text-xs text-gray-600 mt-1">Submitted {fmtDateTime(req.initiated_at)} by {req.initiated_by||'—'}</div>
+                      {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
+                    </div>
+                    <Button variant="primary" size="sm" onClick={()=>{ const open = assigningId===req.id; setAssigningId(open?null:req.id); setAssignFacState(''); setAssignFacLga(''); setAssignFacId(''); setAssignReviewedBy(''); setAssignQty(req.qty_requested ?? req.quantity ?? 1) }}>{assigningId===req.id ? 'Close' : 'Review & arrange'}</Button>
+                  </div>
+                  {assigningId === req.id && (
+                    <div className="mt-3 p-3 bg-purple-500/5 border border-purple-500/20 rounded-lg space-y-3">
+                      <div className="text-xs text-gray-400 font-medium">Select facility to fulfil this request</div>
+                      <div className="space-y-2">
+                        <select value={assignFacState} onChange={e=>{setAssignFacState(e.target.value);setAssignFacLga('');setAssignFacId('')}} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-purple-500">
+                          <option value="">Select state…</option>
+                          {Object.keys(assignFacGroups).sort().map(s=><option key={s} value={s}>{s}</option>)}
+                        </select>
+                        {assignFacState && (
+                          <select value={assignFacLga} onChange={e=>{setAssignFacLga(e.target.value);setAssignFacId('')}} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-purple-500">
+                            <option value="">Select LGA…</option>
+                            {Object.keys(assignFacGroups[assignFacState]||{}).sort().map(l=><option key={l} value={l}>{l}</option>)}
+                          </select>
+                        )}
+                        {assignFacLga && (
+                          <select value={assignFacId} onChange={e=>setAssignFacId(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-purple-500">
+                            <option value="">Select source facility…</option>
+                            {(assignFacGroups[assignFacState]?.[assignFacLga]||[]).sort((a,b)=>a.name.localeCompare(b.name)).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+                          </select>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Qty to issue *</label>
+                          <input type="number" min="1" value={assignQty} onChange={e=>setAssignQty(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-purple-500" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Reviewed by *</label>
+                          <input type="text" value={assignReviewedBy} onChange={e=>setAssignReviewedBy(e.target.value)} placeholder="Admin name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-purple-500" />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button variant="success" size="sm" disabled={assignLoading} onClick={()=>confirmAssignFacility(req)}>{assignLoading?'Sending…':'Send request to facility'}</Button>
+                        <Button variant="ghost" size="sm" onClick={()=>{setAssigningId(null);setAssignFacState('');setAssignFacLga('');setAssignFacId('');setAssignReviewedBy('');setAssignQty(1)}}>Cancel</Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                )
+              })
+            )
+          ) : facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
             facReqAlerts.map(req => (
               <div key={req.id} className="px-5 py-4 border-b border-white/8 last:border-0">
                 <div className="flex items-start justify-between gap-4 flex-wrap">

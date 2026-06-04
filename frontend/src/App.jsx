@@ -64,7 +64,12 @@ const labMap = {
   log: LabLog, crrf: LabCRRF,
   alerts: LabAlerts, monitoring: LabMonitoring,
 }
-const adminMap = { ...pharmMap, 'all-facilities': AllFacilities }
+// Admins get Overview + Reports only — no operations (dispense / intake /
+// adjustment / transfers), so those pages are deliberately omitted here.
+const adminMap = {
+  dashboard: PharmDashboard, stock: PharmStock, 'all-facilities': AllFacilities,
+  alerts: PharmAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
+}
 
 function PageRouter() {
   const section      = useAppStore(s => s.commoditySection)
