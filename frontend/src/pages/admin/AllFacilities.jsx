@@ -4,7 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { EmptyState } from '../../components/ui/Loading'
-import { fmtStockQty, getCommodityDispenseUnit, isLabCategory } from '../../utils/helpers'
+import { fmtStockQty, getCommodityDispenseUnit, isLabCategory, getStockStatus, getMOS } from '../../utils/helpers'
 
 export function AllFacilities() {
   const store  = useAppStore()
@@ -17,14 +17,30 @@ export function AllFacilities() {
   // Seed from every tracked commodity so zero-stock items and their
   // categories (e.g. Lab consumables) still appear in the list and filter.
   store.allCommodities.forEach(c => {
-    agg[c.id] = { id:c.id, name:c.name, cat:c.category, comm:c, total:0, facs:0, low:0, out:0 }
+    agg[c.id] = { id:c.id, name:c.name, cat:c.category, comm:c, facMap:{} }
   })
+  // Group by facility (summing location rows) and carry the facility's AMC so
+  // status is MOS-based — matching the Dashboard — instead of a flat threshold.
   store.stockData.forEach(r => {
     const k = r.commodity_id
-    if (!agg[k]) agg[k] = { id:k, name:r.commodities?.name, cat:r.commodities?.category, comm:r.commodities, total:0, facs:0, low:0, out:0 }
-    agg[k].total += r.quantity; agg[k].facs++
-    if (r.quantity === 0) agg[k].out++
-    else if (r.quantity < 10) agg[k].low++
+    if (!agg[k]) agg[k] = { id:k, name:r.commodities?.name, cat:r.commodities?.category, comm:r.commodities, facMap:{} }
+    const fid = r.facility_id
+    if (!agg[k].facMap[fid]) agg[k].facMap[fid] = { total:0, amc:0 }
+    agg[k].facMap[fid].total += r.quantity
+    if ((r.baseline_amc || 0) > agg[k].facMap[fid].amc) agg[k].facMap[fid].amc = r.baseline_amc || 0
+  })
+  // Derive per-commodity totals + status-site counts (out / low / over).
+  Object.values(agg).forEach(c => {
+    const facs = Object.values(c.facMap)
+    c.total = facs.reduce((s,f) => s + f.total, 0)
+    c.facs  = facs.length
+    c.low = 0; c.out = 0; c.over = 0
+    facs.forEach(f => {
+      const st = getStockStatus(f.total, f.amc)
+      if (st === 'out')       c.out++
+      else if (st === 'low')  c.low++
+      else if (st === 'over') c.over++
+    })
   })
 
   const commOpts = Object.entries(agg).sort((a,b)=>a[1].name?.localeCompare(b[1].name))
@@ -57,8 +73,9 @@ export function AllFacilities() {
         .filter(r => r.commodity_id === selected)
         .reduce((acc, r) => {
           const fid = r.facility_id
-          if (!acc[fid]) acc[fid] = { name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, comm: r.commodities }
+          if (!acc[fid]) acc[fid] = { name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: r.commodities }
           acc[fid][r.location_type === 'store' ? 'store' : r.location_type === 'dispensary' ? 'dispensary' : 'dsd'] += r.quantity
+          if ((r.baseline_amc || 0) > acc[fid].amc) acc[fid].amc = r.baseline_amc || 0
           return acc
         }, {})
     : {}
@@ -95,12 +112,13 @@ export function AllFacilities() {
           <p className="text-sm text-gray-500 mt-1">Stock by facility — {facList.length} reporting sites</p>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
           {[
             { label: 'Total stock', value: fmtStockQty(drillTotal, selectedComm?.comm), color: 'text-gray-100' },
             { label: 'Reporting sites', value: facList.length, color: 'text-blue-400' },
-            { label: 'Low stock sites', value: facList.filter(f=>f.total>0&&f.total<10).length, color: 'text-amber-400' },
+            { label: 'Low stock sites', value: facList.filter(f=>getStockStatus(f.total,f.amc)==='low').length, color: 'text-amber-400' },
             { label: 'Out of stock sites', value: facList.filter(f=>f.total===0).length, color: 'text-red-400' },
+            { label: 'Overstock sites', value: facList.filter(f=>getStockStatus(f.total,f.amc)==='over').length, color: 'text-blue-400' },
           ].map(m => (
             <div key={m.label} className="bg-white/3 border border-white/8 rounded-xl px-4 py-3">
               <div className="text-xs text-gray-500 uppercase tracking-widest mb-1">{m.label}</div>
@@ -115,14 +133,16 @@ export function AllFacilities() {
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
                 {(isLabSel
-                  ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','Status']
-                  : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','Status']
+                  ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','MOS','Status']
+                  : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','MOS','Status']
                 ).map(h=>(
                   <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                 ))}
               </tr></thead>
               <tbody>{facList.map((f,i) => {
-                const status = f.total === 0 ? { label:'Out of stock', type:'out' } : f.total < 10 ? { label:'Low stock', type:'low' } : { label:'In stock', type:'ok' }
+                const st = getStockStatus(f.total, f.amc)
+                const statusLabel = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No AMC data' }[st] || st
+                const mos = getMOS(f.total, f.amc)
                 return (
                   <tr key={i} className="border-b border-white/5 hover:bg-white/2">
                     <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
@@ -138,7 +158,8 @@ export function AllFacilities() {
                       </>
                     )}
                     <td className="px-4 py-3 font-mono text-sm font-semibold text-gray-100">{fmtStockQty(f.total, f.comm)}</td>
-                    <td className="px-4 py-3"><Badge type={status.type}>{status.label}</Badge></td>
+                    <td className="px-4 py-3 font-mono text-sm text-gray-400">{mos !== null ? `${mos}mo` : '—'}</td>
+                    <td className="px-4 py-3"><Badge type={st}>{statusLabel}</Badge></td>
                   </tr>
                 )
               })}</tbody>
@@ -174,7 +195,7 @@ export function AllFacilities() {
         {items.length===0 ? <EmptyState message="No stock data yet."/> : (
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
-              {['Commodity','Category','Unit','Total stock','Reporting sites','Low stock sites','Out of stock sites'].map(h=>(
+              {['Commodity','Category','Unit','Total stock','Reporting sites','Low stock sites','Out of stock sites','Overstock sites'].map(h=>(
                 <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
               ))}
             </tr></thead>
@@ -188,6 +209,7 @@ export function AllFacilities() {
                 <td className="px-4 py-3 text-gray-400">{r.facs}</td>
                 <td className="px-4 py-3">{r.low>0?<Badge type="low">{r.low}</Badge>:<span className="text-gray-600">0</span>}</td>
                 <td className="px-4 py-3">{r.out>0?<Badge type="out">{r.out}</Badge>:<span className="text-gray-600">0</span>}</td>
+                <td className="px-4 py-3">{r.over>0?<Badge type="over">{r.over}</Badge>:<span className="text-gray-600">0</span>}</td>
               </tr>
             ))}</tbody>
           </table></div>
