@@ -33,12 +33,25 @@ export function CommoditySelect({
 
   const selected = list.find(c => c.id === value)
 
+  // Place the menu below the trigger, or above it when there isn't enough room
+  // below (common on mobile / lower form fields). Cap height to the space.
+  const computeRect = () => {
+    const r = btnRef.current.getBoundingClientRect()
+    const vh = window.visualViewport?.height || window.innerHeight
+    const below = vh - r.bottom
+    const above = r.top
+    if (below >= 220 || below >= above) {
+      return { top: r.bottom + 4, left: r.left, width: r.width, maxHeight: Math.max(160, Math.min(288, below - 8)) }
+    }
+    const h = Math.max(160, Math.min(288, above - 8))
+    return { top: r.top - 4 - h, left: r.left, width: r.width, maxHeight: h }
+  }
+
   const close = () => { setOpen(false); setQuery('') }
   const toggle = () => {
     if (disabled) return
     if (open) return close()
-    const r = btnRef.current.getBoundingClientRect()
-    setRect({ top: r.bottom + 4, left: r.left, width: r.width })
+    setRect(computeRect())
     setQuery('')
     setOpen(true)
   }
@@ -49,12 +62,19 @@ export function CommoditySelect({
       if (btnRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return
       close()
     }
-    const reposition = () => close()
-    document.addEventListener('mousedown', onDoc)
+    // Keep the menu aligned to the trigger instead of closing it. Ignore scroll
+    // that originates inside the menu (its own list) so the list can scroll, and
+    // don't close on resize — opening the search keyboard on mobile fires resize.
+    const reposition = e => {
+      if (e?.target && popRef.current?.contains(e.target)) return
+      if (!btnRef.current) return
+      setRect(computeRect())
+    }
+    document.addEventListener('pointerdown', onDoc)
     window.addEventListener('scroll', reposition, true)
     window.addEventListener('resize', reposition)
     return () => {
-      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('pointerdown', onDoc)
       window.removeEventListener('scroll', reposition, true)
       window.removeEventListener('resize', reposition)
     }
@@ -88,8 +108,8 @@ export function CommoditySelect({
 
       {open && rect && createPortal(
         <div ref={popRef}
-          style={{ position: 'fixed', top: rect.top, left: rect.left, width: rect.width, zIndex: 1000 }}
-          className="bg-gray-900 border border-white/15 rounded-lg shadow-2xl max-h-72 overflow-hidden flex flex-col">
+          style={{ position: 'fixed', top: rect.top, left: rect.left, width: rect.width, maxHeight: rect.maxHeight, zIndex: 1000 }}
+          className="bg-gray-900 border border-white/15 rounded-lg shadow-2xl overflow-hidden flex flex-col">
           <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder={placeholder}
             className="w-full bg-white/5 border-b border-white/10 px-3 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none" />
           <div className="overflow-y-auto">
