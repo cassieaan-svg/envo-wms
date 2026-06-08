@@ -25,7 +25,7 @@ export const useAppStore = create((set, get) => ({
 
   // UI
   sidebarOpen:    false,
-  theme:          localStorage.getItem('ct_theme') || 'dark',
+  theme:          localStorage.getItem('ct_theme') || 'system', // 'system' | 'light' | 'dark'
   currentPage:    sessionStorage.getItem('ct_page') || 'dashboard',
   currentReportCategory: 'all',
   pendingReportsTab: false,   // one-shot: open the Activity Log's Weekly/Monthly tab

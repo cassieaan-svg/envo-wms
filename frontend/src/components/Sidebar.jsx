@@ -88,15 +88,15 @@ export function Sidebar() {
 
         {/* Footer */}
         <div className="px-3 pb-4 space-y-2">
-          <button
-            onClick={() => store.setTheme(store.theme === 'light' ? 'dark' : 'light')}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-white/5 border border-white/8 text-xs text-gray-400 hover:bg-white/8 transition-colors"
-          >
-            <span>{store.theme === 'light' ? '🌙 Dark mode' : '☀ Light mode'}</span>
-            <div className={`w-8 h-4 rounded-full relative transition-colors ${store.theme === 'light' ? 'bg-green-500' : 'bg-white/20'}`}>
-              <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${store.theme === 'light' ? 'left-4' : 'left-0.5'}`} />
-            </div>
-          </button>
+          <div className="w-full grid grid-cols-3 gap-1 p-1 rounded-lg bg-white/5 border border-white/8">
+            {[['system','🖥', 'System'], ['light','☀', 'Light'], ['dark','🌙', 'Dark']].map(([val, icon, label]) => (
+              <button key={val} onClick={() => store.setTheme(val)}
+                title={`${label} theme`}
+                className={`flex items-center justify-center gap-1 text-[11px] px-2 py-1.5 rounded-md transition-colors ${store.theme === val ? 'bg-white/12 text-gray-100' : 'text-gray-400 hover:bg-white/8'}`}>
+                <span>{icon}</span><span>{label}</span>
+              </button>
+            ))}
+          </div>
           <button
             onClick={async () => {
               const { sb } = await import('../lib/supabase')

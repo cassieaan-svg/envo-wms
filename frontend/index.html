@@ -5,6 +5,19 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EnVo</title>
+    <script>
+      // Apply the resolved theme before first paint so light-mode devices don't
+      // flash dark (and vice-versa). Mirrors the logic in App.jsx; React keeps
+      // it in sync afterwards.
+      (function () {
+        try {
+          var t = localStorage.getItem('ct_theme') || 'system';
+          var dark = t === 'dark' || (t !== 'light' &&
+            window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

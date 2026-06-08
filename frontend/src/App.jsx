@@ -110,18 +110,32 @@ function MobileTopbar() {
 }
 
 function AppContent() {
-  const theme = useAppStore(s => s.theme)
+  const theme = useAppStore(s => s.theme)   // 'system' | 'light' | 'dark'
+
+  // Track the device colour-scheme so 'system' follows the OS and updates live
+  // when the user flips their system setting.
+  const [systemDark, setSystemDark] = useState(() =>
+    window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true)
+  useEffect(() => {
+    const mql = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mql) return
+    const onChange = e => setSystemDark(e.matches)
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
+
+  const dark = theme === 'system' ? systemDark : theme !== 'light'
 
   useRealtimeStock()
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme !== 'light')
-    document.body.style.background = theme === 'light' ? '#f6f8fa' : '#030712'
-    document.body.style.color      = theme === 'light' ? '#1f2328' : '#e6edf3'
-  }, [theme])
+    document.documentElement.classList.toggle('dark', dark)
+    document.body.style.background = dark ? '#030712' : '#f6f8fa'
+    document.body.style.color      = dark ? '#e6edf3' : '#1f2328'
+  }, [dark])
 
   return (
-    <div className="min-h-screen" style={{ background: theme === 'light' ? '#f6f8fa' : '#030712' }}>
+    <div className="min-h-screen" style={{ background: dark ? '#030712' : '#f6f8fa' }}>
       <MobileTopbar />
       <Sidebar />
       <main className="lg:ml-56 p-6 pt-20 lg:pt-6 min-h-screen">
