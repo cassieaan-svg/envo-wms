@@ -60,23 +60,27 @@ export function getMOS(qty, amc) {
   return +(qty / amc).toFixed(1)
 }
 
-// ── AMC ── Average Monthly Consumption: total quantity dispensed over a
-// 3-month period, divided by 2. The period is anchored to fixed calendar
-// quarters (Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec) and AMC uses the most recently
-// COMPLETED quarter, so the value stays fixed and only changes every 3 months.
-export const AMC_WINDOW_MONTHS = 3
+// ── AMC ── Average Monthly Consumption: total quantity dispensed over the 2
+// most recent COMPLETED months preceding the current calendar quarter, divided
+// by 2. The value is still anchored to fixed calendar quarters (Jan, Apr, Jul,
+// Oct), so it stays fixed within a quarter and only refreshes every 3 months —
+// but it drops the stale oldest month to reduce lag.
+export const AMC_WINDOW_MONTHS = 2 // months of consumption averaged
 export const AMC_DIVISOR = 2
+const QUARTER_MONTHS = 3 // cadence: AMC refreshes once per quarter
 
 // Start of the calendar quarter containing `from`.
 function quarterStart(from) {
-  const m = Math.floor(from.getMonth() / AMC_WINDOW_MONTHS) * AMC_WINDOW_MONTHS
+  const m = Math.floor(from.getMonth() / QUARTER_MONTHS) * QUARTER_MONTHS
   return new Date(from.getFullYear(), m, 1)
 }
 
-// AMC window = the previous completed quarter, i.e. [start, end).
+// AMC window = the 2 months immediately before the current quarter, i.e.
+// [end - 2mo, end). `end` is the current quarter start, so the window only
+// moves at quarter boundaries (e.g. on Jun 8 → [Feb 1, Apr 1) = Feb + Mar).
 export function amcWindowStart(from = new Date()) {
-  const s = quarterStart(from)
-  return new Date(s.getFullYear(), s.getMonth() - AMC_WINDOW_MONTHS, 1)
+  const end = quarterStart(from)
+  return new Date(end.getFullYear(), end.getMonth() - AMC_WINDOW_MONTHS, 1)
 }
 export function amcWindowEnd(from = new Date()) {
   return quarterStart(from)
