@@ -5,7 +5,53 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { EmptyState } from '../../components/ui/Loading'
+import { toast } from '../../components/ui/Toast'
 import { fmtStockQty, getCommodityDispenseUnit, isLabCategory, getStockStatus, getMOS } from '../../utils/helpers'
+
+// Build a CSV from a header row + data rows and trigger a download. Fields with
+// commas / quotes / newlines are quoted and internal quotes doubled.
+function exportCsv(filename, headers, rows) {
+  const esc = v => {
+    const s = v == null ? '' : String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const csv = [headers, ...rows].map(r => r.map(esc).join(',')).join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+  toast('CSV exported', 'green')
+}
+
+// Build a printable HTML table and open the browser print dialog (Save as PDF).
+// Matches the app's existing print-to-PDF pattern (CRRF / Transfers).
+function exportPdf(title, subtitle, headers, rows, rightCols = new Set()) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const thead = `<tr>${headers.map((h, i) => `<th class="${rightCols.has(i) ? 'r' : ''}">${esc(h)}</th>`).join('')}</tr>`
+  const tbody = rows.map(r => `<tr>${r.map((c, i) => `<td class="${rightCols.has(i) ? 'r' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')
+  const styles = `
+    *{font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    h1{font-size:16px;margin:0 0 4px;} .sub{font-size:12px;color:#444;margin:0 0 2px;}
+    .meta{font-size:10px;color:#888;margin:0 0 12px;}
+    table{width:100%;border-collapse:collapse;font-size:11px;}
+    th,td{border:1px solid #ccc;padding:5px 7px;text-align:left;}
+    th{background:#f0f0f0;} td.r,th.r{text-align:right;} tr:nth-child(even) td{background:#fafafa;}
+    @page{size:landscape;margin:12mm;}`
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${styles}</style></head>`
+    + `<body><h1>${esc(title)}</h1>${subtitle ? `<p class="sub">${esc(subtitle)}</p>` : ''}`
+    + `<p class="meta">Generated ${esc(new Date().toLocaleString('en-GB'))}</p>`
+    + `<table><thead>${thead}</thead><tbody>${tbody}</tbody></table></body></html>`
+  const url = URL.createObjectURL(new Blob([doc], { type: 'text/html' }))
+  const win = window.open(url, '_blank')
+  if (win) {
+    win.onload = () => { win.focus(); win.print(); URL.revokeObjectURL(url); win.onafterprint = () => win.close() }
+  } else {
+    URL.revokeObjectURL(url)
+    toast('Allow pop-ups to download the PDF', 'red')
+  }
+}
 
 export function AllFacilities() {
   const store  = useAppStore()
@@ -15,6 +61,9 @@ export function AllFacilities() {
   // Per-commodity SDP/DSD site stock (separate tables) across the admin's
   // facilities, so overview totals include them — not just the main store.
   const [siteByComm, setSiteByComm] = useState({ sdp: {}, dsd: {} })
+  // Per-commodity set of facility ids that consumed it in the last 12 months,
+  // so a site with a consumption track record counts as reporting even at 0 stock.
+  const [consByComm, setConsByComm] = useState({})
   const [siteFilter, setSiteFilter] = useState('')   // breakdown card filter: '', low, out, over
 
   const agg = {}
@@ -43,13 +92,23 @@ export function AllFacilities() {
       c.facMap[fid].total += qty
     })
   })
-  // Derive per-commodity totals + status-site counts (out / low / over).
+  // A facility that consumed this commodity in the last 12 months counts as a
+  // reporting site even with no current stock row.
   Object.values(agg).forEach(c => {
-    const facs = Object.values(c.facMap)
-    c.total = facs.reduce((s,f) => s + f.total, 0)
-    c.facs  = facs.length
+    const consSet = consByComm[c.id]
+    if (consSet) consSet.forEach(fid => { if (!c.facMap[fid]) c.facMap[fid] = { total:0, amc:0 } })
+  })
+  // Reporting sites = facilities that either currently hold stock (total > 0) or
+  // have consumed the commodity in the last 12 months. Provisioned-but-idle
+  // 0-stock rows are excluded. Totals and status counts use this reporting set,
+  // so "out of stock sites" = reporting sites now sitting at zero.
+  Object.values(agg).forEach(c => {
+    const consSet = consByComm[c.id]
+    const reporting = Object.entries(c.facMap).filter(([fid, f]) => f.total > 0 || (consSet && consSet.has(fid)))
+    c.total = reporting.reduce((s, [, f]) => s + f.total, 0)
+    c.facs  = reporting.length
     c.low = 0; c.out = 0; c.over = 0
-    facs.forEach(f => {
+    reporting.forEach(([, f]) => {
       const st = getStockStatus(f.total, f.amc)
       if (st === 'out')       c.out++
       else if (st === 'low')  c.low++
@@ -89,8 +148,29 @@ export function AllFacilities() {
       }
       return map
     }
-    Promise.all([fetchAll('sdp_stock'), fetchAll('dsd_stock')]).then(([sdp, dsd]) => {
-      if (active) setSiteByComm({ sdp, dsd })
+    // Distinct (commodity → facilities that dispensed it) over the last 12
+    // months. Only two columns, paginated, deduped into sets.
+    const fetchConsumption = async () => {
+      const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 12)
+      const map = {}
+      const PAGE = 1000
+      for (let offset = 0; ; offset += PAGE) {
+        let q = sb.from('dispense_log').select('commodity_id,facility_id')
+          .gte('dispensed_at', cutoff.toISOString())
+          .range(offset, offset + PAGE - 1)
+        if (facIds && facIds.length) q = q.in('facility_id', facIds)
+        const { data, error } = await q
+        if (error || !data || !data.length) break
+        data.forEach(d => {
+          if (!map[d.commodity_id]) map[d.commodity_id] = new Set()
+          map[d.commodity_id].add(d.facility_id)
+        })
+        if (data.length < PAGE) break
+      }
+      return map
+    }
+    Promise.all([fetchAll('sdp_stock'), fetchAll('dsd_stock'), fetchConsumption()]).then(([sdp, dsd, cons]) => {
+      if (active) { setSiteByComm({ sdp, dsd }); setConsByComm(cons) }
     })
     return () => { active = false }
   }, [])
@@ -104,7 +184,7 @@ export function AllFacilities() {
         .filter(r => r.commodity_id === selected)
         .reduce((acc, r) => {
           const fid = r.facility_id
-          if (!acc[fid]) acc[fid] = { name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: r.commodities }
+          if (!acc[fid]) acc[fid] = { id: fid, name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: r.commodities }
           acc[fid][r.location_type === 'store' ? 'store' : r.location_type === 'dispensary' ? 'dispensary' : 'dsd'] += r.quantity
           if ((r.baseline_amc || 0) > acc[fid].amc) acc[fid].amc = r.baseline_amc || 0
           return acc
@@ -117,7 +197,7 @@ export function AllFacilities() {
     const ensure = fid => {
       if (!facRows[fid]) {
         const f = store.allFacilities.find(x => x.id === fid)
-        facRows[fid] = { name: f?.name||'—', state: f?.state||'—', lga: f?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: selectedComm?.comm }
+        facRows[fid] = { id: fid, name: f?.name||'—', state: f?.state||'—', lga: f?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: selectedComm?.comm }
       }
       return facRows[fid]
     }
@@ -127,13 +207,20 @@ export function AllFacilities() {
       if (isLabSel) f.sdp += qty
       else          f.dsd += qty
     })
+    // Include facilities that consumed this commodity in the last 12 months even
+    // with no stock row, so they appear as out-of-stock reporting sites.
+    if (consByComm[selected]) consByComm[selected].forEach(fid => ensure(fid))
   }
 
   // Totals: lab = store + SDP; pharmacy = store + dispensary + DSD
   Object.values(facRows).forEach(f => {
     f.total = isLabSel ? (f.store + (f.sdp || 0)) : (f.store + f.dispensary + f.dsd)
   })
-  const facList = Object.values(facRows).sort((a,b) => b.total - a.total)
+  // Reporting sites only: currently in stock, or consumed in the last 12 months.
+  const consSel = selected ? consByComm[selected] : null
+  const facList = Object.values(facRows)
+    .filter(f => f.total > 0 || (consSel && consSel.has(f.id)))
+    .sort((a,b) => b.total - a.total)
   const drillTotal = facList.reduce((s, f) => s + f.total, 0)
   const siteCounts = {
     low:  facList.filter(f => getStockStatus(f.total, f.amc) === 'low').length,
@@ -144,6 +231,40 @@ export function AllFacilities() {
   const shownFacs = siteFilter
     ? facList.filter(f => getStockStatus(f.total, f.amc) === siteFilter)
     : facList
+
+  const statusLabels = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No AMC data' }
+
+  // Export the commodity overview (one row per commodity).
+  const commodityHeaders = ['Commodity','Category','Unit','Total stock','Reporting sites','Low stock sites','Out of stock sites','Overstock sites']
+  const commodityRows = () => items.map(r => [r.name, r.cat, getCommodityDispenseUnit(r.comm) || '', r.total, r.facs, r.low, r.out, r.over])
+  function downloadCommoditiesCsv() {
+    exportCsv('stock-by-commodity_all-facilities.csv', commodityHeaders, commodityRows())
+  }
+  function downloadCommoditiesPdf() {
+    exportPdf('Stock by commodity — all facilities', `${items.length} commodities`, commodityHeaders, commodityRows(), new Set([3,4,5,6,7]))
+  }
+
+  // Export the selected commodity's facility breakdown (the rows currently shown,
+  // honouring the status-card filter).
+  const facilityHeaders = isLabSel
+    ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','MOS','Status']
+    : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','MOS','Status']
+  const facilityRowsFor = forPdf => shownFacs.map(f => {
+    const st = getStockStatus(f.total, f.amc)
+    const mos = getMOS(f.total, f.amc)
+    const locs = isLabSel ? [f.sdp || 0] : [f.dispensary, f.dsd]
+    const mosCell = mos != null ? (forPdf ? `${mos}mo` : mos) : (forPdf ? '—' : '')
+    return [f.name, f.state, f.lga, f.store, ...locs, f.total, mosCell, statusLabels[st] || st]
+  })
+  const facilityFileBase = () => (selectedComm?.name || 'commodity').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '')
+  function downloadFacilityCsv() {
+    exportCsv(`${facilityFileBase()}_facility-breakdown.csv`, facilityHeaders, facilityRowsFor(false))
+  }
+  function downloadFacilityPdf() {
+    const subtitle = `${selectedComm?.name || ''} · ${selectedComm?.cat || ''} — ${shownFacs.length} reporting sites`
+    const rightCols = isLabSel ? new Set([3,4,5,6]) : new Set([3,4,5,6,7])
+    exportPdf(`${selectedComm?.name || 'Commodity'} — facility breakdown`, subtitle, facilityHeaders, facilityRowsFor(true), rightCols)
+  }
 
   if (selected) {
     return (
@@ -171,7 +292,21 @@ export function AllFacilities() {
         </div>
 
         <Card>
-          <CardHeader><CardTitle>Facility breakdown</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Facility breakdown</CardTitle>
+            {shownFacs.length > 0 && (
+              <div className="flex gap-2">
+                <button onClick={downloadFacilityCsv}
+                  className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5">
+                  ↓ CSV
+                </button>
+                <button onClick={downloadFacilityPdf}
+                  className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5">
+                  ↓ PDF
+                </button>
+              </div>
+            )}
+          </CardHeader>
           {shownFacs.length === 0 ? <EmptyState message={siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
@@ -233,6 +368,18 @@ export function AllFacilities() {
               <option value="">All categories</option>
               {categories.map(c=><option key={c} value={c}>{c}</option>)}
             </select>
+            {items.length > 0 && (
+              <>
+                <button onClick={downloadCommoditiesCsv}
+                  className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5">
+                  ↓ CSV
+                </button>
+                <button onClick={downloadCommoditiesPdf}
+                  className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5">
+                  ↓ PDF
+                </button>
+              </>
+            )}
           </div>
         </CardHeader>
         {items.length===0 ? <EmptyState message="No stock data yet."/> : (
