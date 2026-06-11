@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { sb } from '../lib/supabase'
 import { useAppStore } from '../store/appStore'
+import { ChangePasswordModal } from './ChangePasswordModal'
 import { PharmacyNav } from '../pages/pharmacy/Nav'
 import { LabNav }      from '../pages/lab/Nav'
 import { AdminNav }    from '../pages/admin/Nav'
@@ -8,6 +10,7 @@ import { SdpNav }      from '../pages/sdp/Nav'
 
 export function Sidebar() {
   const store      = useAppStore()
+  const [showChangePw, setShowChangePw] = useState(false)
   const sectionIcon = store.commoditySection === 'lab' ? '🧪' : store.commoditySection === 'pharmacy' ? '💊' : '⬡'
   const sectionName = store.commoditySection === 'lab' ? 'Laboratory' : store.commoditySection === 'pharmacy' ? 'Pharmacy' : 'EnVo'
 
@@ -98,6 +101,15 @@ export function Sidebar() {
             ))}
           </div>
           <button
+            onClick={() => setShowChangePw(true)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/8 text-gray-400 text-xs hover:bg-white/8 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 016 0v2"/>
+            </svg>
+            Change password
+          </button>
+          <button
             onClick={async () => {
               const { sb } = await import('../lib/supabase')
               await sb.auth.signOut()
@@ -112,6 +124,8 @@ export function Sidebar() {
           </button>
         </div>
       </aside>
+
+      {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
     </>
   )
 }
