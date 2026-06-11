@@ -83,7 +83,7 @@ export function AmcWindowEditor({ facilityId, facilityName, onSaved }) {
   }
 
   return (
-    <Card className="mb-4">
+    <Card className="mb-4 overflow-visible">
       <div className="px-4 py-3">
         <div className="flex items-baseline justify-between gap-2 flex-wrap mb-1">
           <div className="text-sm font-medium text-gray-200">
