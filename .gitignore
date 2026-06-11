@@ -34,5 +34,8 @@ yarn-error.log*
 temp/
 tmp/
 
+# Database backups (may contain real data — keep out of version control)
+backend/backups/
+
 # OS
 Thumbs.db
