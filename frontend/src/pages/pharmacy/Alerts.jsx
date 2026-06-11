@@ -7,7 +7,7 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, calcAMC, amcWindowStart, amcWindowEnd, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, calcAMCFromTotal, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -187,21 +187,20 @@ export function Alerts() {
   }
 
   async function loadStockAlerts() {
-    const amcStart = amcWindowStart()
-    const amcEnd = amcWindowEnd()
+    const amcWin = resolveAmcWindow(store.amcWindows[fid])
     let amcMap = {}
     if (commIds.length && fid) {
       let q = sb.from('dispense_log')
         .select('commodity_id,quantity,dispensed_at')
-        .gte('dispensed_at',amcStart.toISOString())
-        .lt('dispensed_at',amcEnd.toISOString())
+        .gte('dispensed_at',amcWin.start.toISOString())
+        .lt('dispensed_at',amcWin.end.toISOString())
         .in('commodity_id',commIds).eq('facility_id',fid)
       q = sec(q)
       const { data } = await q
-      // AMC = total dispensed in the 2-month window ÷ 2.
+      // AMC = total dispensed over the facility's window ÷ number of months.
       const sums = {}
       ;(data||[]).forEach(d=>{ sums[d.commodity_id]=(sums[d.commodity_id]||0)+(d.quantity||0) })
-      Object.entries(sums).forEach(([cid,total])=>{ amcMap[cid]=calcAMC(total) })
+      Object.entries(sums).forEach(([cid,total])=>{ amcMap[cid]=calcAMCFromTotal(total, amcWin.months) })
     }
 
     // Aggregate DSD (pharmacy) and SDP (lab) stock so the total matches the Dashboard.

@@ -6,7 +6,8 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES, calcAMC, amcWindowStart, amcWindowEnd } from '../../utils/helpers'
+import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES, resolveAmcWindow, calcAMCFromTotal } from '../../utils/helpers'
+import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
 export function Stock() {
   const store         = useAppStore()
@@ -58,23 +59,22 @@ export function Stock() {
 
     await loadStock()
 
-    const amcStart = amcWindowStart()
-    const amcEnd = amcWindowEnd()
+    // AMC over this facility's configured window (or the default), ÷ months.
+    const amcWin = resolveAmcWindow(store.amcWindows[fid])
     const commIds = store.stockData.map(r => r.commodity_id)
 
     let amcMap = {}
     if (commIds.length && fid) {
       const { data } = await sec(sb.from('dispense_log')
         .select('commodity_id,quantity,dispensed_at')
-        .gte('dispensed_at', amcStart.toISOString())
-        .lt('dispensed_at', amcEnd.toISOString())
+        .gte('dispensed_at', amcWin.start.toISOString())
+        .lt('dispensed_at', amcWin.end.toISOString())
         .in('commodity_id', commIds)
         .eq('facility_id', fid))
 
-      // AMC = total dispensed in the 2-month window ÷ 2.
       const sums = {}
       ;(data || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
-      Object.entries(sums).forEach(([id, total]) => { amcMap[id] = calcAMC(total) })
+      Object.entries(sums).forEach(([id, total]) => { amcMap[id] = calcAMCFromTotal(total, amcWin.months) })
     }
 
     // Fetch SDP stock data and aggregate by commodity
@@ -198,6 +198,14 @@ export function Stock() {
         <h1 className="text-xl font-medium text-gray-100">Stock Levels</h1>
         <p className="text-sm text-gray-500 mt-1">Current stock on hand with months of stock</p>
       </div>
+
+      {store.canManageStock() && (
+        fid
+          ? <AmcWindowEditor facilityId={fid}
+              facilityName={store.allFacilities.find(f => f.id === fid)?.name || store.currentFacility?.name}
+              onSaved={loadData} />
+          : <Card className="mb-4"><div className="px-4 py-3 text-xs text-gray-500">Select a single facility to configure its AMC window.</div></Card>
+      )}
 
       <Card className="mb-4">
         <div className="px-4 py-3 flex gap-2 flex-wrap items-center">

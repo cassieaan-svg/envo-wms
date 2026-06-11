@@ -25,10 +25,15 @@ export async function hydrateSession(user) {
   if (accessLevel === 'state_admin' && meta.admin_state) facQuery = facQuery.eq('state', meta.admin_state)
   if (accessLevel === 'lga_admin'   && meta.admin_lga)   facQuery = facQuery.eq('lga',   meta.admin_lga)
 
-  const [{ data: facs }, { data: comms }] = await Promise.all([
+  const [{ data: facs }, { data: comms }, { data: amcRows }] = await Promise.all([
     facQuery,
     sb.from('commodities').select('id,name,category,unit,pack_size,dispensing_unit').order('category').order('name'),
+    sb.from('facility_amc_settings').select('facility_id,amc_from,amc_to'),
   ])
+
+  // Per-facility custom AMC windows, keyed by facility id for quick lookup.
+  const amcWindows = {}
+  ;(amcRows || []).forEach(r => { amcWindows[r.facility_id] = { amc_from: r.amc_from, amc_to: r.amc_to } })
 
   let allCommodities = comms || []
   if (commoditySection && SECTION_CATEGORIES[commoditySection]) {
@@ -61,6 +66,7 @@ export async function hydrateSession(user) {
   store.setAllFacilities(facs || [])
   store.setAllCommodities(allCommodities)
   store.setCurrentFacility(currentFacility)
+  store.setAmcWindows(amcWindows)
 
   return { accessLevel, facilityRole }
 }

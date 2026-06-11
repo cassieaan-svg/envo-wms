@@ -7,7 +7,7 @@ import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { calcAMC, amcWindowStart, amcWindowEnd, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, calcAMCFromTotal, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Dashboard() {
@@ -56,19 +56,19 @@ export function Dashboard() {
     setDsdMap(dsdAgg)
     setSdpMap(sdpAgg)
 
-    // Load AMC = total dispensed in the completed 3-month period ÷ 2.
-    const amcStart = amcWindowStart()
-    const amcEnd = amcWindowEnd()
+    // AMC over this facility's configured window (or the default), ÷ months.
+    const amcFid = fid || store.currentFacility?.id
+    const amcWin = resolveAmcWindow(store.amcWindows[amcFid])
     const { data: dispData } = await sec(sb.from('dispense_log')
       .select('commodity_id,quantity,dispensed_at')
-      .gte('dispensed_at', amcStart.toISOString())
-      .lt('dispensed_at', amcEnd.toISOString())
-      .eq('facility_id', fid || store.currentFacility?.id))
+      .gte('dispensed_at', amcWin.start.toISOString())
+      .lt('dispensed_at', amcWin.end.toISOString())
+      .eq('facility_id', amcFid))
 
     const sums = {}
     ;(dispData || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
     const amc = {}
-    Object.entries(sums).forEach(([id, total]) => { amc[id] = calcAMC(total) })
+    Object.entries(sums).forEach(([id, total]) => { amc[id] = calcAMCFromTotal(total, amcWin.months) })
     setAmcMap(amc)
     setLoading(false)
   }

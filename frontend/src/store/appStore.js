@@ -22,6 +22,7 @@ export const useAppStore = create((set, get) => ({
   allCommodities: [],
   stockData:      [],
   dsdFacilities:  [],
+  amcWindows:     {},   // facility_id → { amc_from, amc_to } | absent = default window
 
   // UI
   sidebarOpen:    false,
@@ -55,6 +56,13 @@ export const useAppStore = create((set, get) => ({
     localStorage.setItem('ct_theme', theme)
     set({ theme })
   },
+  setAmcWindows: (amcWindows) => set({ amcWindows }),
+  setAmcWindow:  (facilityId, win) => set(s => {
+    const next = { ...s.amcWindows }
+    if (win) next[facilityId] = win
+    else delete next[facilityId]
+    return { amcWindows: next }
+  }),
   setAdminFilterFacility: (f) => set({ adminFilterFacility: f }),
   setAdminFilterState:    (s) => set({ adminFilterState: s }),
   setAdminFilterLGA:      (l) => set({ adminFilterLGA: l }),
@@ -122,7 +130,7 @@ export const useAppStore = create((set, get) => ({
     user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, commoditySection:null,
     adminState:null, adminLGA:null, currentFacility:null,
     adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
-    allFacilities:[], allCommodities:[], stockData:[], dsdFacilities:[],
+    allFacilities:[], allCommodities:[], stockData:[], dsdFacilities:[], amcWindows:{},
     currentPage:'dashboard', currentReportCategory:'all', pendingReportsTab:false
   }),
 }))

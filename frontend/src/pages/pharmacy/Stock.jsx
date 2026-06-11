@@ -6,8 +6,9 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { calcAMC, amcWindowStart, amcWindowEnd, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, calcAMCFromTotal, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
+import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
 export function Stock() {
   const store         = useAppStore()
@@ -49,23 +50,23 @@ export function Stock() {
 
     await loadStock()
 
-    const amcStart = amcWindowStart()
-    const amcEnd = amcWindowEnd()
+    // AMC over this facility's configured window (or the default), divided by
+    // the number of months in that window.
+    const amcWin = resolveAmcWindow(store.amcWindows[fid])
     const commIds = store.stockData.map(r => r.commodity_id)
 
     let amcMap = {}
     if (commIds.length && fid) {
       const { data } = await sec(sb.from('dispense_log')
         .select('commodity_id,quantity,dispensed_at')
-        .gte('dispensed_at', amcStart.toISOString())
-        .lt('dispensed_at', amcEnd.toISOString())
+        .gte('dispensed_at', amcWin.start.toISOString())
+        .lt('dispensed_at', amcWin.end.toISOString())
         .in('commodity_id', commIds)
         .eq('facility_id', fid))
 
-      // AMC = total dispensed in the 2-month window ÷ 2.
       const sums = {}
       ;(data || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
-      Object.entries(sums).forEach(([id, total]) => { amcMap[id] = calcAMC(total) })
+      Object.entries(sums).forEach(([id, total]) => { amcMap[id] = calcAMCFromTotal(total, amcWin.months) })
     }
 
     // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility
@@ -204,6 +205,14 @@ export function Stock() {
       </div>
 
       <FacilityPicker />
+
+      {store.canManageStock() && (
+        fid
+          ? <AmcWindowEditor facilityId={fid}
+              facilityName={store.allFacilities.find(f => f.id === fid)?.name || store.currentFacility?.name}
+              onSaved={loadData} />
+          : <Card className="mb-4"><div className="px-4 py-3 text-xs text-gray-500">Select a single facility to configure its AMC window.</div></Card>
+      )}
 
       <Card className="mb-4">
         <div className="px-4 py-3 flex gap-2 flex-wrap items-center">
