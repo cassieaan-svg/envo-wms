@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { resolveAmcWindow, calcAMCFromTotal, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
@@ -64,9 +64,7 @@ export function Stock() {
         .in('commodity_id', commIds)
         .eq('facility_id', fid))
 
-      const sums = {}
-      ;(data || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
-      Object.entries(sums).forEach(([id, total]) => { amcMap[id] = calcAMCFromTotal(total, amcWin.months) })
+      amcMap = amcMapFromRows(data, amcWin)
     }
 
     // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility

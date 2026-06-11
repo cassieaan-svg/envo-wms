@@ -7,7 +7,7 @@ import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { resolveAmcWindow, calcAMCFromTotal, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
 
 export function Dashboard() {
   const store            = useAppStore()
@@ -53,10 +53,7 @@ export function Dashboard() {
       .lt('dispensed_at', amcWin.end.toISOString())
       .eq('facility_id', amcFid))
 
-    const sums = {}
-    ;(dispData || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
-    const amc = {}
-    Object.entries(sums).forEach(([id, total]) => { amc[id] = calcAMCFromTotal(total, amcWin.months) })
+    const amc = amcMapFromRows(dispData, amcWin)
     setAmcMap(amc)
     setLoading(false)
   }

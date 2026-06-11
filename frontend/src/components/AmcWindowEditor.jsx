@@ -3,47 +3,58 @@ import { sb } from '../lib/supabase'
 import { useAppStore } from '../store/appStore'
 import { Card } from './ui/Card'
 import { toast } from './ui/Toast'
-import { resolveAmcWindow, monthsInRange } from '../utils/helpers'
 
-const toMonthInput = d => (d ? String(d).slice(0, 7) : '')   // 'YYYY-MM-DD' → 'YYYY-MM'
-const currentMonth = () => {
-  const n = new Date()
-  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`
+const labelFor = ym => {
+  const [y, m] = ym.split('-').map(Number)
+  return new Date(y, (m || 1) - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
 }
 
-// Per-facility AMC window editor. Lets a manager/admin pick the From→To month
-// range used to average AMC for one facility. Saving upserts the setting and
-// updates the store; `onSaved` lets the host page recompute AMC in place.
+// The last `count` completed months (excludes the current, in-progress month so
+// a partial month can't skew the average), most-recent first.
+function recentMonths(count = 24) {
+  const out = []
+  const now = new Date()
+  for (let i = 1; i <= count; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+  }
+  return out
+}
+
+// Per-facility AMC month picker. A manager/admin selects the specific months
+// (any combination, not a contiguous range) to average AMC over for one
+// facility. Saving upserts the selection; `onSaved` lets the host page recompute
+// AMC in place.
 export function AmcWindowEditor({ facilityId, facilityName, onSaved }) {
   const store = useAppStore()
   const win = store.amcWindows[facilityId] || null
-  const [from, setFrom] = useState(toMonthInput(win?.amc_from))
-  const [to, setTo]     = useState(toMonthInput(win?.amc_to))
+  const [selected, setSelected] = useState(() => new Set(win?.months || []))
   const [saving, setSaving] = useState(false)
 
-  const maxMonth = currentMonth()
-  const valid = from && to && from <= to && to <= maxMonth
-  const months = valid ? monthsInRange(`${from}-01`, `${to}-01`) : 0
-  const resolved = resolveAmcWindow(win)
+  // Offer the last 24 completed months, plus any already-saved month older than
+  // that so a prior selection stays visible.
+  const base = recentMonths(24)
+  const options = [...new Set([...selected, ...base])].sort((a, b) => (a < b ? 1 : -1)) // desc
+
+  const count = selected.size
+  const toggle = ym => setSelected(prev => {
+    const n = new Set(prev)
+    n.has(ym) ? n.delete(ym) : n.add(ym)
+    return n
+  })
 
   async function save() {
-    if (!valid) {
-      toast('Pick a valid range: From ≤ To, and not in the future', 'red')
-      return
-    }
+    if (count < 1) { toast('Pick at least one month', 'red'); return }
     setSaving(true)
-    const payload = {
-      facility_id: facilityId,
-      amc_from: `${from}-01`,
-      amc_to: `${to}-01`,
-      updated_at: new Date().toISOString(),
-      updated_by: store.user?.email || null,
-    }
-    const { error } = await sb.from('facility_amc_settings').upsert(payload, { onConflict: 'facility_id' })
+    const months = [...selected].sort()
+    const { error } = await sb.from('facility_amc_settings').upsert(
+      { facility_id: facilityId, months, updated_at: new Date().toISOString(), updated_by: store.user?.email || null },
+      { onConflict: 'facility_id' },
+    )
     setSaving(false)
-    if (error) { toast(`Could not save AMC window: ${error.message}`, 'red'); return }
-    store.setAmcWindow(facilityId, { amc_from: payload.amc_from, amc_to: payload.amc_to })
-    toast('AMC window saved', 'green')
+    if (error) { toast(`Could not save AMC months: ${error.message}`, 'red'); return }
+    store.setAmcWindow(facilityId, { months })
+    toast('AMC months saved', 'green')
     onSaved?.()
   }
 
@@ -53,40 +64,54 @@ export function AmcWindowEditor({ facilityId, facilityName, onSaved }) {
     setSaving(false)
     if (error) { toast(`Could not reset: ${error.message}`, 'red'); return }
     store.setAmcWindow(facilityId, null)
-    setFrom(''); setTo('')
+    setSelected(new Set())
     toast('Reverted to the default AMC window', 'green')
     onSaved?.()
   }
 
-  const inputCls = 'block mt-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-blue-500'
-
   return (
     <Card className="mb-4">
       <div className="px-4 py-3">
-        <div className="mb-2">
+        <div className="flex items-baseline justify-between gap-2 flex-wrap mb-2">
           <div className="text-sm font-medium text-gray-200">
-            AMC window{facilityName ? ` — ${facilityName}` : ''}
+            AMC months{facilityName ? ` — ${facilityName}` : ''}
           </div>
-          <div className="text-xs text-gray-500 mt-0.5">
-            {resolved.custom
-              ? `Averaging ${resolved.months} month${resolved.months > 1 ? 's' : ''} of consumption (custom range)`
+          <div className="text-xs text-gray-500">
+            {win?.months?.length
+              ? `Averaging ${win.months.length} selected month${win.months.length > 1 ? 's' : ''}`
               : 'Using the default quarterly window'}
           </div>
         </div>
-        <div className="flex items-end gap-3 flex-wrap">
-          <label className="text-xs text-gray-500">From
-            <input type="month" max={maxMonth} value={from} onChange={e => setFrom(e.target.value)} className={inputCls} />
-          </label>
-          <label className="text-xs text-gray-500">To
-            <input type="month" max={maxMonth} value={to} onChange={e => setTo(e.target.value)} className={inputCls} />
-          </label>
-          {valid && (
-            <span className="text-xs text-gray-400 pb-1.5">÷ {months} month{months > 1 ? 's' : ''}</span>
-          )}
-          <button onClick={save} disabled={saving || !valid}
+        <p className="text-[11px] text-gray-600 mb-2">
+          Pick the months to average — any combination, not just a range. AMC = total dispensed across them ÷ {count || 'N'} month{count === 1 ? '' : 's'}.
+        </p>
+
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {options.map(ym => {
+            const on = selected.has(ym)
+            return (
+              <button key={ym} type="button" onClick={() => toggle(ym)}
+                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${on
+                  ? 'bg-green-500/15 border-green-500/40 text-green-300'
+                  : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/8'}`}>
+                {labelFor(ym)}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-xs text-gray-400">{count} selected{count > 0 ? ` · ÷ ${count}` : ''}</span>
+          <button onClick={save} disabled={saving || count < 1}
             className="bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white rounded-lg px-4 py-1.5 text-xs font-medium transition-colors">
             Save
           </button>
+          {selected.size > 0 && (
+            <button onClick={() => setSelected(new Set())} disabled={saving}
+              className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">
+              Clear
+            </button>
+          )}
           {win && (
             <button onClick={resetToDefault} disabled={saving}
               className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">

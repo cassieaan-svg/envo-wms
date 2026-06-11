@@ -28,12 +28,12 @@ export async function hydrateSession(user) {
   const [{ data: facs }, { data: comms }, { data: amcRows }] = await Promise.all([
     facQuery,
     sb.from('commodities').select('id,name,category,unit,pack_size,dispensing_unit').order('category').order('name'),
-    sb.from('facility_amc_settings').select('facility_id,amc_from,amc_to'),
+    sb.from('facility_amc_settings').select('facility_id,months'),
   ])
 
-  // Per-facility custom AMC windows, keyed by facility id for quick lookup.
+  // Per-facility custom AMC month selections, keyed by facility id.
   const amcWindows = {}
-  ;(amcRows || []).forEach(r => { amcWindows[r.facility_id] = { amc_from: r.amc_from, amc_to: r.amc_to } })
+  ;(amcRows || []).forEach(r => { amcWindows[r.facility_id] = { months: r.months || [] } })
 
   let allCommodities = comms || []
   if (commoditySection && SECTION_CATEGORIES[commoditySection]) {

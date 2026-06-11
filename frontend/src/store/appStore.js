@@ -22,7 +22,7 @@ export const useAppStore = create((set, get) => ({
   allCommodities: [],
   stockData:      [],
   dsdFacilities:  [],
-  amcWindows:     {},   // facility_id → { amc_from, amc_to } | absent = default window
+  amcWindows:     {},   // facility_id → { months: ['YYYY-MM', ...] } | absent = default window
 
   // UI
   sidebarOpen:    false,

@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES, resolveAmcWindow, calcAMCFromTotal } from '../../utils/helpers'
+import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES, resolveAmcWindow, amcMapFromRows } from '../../utils/helpers'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
 export function Stock() {
@@ -72,9 +72,7 @@ export function Stock() {
         .in('commodity_id', commIds)
         .eq('facility_id', fid))
 
-      const sums = {}
-      ;(data || []).forEach(d => { sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0) })
-      Object.entries(sums).forEach(([id, total]) => { amcMap[id] = calcAMCFromTotal(total, amcWin.months) })
+      amcMap = amcMapFromRows(data, amcWin)
     }
 
     // Fetch SDP stock data and aggregate by commodity

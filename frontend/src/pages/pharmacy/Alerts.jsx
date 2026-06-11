@@ -7,7 +7,7 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, resolveAmcWindow, calcAMCFromTotal, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, isLabCategory } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -197,10 +197,7 @@ export function Alerts() {
         .in('commodity_id',commIds).eq('facility_id',fid)
       q = sec(q)
       const { data } = await q
-      // AMC = total dispensed over the facility's window ÷ number of months.
-      const sums = {}
-      ;(data||[]).forEach(d=>{ sums[d.commodity_id]=(sums[d.commodity_id]||0)+(d.quantity||0) })
-      Object.entries(sums).forEach(([cid,total])=>{ amcMap[cid]=calcAMCFromTotal(total, amcWin.months) })
+      amcMap = amcMapFromRows(data, amcWin)
     }
 
     // Aggregate DSD (pharmacy) and SDP (lab) stock so the total matches the Dashboard.

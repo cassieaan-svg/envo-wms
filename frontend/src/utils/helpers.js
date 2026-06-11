@@ -94,11 +94,12 @@ export function calcAMC(dispenseRowsOrTotal) {
   return total / AMC_DIVISOR
 }
 
-// ── Custom per-facility AMC window ─────────────────
-// A facility may override the default quarterly window with an explicit
-// From→To month range. The AMC formula is unchanged — total dispensed over the
-// window ÷ number of months — only the window (and therefore the divisor) is
-// chosen by the user. The divisor equals the inclusive month count of the range.
+// ── Custom per-facility AMC months ─────────────────
+// A facility may override the default quarterly window by picking specific
+// months (an arbitrary set, not necessarily contiguous — e.g. Jan, Mar, Jun).
+// The AMC formula is unchanged — total dispensed across the chosen months ÷
+// number of months — only the months (and therefore the divisor) are chosen by
+// the user. Months are stored as 'YYYY-MM' strings.
 
 // First day of the month for a 'YYYY-MM' / 'YYYY-MM-DD' string or a Date, in
 // LOCAL time (avoids the UTC-parse off-by-one that shifts to the prior month).
@@ -111,23 +112,38 @@ function monthFloor(d) {
   return new Date(x.getFullYear(), x.getMonth(), 1)
 }
 
-// Inclusive number of months between two dates (e.g. Jan→Mar = 3).
-export function monthsInRange(from, to) {
-  const a = monthFloor(from), b = monthFloor(to)
-  return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1
+// Resolve a facility's AMC window from its saved setting ({ months: [...] }) or
+// fall back to the default quarterly window. Returns:
+//   start, end  — query bounds [start, end) spanning the earliest→latest month
+//   monthSet    — Set of allowed 'YYYY-MM' to filter rows by (null = accept all)
+//   months      — the divisor to average by
+// For non-contiguous selections the caller queries [start, end) then keeps only
+// rows whose month is in `monthSet`.
+export function resolveAmcWindow(win, from = new Date()) {
+  const picked = win && Array.isArray(win.months)
+    ? [...new Set(win.months.filter(Boolean))].sort()
+    : []
+  if (picked.length) {
+    const start = monthFloor(`${picked[0]}-01`)
+    const last = monthFloor(`${picked[picked.length - 1]}-01`)
+    const end = new Date(last.getFullYear(), last.getMonth() + 1, 1) // exclusive
+    return { start, end, monthSet: new Set(picked), months: picked.length, custom: true }
+  }
+  return { start: amcWindowStart(from), end: amcWindowEnd(from), monthSet: null, months: AMC_DIVISOR, custom: false }
 }
 
-// Resolve a facility's AMC window from its saved setting ({ amc_from, amc_to })
-// or fall back to the default quarterly window. Returns the query bounds
-// [start, end) and the divisor (`months`) to average by.
-export function resolveAmcWindow(win, from = new Date()) {
-  if (win && win.amc_from && win.amc_to) {
-    const start = monthFloor(win.amc_from)
-    const toMonth = monthFloor(win.amc_to)
-    const end = new Date(toMonth.getFullYear(), toMonth.getMonth() + 1, 1) // exclusive
-    return { start, end, months: monthsInRange(start, toMonth), custom: true }
-  }
-  return { start: amcWindowStart(from), end: amcWindowEnd(from), months: AMC_DIVISOR, custom: false }
+// Sum dispensed quantity per commodity over an already-fetched set of rows,
+// honouring the window's month filter, then divide each total by the window's
+// month count. Returns a { [commodity_id]: amc } map.
+export function amcMapFromRows(rows, amcWin) {
+  const sums = {}
+  ;(rows || []).forEach(d => {
+    if (amcWin.monthSet && !amcWin.monthSet.has((d.dispensed_at || '').slice(0, 7))) return
+    sums[d.commodity_id] = (sums[d.commodity_id] || 0) + (d.quantity || 0)
+  })
+  const out = {}
+  Object.entries(sums).forEach(([id, total]) => { out[id] = calcAMCFromTotal(total, amcWin.months) })
+  return out
 }
 
 // AMC from a precomputed total and the window's month count (the divisor).

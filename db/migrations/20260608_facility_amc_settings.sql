@@ -1,35 +1,37 @@
--- Per-facility custom AMC window.
+-- Per-facility custom AMC months.
 --
--- Lets a facility choose the explicit From→To month range used to compute AMC
--- (Average Monthly Consumption). The AMC formula is unchanged — total dispensed
--- over the window ÷ number of months — only the window is configurable, stored
--- per facility here. When a facility has no row, the app falls back to the
--- default quarterly window.
+-- Lets a facility pick the specific months used to compute AMC (Average Monthly
+-- Consumption) — an arbitrary set, not necessarily a contiguous range (e.g.
+-- Jan, Mar, Jun). The formula is unchanged: total dispensed across the chosen
+-- months ÷ number of chosen months. When a facility has no row, the app falls
+-- back to the default quarterly window.
 --
--- Kept in its own table (rather than columns on `facilities`) so configuring the
--- window doesn't require granting UPDATE on facility names/locations.
+-- Months are stored as 'YYYY-MM' strings. Kept in its own table (rather than
+-- columns on `facilities`) so configuring this doesn't require granting UPDATE
+-- on facility names/locations.
 --
--- Run once in the Supabase SQL editor (Database → SQL editor).
+-- Run once in the Supabase SQL editor (Database → SQL editor). If an earlier
+-- (range-based) version of this table was already created, drop it first:
+--   DROP TABLE IF EXISTS public.facility_amc_settings;
 
 CREATE TABLE IF NOT EXISTS public.facility_amc_settings (
   facility_id uuid PRIMARY KEY REFERENCES public.facilities(id) ON DELETE CASCADE,
-  amc_from    date NOT NULL,                      -- first day of the start month
-  amc_to      date NOT NULL,                      -- first day of the end month (inclusive)
+  months      text[] NOT NULL,                    -- e.g. {'2026-01','2026-03','2026-06'}
   updated_at  timestamptz NOT NULL DEFAULT now(),
   updated_by  text,
-  CONSTRAINT amc_from_le_to CHECK (amc_from <= amc_to)
+  CONSTRAINT months_not_empty CHECK (array_length(months, 1) >= 1)
 );
 
 ALTER TABLE public.facility_amc_settings ENABLE ROW LEVEL SECURITY;
 
 -- Anyone signed in can read (admins aggregate across facilities; facility users
--- read their own window).
+-- read their own selection).
 DROP POLICY IF EXISTS "Read AMC settings" ON public.facility_amc_settings;
 CREATE POLICY "Read AMC settings" ON public.facility_amc_settings
   FOR SELECT TO authenticated
   USING (true);
 
--- A facility's own managers, or any admin, may create/update its window.
+-- A facility's own managers, or any admin, may create/update its selection.
 -- Mirrors the access_level pattern used by the stock / log-table policies.
 DROP POLICY IF EXISTS "Write AMC settings" ON public.facility_amc_settings;
 CREATE POLICY "Write AMC settings" ON public.facility_amc_settings
