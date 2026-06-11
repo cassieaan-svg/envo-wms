@@ -294,18 +294,16 @@ export function AllFacilities() {
         <Card>
           <CardHeader>
             <CardTitle>Facility breakdown</CardTitle>
-            {shownFacs.length > 0 && (
-              <div className="flex gap-2">
-                <button onClick={downloadFacilityCsv}
-                  className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5">
-                  ↓ CSV
-                </button>
-                <button onClick={downloadFacilityPdf}
-                  className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5">
-                  ↓ PDF
-                </button>
-              </div>
-            )}
+            <div className="flex gap-2">
+              <button onClick={downloadFacilityCsv} disabled={shownFacs.length === 0}
+                className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 disabled:opacity-40 disabled:hover:text-gray-400">
+                ↓ CSV
+              </button>
+              <button onClick={downloadFacilityPdf} disabled={shownFacs.length === 0}
+                className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 disabled:opacity-40 disabled:hover:text-gray-400">
+                ↓ PDF
+              </button>
+            </div>
           </CardHeader>
           {shownFacs.length === 0 ? <EmptyState message={siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
