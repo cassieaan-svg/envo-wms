@@ -291,7 +291,7 @@ export function AllFacilities() {
             onClick={() => setSiteFilter(siteFilter === 'over' ? '' : 'over')} active={siteFilter === 'over'} />
         </div>
 
-        <Card>
+        <Card className="stick-cols">
           <CardHeader>
             <CardTitle>Facility breakdown</CardTitle>
             <div className="flex gap-2">
@@ -312,7 +312,7 @@ export function AllFacilities() {
                   ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','MOS','Status']
                   : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','MOS','Status']
                 ).map(h=>(
-                  <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                  <th key={h} className="sticky top-0 z-10 bg-gray-900 text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                 ))}
               </tr></thead>
               <tbody>{shownFacs.map((f,i) => {
@@ -355,7 +355,7 @@ export function AllFacilities() {
         <p className="text-sm text-gray-500 mt-1">Tap a commodity to see stock by facility</p>
       </div>
 
-      <Card>
+      <Card className="stick-cols">
         <CardHeader>
           <CardTitle>Stock by commodity — all facilities</CardTitle>
           <div className="flex gap-2 flex-wrap">

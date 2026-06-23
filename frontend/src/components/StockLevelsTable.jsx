@@ -63,7 +63,7 @@ function renderCell(r, key, onDrill) {
     case 'sdp':        return <SohCell key={key} r={r} kind="sdp" qty={r.sdpQty||0} onDrill={onDrill} />
     case 'dsd':        return <SohCell key={key} r={r} kind="dsd" qty={r.dsdQty||0} onDrill={onDrill} />
     case 'total':      return <td key={key} className="px-4 py-3 font-mono text-sm text-gray-200">{fmtStockQty(r.quantity, r.commodities)}</td>
-    case 'amc':        return <td key={key} className="px-4 py-3 font-mono text-xs text-gray-500">{r.amc > 0 ? r.amc : '—'}</td>
+    case 'amc':        return <td key={key} className="px-4 py-3 font-mono text-xs text-gray-500">{r.amc > 0 ? Math.round(r.amc).toLocaleString() : '—'}</td>
     case 'mos':        return <td key={key} className={`px-4 py-3 font-mono text-sm font-medium ${mosColor[r.status]}`}>{r.mos !== null && r.mos !== undefined ? `${r.mos}mo` : '—'}</td>
     case 'status':     return <td key={key} className="px-4 py-3"><Badge type={statusBadge[r.status]}>{statusLabel[r.status]}</Badge></td>
     default:           return <td key={key} />
@@ -79,7 +79,7 @@ export function StockLevelsTable({ items, onDrill }) {
       <thead>
         <tr className="border-b border-white/8 bg-white/2">
           {cols.map(c => (
-            <th key={c.key} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{c.label}</th>
+            <th key={c.key} className="sticky top-0 z-10 bg-gray-900 text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{c.label}</th>
           ))}
         </tr>
       </thead>

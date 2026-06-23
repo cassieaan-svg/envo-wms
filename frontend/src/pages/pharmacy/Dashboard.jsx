@@ -7,7 +7,7 @@ import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 export function Dashboard() {
@@ -56,16 +56,12 @@ export function Dashboard() {
     setDsdMap(dsdAgg)
     setSdpMap(sdpAgg)
 
-    // AMC over this facility's configured window (or the default), ÷ months.
-    const amcFid = fid || store.currentFacility?.id
-    const amcWin = resolveAmcWindow(store.amcWindows[amcFid])
-    const { data: dispData } = await sec(sb.from('dispense_log')
-      .select('commodity_id,quantity,dispensed_at')
-      .gte('dispensed_at', amcWin.start.toISOString())
-      .lt('dispensed_at', amcWin.end.toISOString())
-      .eq('facility_id', amcFid))
-
-    const amc = amcMapFromRows(dispData, amcWin)
+    // Single facility → its custom window; multi-facility/admin scope → the
+    // default window with consumption aggregated across the whole scope so the
+    // AMC (and the status counts in the cards above) matches the summed stock.
+    const amcWin = resolveAmcWindow(fid ? store.amcWindows[fid] : null)
+    const commIds = store.allCommodities.map(c => c.id)
+    const amc = await loadConsumptionAmcMap(sb, { commIds, fid, scopeIds, amcWin, applySection: sec })
     setAmcMap(amc)
     setLoading(false)
   }

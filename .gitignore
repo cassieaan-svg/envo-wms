@@ -39,3 +39,10 @@ backend/backups/
 
 # OS
 Thumbs.db
+
+# Local data dumps, user-provisioning scripts and credential exports (contain
+# real facility data / plaintext passwords — never commit)
+amc_staging_load.csv
+create_new_facility_users.js
+new_facility_logins_confirmed.csv
+*_logins*.csv

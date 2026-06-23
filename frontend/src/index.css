@@ -4,6 +4,16 @@
 * { box-sizing: border-box; }
 body { font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Sticky table column headers: the header row stays pinned while the rows scroll
+   past. position:sticky is trapped by any clipping ancestor, so on a `.stick-cols`
+   card we drop the card's overflow-hidden and the wrapper's overflow-x:auto. Gated
+   at >=640px — above it the tables fit (cells wrap) so dropping the overflow is
+   safe; on small phones we keep the clip + horizontal scroll instead. */
+@media (min-width: 640px) {
+  .stick-cols { overflow: visible; }
+  .stick-cols .table-wrap { overflow: visible; }
+}
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
 

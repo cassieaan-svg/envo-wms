@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
@@ -50,22 +50,12 @@ export function Stock() {
 
     await loadStock()
 
-    // AMC over this facility's configured window (or the default), divided by
-    // the number of months in that window.
-    const amcWin = resolveAmcWindow(store.amcWindows[fid])
+    // Single facility → use its custom window; multi-facility/admin scope → the
+    // default quarterly window with consumption aggregated across every facility
+    // in scope, so the AMC matches the summed stock below.
+    const amcWin = resolveAmcWindow(fid ? store.amcWindows[fid] : null)
     const commIds = store.stockData.map(r => r.commodity_id)
-
-    let amcMap = {}
-    if (commIds.length && fid) {
-      const { data } = await sec(sb.from('dispense_log')
-        .select('commodity_id,quantity,dispensed_at')
-        .gte('dispensed_at', amcWin.start.toISOString())
-        .lt('dispensed_at', amcWin.end.toISOString())
-        .in('commodity_id', commIds)
-        .eq('facility_id', fid))
-
-      amcMap = amcMapFromRows(data, amcWin)
-    }
+    const amcMap = await loadConsumptionAmcMap(sb, { commIds, fid, scopeIds, amcWin, applySection: sec })
 
     // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility
     // scoped, use it; for an admin viewing all facilities, aggregate across the
@@ -168,13 +158,13 @@ export function Stock() {
           </div>
         </Card>
         {loading ? <LoadingState /> : dsdFiltered.length === 0 ? <EmptyState message="No stock records found." /> : (
-          <Card>
+          <Card className="stick-cols">
             <div className="table-wrap">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-white/8 bg-white/2">
                     {['Commodity','Unit','Stock on Hand'].map(h => (
-                      <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                      <th key={h} className="sticky top-0 z-10 bg-gray-900 text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -233,7 +223,7 @@ export function Stock() {
       {loading ? <LoadingState /> : filtered.length === 0 ? <EmptyState message="No stock records match filters." /> :
         sortBy === 'category' ? (
           orderedCats.map(cat => (
-            <Card key={cat}>
+            <Card key={cat} className="stick-cols">
               <CardHeader>
                 <CardTitle>{cat}</CardTitle>
                 <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
@@ -244,7 +234,7 @@ export function Stock() {
             </Card>
           ))
         ) : (
-          <Card>
+          <Card className="stick-cols">
             <div className="table-wrap">
               <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} />
             </div>

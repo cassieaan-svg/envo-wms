@@ -171,14 +171,51 @@ export function groupStockByComm(stockRows) {
   const map = {}
   stockRows.forEach(r => {
     if (!map[r.commodity_id]) {
-      map[r.commodity_id] = { ...r, storeQty: 0, dispensaryQty: 0, dsdQty: 0 }
+      map[r.commodity_id] = { ...r, storeQty: 0, dispensaryQty: 0, dsdQty: 0, _amcByFac: {} }
     }
-    if (r.location_type === 'store')           map[r.commodity_id].storeQty += r.quantity
-    else if (r.location_type === 'dispensary') map[r.commodity_id].dispensaryQty += r.quantity
-    else if (r.location_type === 'dsd')        map[r.commodity_id].dsdQty += r.quantity
+    const g = map[r.commodity_id]
+    if (r.location_type === 'store')           g.storeQty += r.quantity
+    else if (r.location_type === 'dispensary') g.dispensaryQty += r.quantity
+    else if (r.location_type === 'dsd')        g.dsdQty += r.quantity
+    // baseline_amc is a per-facility figure, duplicated across a facility's
+    // store/dispensary rows. Record one value per facility (max guards against any
+    // duplicate disagreement), then sum across facilities below so multi-facility
+    // (admin) views get a true scope-wide baseline AMC, not just one facility's.
+    if (r.baseline_amc > 0) {
+      g._amcByFac[r.facility_id] = Math.max(g._amcByFac[r.facility_id] || 0, r.baseline_amc)
+    }
   })
-  return Object.values(map).map(r => ({
+  return Object.values(map).map(({ _amcByFac, ...r }) => ({
     ...r,
     quantity: r.storeQty + r.dispensaryQty + r.dsdQty,
+    baseline_amc: Object.values(_amcByFac).reduce((s, v) => s + v, 0),
   }))
+}
+
+// Build a { commodity_id: amc } map of LIVE consumption over `amcWin`, scoped to
+// a single facility (`fid`), a set of facilities (`scopeIds`), or — when both are
+// null — every facility (overall admin). Aggregates dispenses across the whole
+// scope and paginates past PostgREST's 1000-row cap, so an admin's aggregate AMC
+// matches the summed stock. `sb` is the Supabase client; `applySection` lets the
+// caller add its pharmacy/lab section filter to the query.
+export async function loadConsumptionAmcMap(sb, { commIds, fid, scopeIds, amcWin, applySection }) {
+  const ids = [...new Set((commIds || []).filter(Boolean))]
+  if (!ids.length) return {}
+  const rows = []
+  for (let offset = 0; ; offset += 1000) {
+    let q = sb.from('dispense_log')
+      .select('commodity_id,quantity,dispensed_at')
+      .gte('dispensed_at', amcWin.start.toISOString())
+      .lt('dispensed_at', amcWin.end.toISOString())
+      .in('commodity_id', ids)
+      .range(offset, offset + 999)
+    if (fid) q = q.eq('facility_id', fid)
+    else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
+    if (typeof applySection === 'function') q = applySection(q)
+    const { data, error } = await q
+    if (error || !data || !data.length) break
+    rows.push(...data)
+    if (data.length < 1000) break
+  }
+  return amcMapFromRows(rows, amcWin)
 }

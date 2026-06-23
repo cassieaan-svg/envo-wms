@@ -1,5 +1,15 @@
 export function MetricGrid({ children }) {
-  return <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">{children}</div>
+  // Pinned to the top while the content below scrolls. The window is the scroll
+  // container, so sticky tracks the viewport. Offset clears the fixed mobile
+  // top bar (h-13 ≈ 52px); on desktop there's no top bar so it sits at top-0.
+  // The -mx-6/px-6 lets the bar's background span the page gutter so scrolling
+  // content doesn't bleed through the gaps between cards. bg-gray-950 matches
+  // the dark page background and is remapped to white in light mode by index.css.
+  return (
+    <div className="sticky top-13 lg:top-0 z-20 -mx-6 px-6 pt-3 lg:pt-6 pb-3 mb-6 bg-gray-950">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">{children}</div>
+    </div>
+  )
 }
 
 export function Metric({ label, value, color = '', onClick, active = false }) {
