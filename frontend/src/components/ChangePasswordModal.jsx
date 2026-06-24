@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { sb } from '../lib/supabase'
+import { auth } from '../lib/api'
 import { useAppStore } from '../store/appStore'
 import { toast } from './ui/Toast'
 
@@ -35,17 +35,23 @@ export function ChangePasswordModal({ onClose }) {
     // Re-verify the current password against the session's email so a stolen
     // session can't silently change the password without knowing the old one.
     if (user?.email) {
-      const { error: verifyErr } = await sb.auth.signInWithPassword({ email: user.email, password: current })
-      if (verifyErr) {
+      try {
+        await auth.login(user.email, current)
+      } catch {
         setSaving(false)
         setErr('Current password is incorrect.')
         return
       }
     }
 
-    const { error } = await sb.auth.updateUser({ password: next })
+    try {
+      await auth.changePassword(next)
+    } catch (e) {
+      setSaving(false)
+      setErr(e.message || 'Could not update password.')
+      return
+    }
     setSaving(false)
-    if (error) { setErr(error.message || 'Could not update password.'); return }
 
     toast('Password changed', 'green')
     onClose()

@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { sb } from '../lib/supabase'
 import { useAppStore } from '../store/appStore'
 import { ChangePasswordModal } from './ChangePasswordModal'
 import { PharmacyNav } from '../pages/pharmacy/Nav'
@@ -111,8 +110,10 @@ export function Sidebar() {
           </button>
           <button
             onClick={async () => {
-              const { sb } = await import('../lib/supabase')
-              await sb.auth.signOut()
+              const { auth } = await import('../lib/api')
+              const { closeRealtime } = await import('../lib/realtime')
+              closeRealtime()
+              auth.signOut()
               store.reset()
             }}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/25 text-red-400 text-xs hover:bg-red-500/20 transition-colors"

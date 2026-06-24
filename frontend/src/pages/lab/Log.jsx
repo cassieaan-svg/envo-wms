@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
+import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -14,7 +15,6 @@ export function Log() {
   const store     = useAppStore()
   const canManage = store.canManageStock()
   const commoditySection = store.commoditySection
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [typeFilter, setTypeFilter] = useState('')
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
@@ -35,30 +35,21 @@ export function Log() {
 
   async function loadAll() {
     setLoading(true)
-    const selComm = 'commodities(name,unit,dispensing_unit,pack_size),facilities(name)'
     // Admins span every facility (or the one they've filtered to) and both
     // sections, so don't scope by a single facility or the full commodity list.
     const scopeFid = isAdmin ? (store.adminFilterFacility?.id || null) : fid
-    const loadTable = (table, dateField) => {
-      let q = sec(sb.from(table).select('*,'+selComm))
-      if (scopeFid) q = q.eq('facility_id', scopeFid)
-      if (!isAdmin) q = q.in('commodity_id', commIds)
-      return q.order(dateField, { ascending: false }).limit(50).then(r => r.data || [])
-    }
-    // Transfers live in stock_transfer_log as a sending/receiving pair (no
-    // single facility_id) with denormalized facility names, so they need their
-    // own query scoped to either side of the move.
-    const loadTransfers = () => {
-      let q = sec(sb.from('stock_transfer_log').select('*,commodities(name,unit,dispensing_unit,pack_size)'))
-      if (scopeFid) q = q.or(`sending_facility_id.eq.${scopeFid},receiving_facility_id.eq.${scopeFid}`)
-      if (!isAdmin) q = q.in('commodity_id', commIds)
-      return q.order('initiated_at', { ascending: false }).limit(50).then(r => r.data || [])
+    const logParams = {
+      facility_id: scopeFid || undefined,
+      commodity_ids: !isAdmin ? commIds : undefined,
+      section: commoditySection || undefined,
+      limit: 50,
     }
     const [disp, intake, adj, transfers] = await Promise.all([
-      (!typeFilter||typeFilter==='dispense')    ? loadTable('dispense_log','dispensed_at') : [],
-      (!typeFilter||typeFilter==='intake')      ? loadTable('intake_log','received_at') : [],
-      (!typeFilter||typeFilter==='adjustment')  ? loadTable('stock_adjustment_log','adjusted_at') : [],
-      (!typeFilter||typeFilter==='transfer')    ? loadTransfers() : [],
+      (!typeFilter||typeFilter==='dispense')    ? api.dispense.history(logParams).catch(()=>[]) : [],
+      (!typeFilter||typeFilter==='intake')      ? api.intake.history(logParams).catch(()=>[]) : [],
+      (!typeFilter||typeFilter==='adjustment')  ? api.adjustments.history(logParams).catch(()=>[]) : [],
+      // section already scopes transfers; facility_id covers both sending/receiving sides.
+      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, limit: 50 }).catch(()=>[]) : [],
     ])
     const merged = [
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
@@ -81,13 +72,7 @@ export function Log() {
   // adjustment row changes anywhere in the viewer's scope (RLS-filtered).
   useEffect(() => {
     const reload = () => loadAllRef.current()
-    const channel = sb.channel('activity-log-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dispense_log' }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'intake_log' }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_adjustment_log' }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_transfer_log' }, reload)
-      .subscribe()
-    return () => sb.removeChannel(channel)
+    return subscribeRealtime(['dispense_log', 'intake_log', 'stock_adjustment_log', 'stock_transfer_log'], reload)
   }, [])
 
   const typeBadge = { dispense:'out', intake:'ok', adjustment:'info', transfer:'low' }

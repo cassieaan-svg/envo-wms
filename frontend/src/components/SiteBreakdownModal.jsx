@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sb } from '../lib/supabase'
+import { api } from '../lib/api'
 import { fmtStockQty } from '../utils/helpers'
 import { LoadingState, EmptyState } from './ui/Loading'
 
@@ -23,17 +23,20 @@ export function SiteBreakdownModal({ commodity, kind, fid, scopeIds = null, onCl
     let active = true
     async function load() {
       setLoading(true)
+      const listFn = kind === 'sdp' ? api.stock.sdp.list : api.stock.dsd.list
       const PAGE = 1000
       let raw = []
       for (let offset = 0; ; offset += PAGE) {
-        let q = sb.from(table)
-          .select(`${siteCol},quantity,facilities(name)`)
-          .eq('commodity_id', commodity.commodity_id)
-          .range(offset, offset + PAGE - 1)
-        if (fid) q = q.eq('facility_id', fid)
-        else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
-        const { data, error } = await q
-        if (error || !data || !data.length) break
+        let data
+        try {
+          data = await listFn({
+            commodity_id: commodity.commodity_id,
+            facility_id: fid || undefined,
+            facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+            limit: PAGE, offset,
+          })
+        } catch { break }
+        if (!data || !data.length) break
         raw = raw.concat(data)
         if (data.length < PAGE) break
       }

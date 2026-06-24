@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
+import { subscribeRealtime } from '../../lib/realtime'
 import { NavSection, NavItem } from '../../components/NavItem'
 import { useAppStore } from '../../store/appStore'
 
@@ -26,25 +27,17 @@ export function AdminNav() {
 
   useEffect(() => {
     loadPendingCount()
-    const channel = sb.channel('admin-transfers-badge')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_transfer_log' }, loadPendingCount)
-      .subscribe()
-    return () => sb.removeChannel(channel)
+    return subscribeRealtime(['stock_transfer_log'], loadPendingCount)
   }, [])
 
   async function loadPendingCount() {
-    const { accessLevel, allFacilities } = useAppStore.getState()
-    let q = sb.from('stock_transfer_log')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'pending')
-      .is('sending_facility_id', null)
-    // Scope to the admin's jurisdiction (overall admin sees everything)
-    if (accessLevel !== 'overall_admin') {
-      const ids = allFacilities.map(f => f.id)
-      q = q.in('receiving_facility_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
-    }
-    const { count } = await q
-    setPendingRequestCount(count || 0)
+    // Pending requests still awaiting a source assignment (sending_facility_id
+    // null). The server scopes the list to the admin's jurisdiction; overall admin
+    // sees all. sending-null filtering is done client-side (no server predicate).
+    try {
+      const rows = await api.transfers.list({ status: 'pending' })
+      setPendingRequestCount((rows || []).filter(t => !t.sending_facility_id).length)
+    } catch { setPendingRequestCount(0) }
   }
 
   return (

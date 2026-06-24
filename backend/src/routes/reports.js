@@ -1,12 +1,15 @@
 import express from 'express'
 import { validateQuery, validators, sendValidationError } from '../middleware/validation.js'
+import { enforceFacilityRead } from '../middleware/scope.js'
 import { ReportService } from '../services/reportService.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
 
-// TODO: Apply auth middleware in production
-// router.use(authMiddleware)
+// Auth + scope applied globally to /api (server.js). Reports aggregate the
+// per-facility log/stock tables, so each report is gated by facility read access
+// (own facility, or a read-admin narrowed to their state/lga) using the log read
+// policy as the representative rule.
 
 /**
  * GET /api/reports/daily - Get daily activity report
@@ -25,6 +28,9 @@ router.get('/daily', validateQuery(['facility_id', 'date']), async (req, res) =>
     if (!validators.isValidISODate(date)) {
       return sendValidationError(res, 'date must be in YYYY-MM-DD format', 'date')
     }
+
+    // Enforce facility scoping
+    if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
 
     // Validate category
     const validCategories = ['all', 'intake', 'dispense', 'adjustment', 'transfer']
@@ -75,6 +81,9 @@ router.get('/weekly', validateQuery(['facility_id', 'from', 'to']), async (req, 
     if (!validators.isUUID(facility_id)) {
       return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     }
+
+    // Enforce facility scoping
+    if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
 
     // Validate from date
     if (!validators.isValidISODate(from)) {
@@ -150,6 +159,9 @@ router.get('/monthly', validateQuery(['facility_id', 'month']), async (req, res)
       return sendValidationError(res, 'month must be in YYYY-MM format', 'month')
     }
 
+    // Enforce facility scoping
+    if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
+
     // Validate category
     const validCategories = ['all', 'intake', 'dispense', 'adjustment', 'transfer']
     if (!validCategories.includes(category)) {
@@ -205,6 +217,9 @@ router.get('/stock-balance', validateQuery(['facility_id']), async (req, res) =>
       return sendValidationError(res, 'as_of_date must be in YYYY-MM-DD format', 'as_of_date')
     }
 
+    // Enforce facility scoping
+    if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
+
     // Verify facility exists
     const facilityExists = await StockService.facilityExists(facility_id)
     if (!facilityExists) {
@@ -245,6 +260,9 @@ router.get('/export', validateQuery(['facility_id', 'from', 'to']), async (req, 
     if (!validators.isUUID(facility_id)) {
       return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     }
+
+    // Enforce facility scoping
+    if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
 
     // Validate from date
     if (!validators.isValidISODate(from)) {

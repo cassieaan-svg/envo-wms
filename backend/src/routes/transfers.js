@@ -1,334 +1,292 @@
 import express from 'express'
-import { validateQuery, validators, sendValidationError } from '../middleware/validation.js'
+import { validators, sendValidationError } from '../middleware/validation.js'
+import { enforceTransferAccess, ownFacilityId, narrowedAdminFacilityIds, resolveListFacilityIds } from '../middleware/scope.js'
 import { TransferService } from '../services/transferService.js'
-import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
 
-// TODO: Apply auth middleware in production
-// router.use(authMiddleware)
+// Auth (authMiddleware) and scope (attachScope) are applied globally to /api in
+// server.js. Transfer access mirrors the RLS stock_transfer_log policies: a caller
+// may read/mutate a transfer only if they are a party (sending or receiving
+// facility) or a transfer admin (overall/state/cluster/lga, with state/lga narrowed).
+
+// Run a transition after confirming the caller may act on the transfer. Loads the
+// row first (404 if missing), enforces access (403 via enforceTransferAccess), then
+// runs `fn`. `fn` returning null still maps to 404 (id/guard didn't match).
+async function runTransition(req, res, fn, notFoundMsg = 'Transfer not found or not eligible') {
+  const transfer = await TransferService.getTransferById(req.params.id)
+  if (!transfer) {
+    return res.status(404).json({ success: false, error: 'Transfer not found', code: 'TRANSFER_NOT_FOUND' })
+  }
+  if (!(await enforceTransferAccess(req, res, transfer))) return
+  const result = await fn()
+  if (!result) {
+    return res.status(404).json({ success: false, error: notFoundMsg, code: 'TRANSFER_NOT_FOUND' })
+  }
+  res.json({ success: true, data: result, timestamp: new Date().toISOString() })
+}
 
 /**
- * GET /api/transfers - Get transfers for a facility
- * Query params: facility_id (required), status (optional), type (all|incoming|outgoing)
+ * GET /api/transfers - List transfers (flexible filters)
+ * Query: facility_id, direction (incoming|outgoing|any), status (comma list),
+ *        section, date_field (initiated_at|resolved_at), from, to, notes_includes,
+ *        limit, offset
  */
-router.get('/', validateQuery(['facility_id']), async (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const { facility_id, status, type = 'all', limit = 1000, offset = 0 } = req.query
+    const {
+      facility_id, facility_ids, direction = 'any', status, section,
+      date_field, from, to, notes_includes, limit = 1000, offset = 0
+    } = req.query
 
-    // Validate facility_id
-    if (!validators.isUUID(facility_id)) {
+    if (facility_id && !validators.isUUID(facility_id)) {
       return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     }
 
-    // Validate status if provided
-    if (status && !validators.isValidTransferStatus(status)) {
-      return sendValidationError(res, 'Invalid status. Must be: pending, in_transit, accepted, disputed, or cancelled', 'status')
+    // Scope the list (RLS transfer read policy):
+    //  - facility users are pinned to their own facility (a different facility_id
+    //    is rejected; an omitted one is filled in so they can't list everything).
+    //  - admins may pass a single facility_id, or a facility_ids view-filter
+    //    (intersected with their narrowed scope); omitting both spans their scope.
+    const own = ownFacilityId(req)
+    let scopedFacilityId = facility_id
+    let scopedFacilityIds
+    if (own) {
+      if (facility_id && facility_id !== own) {
+        return res.status(403).json({ success: false, error: 'Not authorized for this facility', code: 'FORBIDDEN' })
+      }
+      scopedFacilityId = own
+    } else if (!facility_id) {
+      const allowed = await resolveListFacilityIds(req, 'transfers', facility_ids)
+      if (allowed !== null) scopedFacilityIds = allowed
     }
 
-    // Validate type
-    if (!['all', 'incoming', 'outgoing'].includes(type)) {
-      return sendValidationError(res, 'Invalid type. Must be: all, incoming, or outgoing', 'type')
+    // Empty scope = nothing visible. Guard before the service (which treats an
+    // empty facilityIds array as "no filter" and would otherwise return everything).
+    if (Array.isArray(scopedFacilityIds) && scopedFacilityIds.length === 0) {
+      return res.json({ success: true, data: [], count: 0, timestamp: new Date().toISOString() })
     }
 
-    // Check if facility exists
-    const facilityExists = await StockService.facilityExists(facility_id)
-    if (!facilityExists) {
-      return res.status(404).json({
-        success: false,
-        error: 'Facility not found',
-        code: 'FACILITY_NOT_FOUND'
-      })
-    }
-
-    const transfers = await TransferService.getTransfers(facility_id, {
-      status,
-      type,
+    const transfers = await TransferService.listTransfers({
+      facilityId: scopedFacilityId,
+      facilityIds: scopedFacilityIds,
+      direction,
+      statuses: status ? String(status).split(',').map(s => s.trim()).filter(Boolean) : null,
+      section,
+      dateField: date_field,
+      from,
+      to,
+      notesIncludes: notes_includes,
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
 
-    res.json({
-      success: true,
-      data: transfers,
-      count: transfers.length,
-      timestamp: new Date().toISOString()
-    })
+    res.json({ success: true, data: transfers, count: transfers.length, timestamp: new Date().toISOString() })
   } catch (err) {
     console.error('Error fetching transfers:', err)
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      code: 'FETCH_ERROR'
-    })
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
   }
 })
 
 /**
- * POST /api/transfers - Create transfer request
- * Body: { lines[], receiving_facility_id, sending_facility_id, transfer_type, notes, initiated_by, section }
- */
-router.post('/', async (req, res) => {
-  try {
-    const { lines, receiving_facility_id, sending_facility_id, transfer_type, notes, initiated_by, section } = req.body
-
-    // Validate required fields
-    if (!lines || !Array.isArray(lines) || lines.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'lines array is required with at least one item',
-        code: 'MISSING_FIELDS'
-      })
-    }
-
-    if (!transfer_type) {
-      return res.status(400).json({
-        success: false,
-        error: 'transfer_type is required',
-        code: 'MISSING_FIELDS'
-      })
-    }
-
-    if (!initiated_by) {
-      return res.status(400).json({
-        success: false,
-        error: 'initiated_by is required',
-        code: 'MISSING_FIELDS'
-      })
-    }
-
-    // Validate transfer_type
-    if (!validators.isValidTransferType(transfer_type)) {
-      return sendValidationError(res, 'Invalid transfer_type', 'transfer_type')
-    }
-
-    // Validate each line item
-    for (const line of lines) {
-      if (!line.commodity_id || line.quantity === undefined) {
-        return res.status(400).json({
-          success: false,
-          error: 'Each line item must have commodity_id and quantity',
-          code: 'INVALID_LINE_ITEM'
-        })
-      }
-
-      if (!validators.isPositiveNumber(line.quantity)) {
-        return sendValidationError(res, 'Line quantity must be a positive number', 'quantity')
-      }
-
-      // Check commodity exists
-      const commodityExists = await StockService.commodityExists(line.commodity_id)
-      if (!commodityExists) {
-        return res.status(404).json({
-          success: false,
-          error: `Commodity ${line.commodity_id} not found`,
-          code: 'COMMODITY_NOT_FOUND'
-        })
-      }
-    }
-
-    // Validate facilities if provided
-    if (receiving_facility_id) {
-      const exists = await StockService.facilityExists(receiving_facility_id)
-      if (!exists) {
-        return res.status(404).json({
-          success: false,
-          error: 'Receiving facility not found',
-          code: 'FACILITY_NOT_FOUND'
-        })
-      }
-    }
-
-    if (sending_facility_id) {
-      const exists = await StockService.facilityExists(sending_facility_id)
-      if (!exists) {
-        return res.status(404).json({
-          success: false,
-          error: 'Sending facility not found',
-          code: 'FACILITY_NOT_FOUND'
-        })
-      }
-    }
-
-    const transfers = await TransferService.createTransfer({
-      lines,
-      receiving_facility_id,
-      sending_facility_id,
-      transfer_type,
-      notes,
-      initiated_by,
-      section
-    })
-
-    res.status(201).json({
-      success: true,
-      data: transfers,
-      count: transfers.length,
-      timestamp: new Date().toISOString()
-    })
-  } catch (err) {
-    console.error('Error creating transfer:', err)
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      code: 'CREATE_ERROR'
-    })
-  }
-})
-
-/**
- * GET /api/transfers/:id - Get single transfer
+ * GET /api/transfers/:id - Single transfer (with nested commodity)
  */
 router.get('/:id', async (req, res) => {
   try {
-    const { id } = req.params
-
-    const transfer = await TransferService.getTransferById(id)
+    const transfer = await TransferService.getTransferById(req.params.id)
     if (!transfer) {
-      return res.status(404).json({
-        success: false,
-        error: 'Transfer not found',
-        code: 'TRANSFER_NOT_FOUND'
-      })
+      return res.status(404).json({ success: false, error: 'Transfer not found', code: 'TRANSFER_NOT_FOUND' })
     }
-
-    res.json({
-      success: true,
-      data: transfer,
-      timestamp: new Date().toISOString()
-    })
+    if (!(await enforceTransferAccess(req, res, transfer))) return
+    res.json({ success: true, data: transfer, timestamp: new Date().toISOString() })
   } catch (err) {
     console.error('Error fetching transfer:', err)
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      code: 'FETCH_ERROR'
-    })
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
   }
 })
 
 /**
- * PATCH /api/transfers/:id/approve - Approve transfer
- * Body: { approved_by, quantity (optional), notes (optional), facility_assignment (for DSD/SDP) }
+ * POST /api/transfers - Create one or more transfer rows
+ * Body: { lines: [...] } | [...] | { ...singleRow }
+ * Each line carries the full row (sending/receiving ids+names, commodity, qty,
+ * status, notes, …); the frontend encodes the type into notes + initial status.
  */
-router.patch('/:id/approve', async (req, res) => {
+router.post('/', async (req, res) => {
   try {
-    const { id } = req.params
-    const { approved_by, quantity, notes, facility_assignment } = req.body
+    const body = req.body || {}
+    const lines = Array.isArray(body) ? body : Array.isArray(body.lines) ? body.lines : [body]
 
-    if (!approved_by) {
-      return res.status(400).json({
-        success: false,
-        error: 'approved_by is required',
-        code: 'MISSING_FIELDS'
-      })
+    if (!lines.length || !lines[0]) {
+      return res.status(400).json({ success: false, error: 'At least one transfer line is required', code: 'MISSING_FIELDS' })
+    }
+    // Facility users may only create transfers they're a party to (sending or
+    // receiving). Admins are unrestricted. (RLS insert was open; this is a light
+    // guard matching how the frontend always sets the caller's own facility.)
+    const own = ownFacilityId(req)
+    for (const l of lines) {
+      if (!l.commodity_id || l.quantity === undefined) {
+        return res.status(400).json({ success: false, error: 'Each line requires commodity_id and quantity', code: 'INVALID_LINE_ITEM' })
+      }
+      if (!validators.isPositiveNumber(l.quantity)) {
+        return sendValidationError(res, 'Line quantity must be a positive number', 'quantity')
+      }
+      if (own && l.sending_facility_id !== own && l.receiving_facility_id !== own) {
+        return res.status(403).json({ success: false, error: 'Not authorized to create a transfer for another facility', code: 'FORBIDDEN' })
+      }
     }
 
-    if (quantity !== undefined && !validators.isPositiveNumber(quantity)) {
-      return sendValidationError(res, 'Quantity must be a positive number', 'quantity')
-    }
-
-    const transfer = await TransferService.approveTransfer(id, {
-      approved_by,
-      quantity,
-      notes,
-      facility_assignment
-    })
-
-    res.json({
-      success: true,
-      data: transfer,
-      timestamp: new Date().toISOString()
-    })
+    const created = await TransferService.createTransfers(lines)
+    res.status(201).json({ success: true, data: created, count: created.length, timestamp: new Date().toISOString() })
   } catch (err) {
-    console.error('Error approving transfer:', err)
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      code: 'APPROVE_ERROR'
-    })
+    console.error('Error creating transfer:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'CREATE_ERROR' })
   }
 })
 
-/**
- * PATCH /api/transfers/:id/accept - Accept transfer (receiver side)
- * Body: { accepted_by, notes (optional) }
- */
+/** PATCH /api/transfers/:id/dispatch - approve+dispatch external (decrements sender store) */
+router.patch('/:id/dispatch', async (req, res) => {
+  try {
+    await runTransition(req, res, () => TransferService.dispatch(req.params.id, req.body || {}))
+  } catch (err) {
+    console.error('Error dispatching transfer:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'DISPATCH_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/assign - admin assigns a source facility */
+router.patch('/:id/assign', async (req, res) => {
+  try {
+    if (!req.body?.sending_facility_id) {
+      return res.status(400).json({ success: false, error: 'sending_facility_id is required', code: 'MISSING_FIELDS' })
+    }
+    await runTransition(req, res, () => TransferService.assignSource(req.params.id, req.body))
+  } catch (err) {
+    console.error('Error assigning transfer source:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'ASSIGN_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/accept - receiver accepts (credits receiver store + intake_log) */
 router.patch('/:id/accept', async (req, res) => {
   try {
-    const { id } = req.params
-    const { accepted_by, notes } = req.body
-
-    if (!accepted_by) {
-      return res.status(400).json({
-        success: false,
-        error: 'accepted_by is required',
-        code: 'MISSING_FIELDS'
-      })
+    if (!req.body?.received_by) {
+      return res.status(400).json({ success: false, error: 'received_by is required', code: 'MISSING_FIELDS' })
     }
-
-    const transfer = await TransferService.acceptTransfer(id, {
-      accepted_by,
-      notes
-    })
-
-    res.json({
-      success: true,
-      data: transfer,
-      timestamp: new Date().toISOString()
-    })
+    await runTransition(req, res, () => TransferService.accept(req.params.id, req.body))
   } catch (err) {
     console.error('Error accepting transfer:', err)
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      code: 'ACCEPT_ERROR'
-    })
+    res.status(500).json({ success: false, error: err.message, code: 'ACCEPT_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/dispute - receiver disputes (optional facility_id guard) */
+router.patch('/:id/dispute', async (req, res) => {
+  try {
+    await runTransition(
+      req, res,
+      () => TransferService.dispute(req.params.id, req.body || {}),
+      'Transfer not found or not owned by this facility'
+    )
+  } catch (err) {
+    console.error('Error disputing transfer:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'DISPUTE_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/restore - sender restores stock for a disputed transfer */
+router.patch('/:id/restore', async (req, res) => {
+  try {
+    await runTransition(
+      req, res,
+      () => TransferService.restoreDisputed(req.params.id, req.body || {}),
+      'Transfer not found or not owned by this facility'
+    )
+  } catch (err) {
+    console.error('Error restoring transfer stock:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'RESTORE_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/cancel - cancel/reject (no stock movement) */
+router.patch('/:id/cancel', async (req, res) => {
+  try {
+    await runTransition(req, res, () => TransferService.cancel(req.params.id, req.body || {}))
+  } catch (err) {
+    console.error('Error cancelling transfer:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'CANCEL_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/approve-internal - store→dispensary move */
+router.patch('/:id/approve-internal', async (req, res) => {
+  try {
+    if (!req.body?.approved_by) {
+      return res.status(400).json({ success: false, error: 'approved_by is required', code: 'MISSING_FIELDS' })
+    }
+    await runTransition(req, res, () => TransferService.approveInternal(req.params.id, req.body))
+  } catch (err) {
+    console.error('Error approving internal transfer:', err)
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.status === 409 ? 'INSUFFICIENT_STOCK' : 'APPROVE_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/approve-dsd - approve SDP/DSD request → dispatched */
+router.patch('/:id/approve-dsd', async (req, res) => {
+  try {
+    if (!req.body?.approved_by) {
+      return res.status(400).json({ success: false, error: 'approved_by is required', code: 'MISSING_FIELDS' })
+    }
+    await runTransition(req, res, () => TransferService.approveDsd(req.params.id, req.body))
+  } catch (err) {
+    console.error('Error approving DSD/SDP transfer:', err)
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.status === 409 ? 'INSUFFICIENT_STOCK' : 'APPROVE_ERROR' })
+  }
+})
+
+/** PATCH /api/transfers/:id/receive - site confirms receipt (credits sdp_stock/dsd_stock) */
+router.patch('/:id/receive', async (req, res) => {
+  try {
+    if (!req.body?.received_by) {
+      return res.status(400).json({ success: false, error: 'received_by is required', code: 'MISSING_FIELDS' })
+    }
+    await runTransition(req, res, () => TransferService.receive(req.params.id, req.body))
+  } catch (err) {
+    console.error('Error confirming transfer receipt:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'RECEIVE_ERROR' })
   }
 })
 
 /**
- * PATCH /api/transfers/:id/cancel - Cancel transfer
- * Body: { cancelled_by, reason }
+ * PATCH /api/transfers/:id - Metadata-only update (no stock side-effects)
+ * Body: any of { status, quantity, qty_requested, notes, dispute_note, resolved_by, resolved_at }
+ * For edit-quantity, dismiss, mark-fulfilled, notes edits.
  */
-router.patch('/:id/cancel', async (req, res) => {
+router.patch('/:id', async (req, res) => {
   try {
-    const { id } = req.params
-    const { cancelled_by, reason } = req.body
-
-    if (!cancelled_by) {
-      return res.status(400).json({
-        success: false,
-        error: 'cancelled_by is required',
-        code: 'MISSING_FIELDS'
-      })
-    }
-
-    if (!reason) {
-      return res.status(400).json({
-        success: false,
-        error: 'reason is required',
-        code: 'MISSING_FIELDS'
-      })
-    }
-
-    const transfer = await TransferService.cancelTransfer(id, {
-      cancelled_by,
-      reason
-    })
-
-    res.json({
-      success: true,
-      data: transfer,
-      timestamp: new Date().toISOString()
-    })
+    await runTransition(req, res, () => TransferService.updateTransfer(req.params.id, req.body || {}))
   } catch (err) {
-    console.error('Error cancelling transfer:', err)
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      code: 'CANCEL_ERROR'
-    })
+    console.error('Error updating transfer:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'UPDATE_ERROR' })
+  }
+})
+
+/** DELETE /api/transfers/:id */
+router.delete('/:id', async (req, res) => {
+  try {
+    const transfer = await TransferService.getTransferById(req.params.id)
+    if (!transfer) {
+      return res.status(404).json({ success: false, error: 'Transfer not found', code: 'TRANSFER_NOT_FOUND' })
+    }
+    if (!(await enforceTransferAccess(req, res, transfer))) return
+
+    const deleted = await TransferService.deleteTransfer(req.params.id)
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Transfer not found', code: 'TRANSFER_NOT_FOUND' })
+    }
+    res.json({ success: true, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error deleting transfer:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'DELETE_ERROR' })
   }
 })
 

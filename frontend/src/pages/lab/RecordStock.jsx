@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -14,7 +14,6 @@ import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodit
 export function RecordStock() {
   const store = useAppStore()
   const commoditySection = useAppStore(s => s.commoditySection)
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const { loadStock } = useStock()
   const canManage    = store.canManageStock()
   const facilityRole = useAppStore(s => s.facilityRole)
@@ -55,28 +54,25 @@ export function RecordStock() {
   // For SDP users: load their stock from sdp_stock when commodity changes
   useEffect(() => {
     if (!isSDP || !fid || !sdpName || !commId) { setSdpStockRow(null); return }
-    sb.from('sdp_stock').select('id,quantity')
-      .eq('facility_id', fid).eq('sdp_name', sdpName).eq('commodity_id', commId)
-      .maybeSingle()
-      .then(({ data }) => setSdpStockRow(data || null))
+    api.stock.sdp.list({ facility_id: fid, sdp_name: sdpName, commodity_id: commId })
+      .then(rows => setSdpStockRow((rows && rows[0]) || null))
+      .catch(() => setSdpStockRow(null))
   }, [commId, isSDP, fid, sdpName])
 
   // For DSD users: load their stock from dsd_stock when commodity changes
   useEffect(() => {
     if (!isDSD || !fid || !dsdSiteName || !commId) { setDsdStockRow(null); return }
-    sb.from('dsd_stock').select('id,quantity')
-      .eq('facility_id', fid).eq('dsd_site_name', dsdSiteName).eq('commodity_id', commId)
-      .maybeSingle()
-      .then(({ data }) => setDsdStockRow(data || null))
+    api.stock.dsd.list({ facility_id: fid, dsd_site_name: dsdSiteName, commodity_id: commId })
+      .then(rows => setDsdStockRow((rows && rows[0]) || null))
+      .catch(() => setDsdStockRow(null))
   }, [commId, isDSD, fid, dsdSiteName])
 
   // Regular facility users: load stock for the chosen Service Delivery Point
   useEffect(() => {
     if (isSDP || isDSD || !fid || !commId || !effectiveSdp) { setRecordSdpStockRow(null); return }
-    sb.from('sdp_stock').select('id,quantity')
-      .eq('facility_id', fid).eq('sdp_name', effectiveSdp).eq('commodity_id', commId)
-      .maybeSingle()
-      .then(({ data }) => setRecordSdpStockRow(data || null))
+    api.stock.sdp.list({ facility_id: fid, sdp_name: effectiveSdp, commodity_id: commId })
+      .then(rows => setRecordSdpStockRow((rows && rows[0]) || null))
+      .catch(() => setRecordSdpStockRow(null))
   }, [commId, effectiveSdp, isSDP, isDSD, fid])
 
   const selectedComm = store.allCommodities.find(c => c.id === commId)
@@ -102,21 +98,19 @@ export function RecordStock() {
         setMsg({ type:'error', text:`Insufficient stock. Available: ${sdpStockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return
       }
       setSaving(true)
-      const { error } = await sb.from('dispense_log').insert({
-        facility_id:  fid,
-        commodity_id: commId,
-        quantity:     parsedQty,
-        dispensed_by: by || null,
-        dispensed_at: date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
-        notes:        `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`,
-        section:      commoditySection,
-      })
-      if (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-      // Deduct from sdp_stock
-      await sb.from('sdp_stock').update({
-        quantity:   Math.max(0, sdpStockRow.quantity - parsedQty),
-        updated_at: new Date().toISOString(),
-      }).eq('id', sdpStockRow.id)
+      // One call logs the dispense AND decrements the SDP site stock (server-side).
+      try {
+        await api.dispense.record({
+          facility_id:  fid,
+          commodity_id: commId,
+          quantity:     parsedQty,
+          dispensed_by: by || null,
+          dispensed_at: date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
+          notes:        `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`,
+          sdp_name:     sdpName,
+          section:      commoditySection,
+        })
+      } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
       setSdpStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
       toast('Stock recorded', 'green')
       setMsg({ type:'success', text:'Stock saved successfully.' })
@@ -135,20 +129,19 @@ export function RecordStock() {
         setMsg({ type:'error', text:`Insufficient stock. Available: ${dsdStockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return
       }
       setSaving(true)
-      const { error } = await sb.from('dispense_log').insert({
-        facility_id:  fid,
-        commodity_id: commId,
-        quantity:     parsedQty,
-        dispensed_by: by || null,
-        dispensed_at: date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
-        notes:        `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`,
-        section:      commoditySection,
-      })
-      if (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-      await sb.from('dsd_stock').update({
-        quantity:   Math.max(0, dsdStockRow.quantity - parsedQty),
-        updated_at: new Date().toISOString(),
-      }).eq('id', dsdStockRow.id)
+      // One call logs the dispense AND decrements the DSD site stock (server-side).
+      try {
+        await api.dispense.record({
+          facility_id:   fid,
+          commodity_id:  commId,
+          quantity:      parsedQty,
+          dispensed_by:  by || null,
+          dispensed_at:  date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
+          notes:         `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`,
+          dsd_site_name: dsdSiteName,
+          section:       commoditySection,
+        })
+      } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
       setDsdStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
       toast('Stock recorded', 'green')
       setMsg({ type:'success', text:'Stock saved successfully.' })
@@ -171,21 +164,19 @@ export function RecordStock() {
     }
 
     setSaving(true)
-    const { error } = await sb.from('dispense_log').insert({
-      facility_id:  fid,
-      commodity_id: commId,
-      quantity:     parsedQty,
-      dispensed_by: by || null,
-      dispensed_at: date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
-      notes:        `[SDP: ${effectiveSdp}]${notes ? ' ' + notes : ''}`,
-      section:      commoditySection,
-    })
-    if (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-
-    await sb.from('sdp_stock').update({
-      quantity:   Math.max(0, recordSdpStockRow.quantity - parsedQty),
-      updated_at: new Date().toISOString(),
-    }).eq('id', recordSdpStockRow.id)
+    // One call logs the dispense AND decrements the chosen SDP's stock (server-side).
+    try {
+      await api.dispense.record({
+        facility_id:  fid,
+        commodity_id: commId,
+        quantity:     parsedQty,
+        dispensed_by: by || null,
+        dispensed_at: date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
+        notes:        `[SDP: ${effectiveSdp}]${notes ? ' ' + notes : ''}`,
+        sdp_name:     effectiveSdp,
+        section:      commoditySection,
+      })
+    } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
     setRecordSdpStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
 
     toast('Stock recorded', 'green')
@@ -200,14 +191,9 @@ export function RecordStock() {
   async function loadRecent() {
     setLoadingRecent(true)
     const d = historyDate
-    let q = sb.from('dispense_log')
-      .select('*,commodities(name,unit,dispensing_unit,pack_size)')
-      .eq('facility_id', fid)
-      .gte('dispensed_at', `${d}T00:00:00`)
-      .lte('dispensed_at', `${d}T23:59:59`)
-      .order('dispensed_at', { ascending: false })
-    q = sec(q)
-    const { data } = await q
+    const data = await api.dispense.history({
+      facility_id: fid, date: d, section: commoditySection || undefined,
+    }).catch(() => [])
     setRecent(data || [])
     setLoadingRecent(false)
   }

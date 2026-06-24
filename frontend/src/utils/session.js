@@ -1,4 +1,4 @@
-import { sb } from '../lib/supabase'
+import { api } from '../lib/api'
 import { useAppStore } from '../store/appStore'
 import { SECTION_CATEGORIES } from './helpers'
 
@@ -20,15 +20,16 @@ export async function hydrateSession(user) {
 
   const facilityRole = meta.facility_role || 'dispenser'
 
-  // Load facilities (scoped for state/lga admins)
-  let facQuery = sb.from('facilities').select('id,name,code,state,lga').order('state').order('lga').order('name')
-  if (accessLevel === 'state_admin' && meta.admin_state) facQuery = facQuery.eq('state', meta.admin_state)
-  if (accessLevel === 'lga_admin'   && meta.admin_lga)   facQuery = facQuery.eq('lga',   meta.admin_lga)
+  // Load facilities (scoped for state/lga admins — the server also enforces this,
+  // but we pass the filter so the dropdown matches the admin's remit).
+  const facParams = {}
+  if (accessLevel === 'state_admin' && meta.admin_state) facParams.state = meta.admin_state
+  if (accessLevel === 'lga_admin'   && meta.admin_lga)   facParams.lga   = meta.admin_lga
 
-  const [{ data: facs }, { data: comms }, { data: amcRows }] = await Promise.all([
-    facQuery,
-    sb.from('commodities').select('id,name,category,unit,pack_size,dispensing_unit').order('category').order('name'),
-    sb.from('facility_amc_settings').select('facility_id,months'),
+  const [facs, comms, amcRows] = await Promise.all([
+    api.facilities.list(facParams),
+    api.commodities.list(),
+    api.amcSettings.list(),
   ])
 
   // Per-facility custom AMC month selections, keyed by facility id.
@@ -46,11 +47,10 @@ export async function hydrateSession(user) {
   let currentFacility = null
   if (accessLevel === 'facility') {
     if (meta.facility_id) {
-      const { data: fac } = await sb.from('facilities').select('*').eq('id', meta.facility_id).maybeSingle()
-      currentFacility = fac
+      try { currentFacility = await api.facilities.get(meta.facility_id) } catch { currentFacility = null }
     } else if (meta.facility_name) {
-      const { data: fac } = await sb.from('facilities').select('*').eq('name', meta.facility_name).maybeSingle()
-      currentFacility = fac
+      const matches = await api.facilities.list({ name: meta.facility_name })
+      currentFacility = matches?.[0] || null
     }
   }
 

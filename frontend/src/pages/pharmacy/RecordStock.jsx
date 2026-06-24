@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -14,7 +14,6 @@ import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodit
 export function RecordStock() {
   const store = useAppStore()
   const commoditySection = useAppStore(s => s.commoditySection)
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const { loadStock } = useStock()
   const canManage    = store.canManageStock()
   const facilityRole = useAppStore(s => s.facilityRole)
@@ -44,10 +43,9 @@ export function RecordStock() {
 
   useEffect(() => {
     if (!isDSD || !fid || !dsdSiteName || !commId) { setDsdStockRow(null); return }
-    sb.from('dsd_stock').select('id,quantity')
-      .eq('facility_id', fid).eq('dsd_site_name', dsdSiteName).eq('commodity_id', commId)
-      .maybeSingle()
-      .then(({ data }) => setDsdStockRow(data || null))
+    api.stock.dsd.list({ facility_id: fid, dsd_site_name: dsdSiteName, commodity_id: commId })
+      .then(rows => setDsdStockRow((rows && rows[0]) || null))
+      .catch(() => setDsdStockRow(null))
   }, [commId, isDSD, fid, dsdSiteName])
 
   const selectedComm = store.allCommodities.find(c => c.id === commId)
@@ -72,20 +70,19 @@ export function RecordStock() {
         setMsg({ type:'error', text:`Insufficient stock. Available: ${dsdStockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return
       }
       setSaving(true)
-      const { error } = await sb.from('dispense_log').insert({
-        facility_id:  fid,
-        commodity_id: commId,
-        quantity:     parsedQty,
-        dispensed_by: by || null,
-        dispensed_at: date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
-        notes:        `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`,
-        section:      commoditySection,
-      })
-      if (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-      await sb.from('dsd_stock').update({
-        quantity:   Math.max(0, dsdStockRow.quantity - parsedQty),
-        updated_at: new Date().toISOString(),
-      }).eq('id', dsdStockRow.id)
+      // One call logs the dispense AND decrements the DSD site stock (server-side).
+      try {
+        await api.dispense.record({
+          facility_id:   fid,
+          commodity_id:  commId,
+          quantity:      parsedQty,
+          dispensed_by:  by || null,
+          dispensed_at:  date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
+          notes:         `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`,
+          dsd_site_name: dsdSiteName,
+          section:       commoditySection,
+        })
+      } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
       setDsdStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
       toast('Stock recorded', 'green')
       setMsg({ type:'success', text:'Stock saved successfully.' })
@@ -114,26 +111,19 @@ export function RecordStock() {
 
     setSaving(true)
     for (const item of allItems) {
-      const { error } = await sb.from('dispense_log').insert({
-        facility_id:  fid,
-        commodity_id: item.commodityId,
-        quantity:     item.quantity,
-        dispensed_by: by || null,
-        dispensed_at: date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
-        notes:        notes || null,
-        section:      commoditySection,
-      })
-      if (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-
-      // Deduct from dispensary stock — quantity is in comm.unit (same as stock.quantity)
-      const { data: stk } = await sb.from('stock').select('id,quantity')
-        .eq('facility_id', fid).eq('commodity_id', item.commodityId).eq('location_type', 'dispensary').maybeSingle()
-      if (stk) {
-        await sb.from('stock').update({
-          quantity:   Math.max(0, stk.quantity - item.quantity),
-          updated_at: new Date().toISOString(),
-        }).eq('id', stk.id)
-      }
+      // One call logs the dispense AND decrements the dispensary stock (server-side).
+      try {
+        await api.dispense.record({
+          facility_id:   fid,
+          commodity_id:  item.commodityId,
+          quantity:      item.quantity,
+          dispensed_by:  by || null,
+          dispensed_at:  date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
+          notes:         notes || null,
+          location_type: 'dispensary',
+          section:       commoditySection,
+        })
+      } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
     }
 
     toast(`Stock recorded — ${allItems.length} item(s)`, 'green')
@@ -148,14 +138,9 @@ export function RecordStock() {
   async function loadRecent() {
     setLoadingRecent(true)
     const d = historyDate
-    let q = sb.from('dispense_log')
-      .select('*,commodities(name,unit,dispensing_unit,pack_size)')
-      .eq('facility_id', fid)
-      .gte('dispensed_at', `${d}T00:00:00`)
-      .lte('dispensed_at', `${d}T23:59:59`)
-      .order('dispensed_at', { ascending: false })
-    q = sec(q)
-    const { data } = await q
+    const data = await api.dispense.history({
+      facility_id: fid, date: d, section: commoditySection || undefined,
+    }).catch(() => [])
     setRecent(data || [])
     setLoadingRecent(false)
   }
@@ -214,8 +199,8 @@ export function RecordStock() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Recorded by</label>
-                <input type="text" value={by} onChange={e => setBy(e.target.value)} placeholder="Staff name or ID"
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Recorded by *</label>
+                <input type="text" value={by} onChange={e => setBy(e.target.value)} placeholder="Staff name or ID" required
                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
               </div>
               <div>

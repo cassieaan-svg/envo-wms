@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
+import { subscribeRealtime } from '../../lib/realtime'
 import { NavSection, NavItem } from '../../components/NavItem'
 import { useAppStore } from '../../store/appStore'
 
@@ -32,22 +33,20 @@ export function LabNav() {
   useEffect(() => {
     if (!fid) { setPendingCount(0); return }
     loadPendingCount()
-    const channel = sb.channel(`lab-nav-transfers-${fid}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_transfer_log' }, loadPendingCount)
-      .subscribe()
-    return () => sb.removeChannel(channel)
+    return subscribeRealtime(['stock_transfer_log'], loadPendingCount)
   }, [fid, commoditySection])
 
   async function loadPendingCount() {
     if (!fid) { setPendingCount(0); return }
-    // Anything still needing this facility's attention: its own open requests /
-    // incoming transfers, plus approvals it owes and its outgoing transfers.
-    let q = sb.from('stock_transfer_log')
-      .select('*', { count: 'exact', head: true })
-      .or(`and(receiving_facility_id.eq.${fid},status.in.(pending,in_transit)),and(sending_facility_id.eq.${fid},status.in.(pending_approval,in_transit))`)
-    if (commoditySection) q = q.eq('section', commoditySection)
-    const { count } = await q
-    setPendingCount(count || 0)
+    // Anything still needing this facility's attention: incoming transfers awaiting
+    // it (pending/in_transit), plus outgoing approvals it owes (pending_approval/in_transit).
+    try {
+      const [incoming, outgoing] = await Promise.all([
+        api.transfers.list({ facility_id: fid, direction: 'incoming', status: 'pending,in_transit', section: commoditySection || undefined }),
+        api.transfers.list({ facility_id: fid, direction: 'outgoing', status: 'pending_approval,in_transit', section: commoditySection || undefined }),
+      ])
+      setPendingCount((incoming?.length || 0) + (outgoing?.length || 0))
+    } catch { setPendingCount(0) }
   }
 
   return (

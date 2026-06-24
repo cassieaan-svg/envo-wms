@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { Card } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
@@ -17,11 +17,7 @@ export function Stock() {
   async function loadData() {
     setLoading(true)
     if (!fid || !sdpName) { setRows([]); setLoading(false); return }
-    const { data } = await sb.from('sdp_stock')
-      .select('*, commodities(name,unit,category)')
-      .eq('facility_id', fid)
-      .eq('sdp_name', sdpName)
-      .order('commodities(name)')
+    const data = await api.stock.sdp.list({ facility_id: fid, sdp_name: sdpName }).catch(() => [])
     setRows(data || [])
     setLoading(false)
   }

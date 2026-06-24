@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
@@ -85,7 +85,7 @@ export function Reports({ embedded = false } = {}) {
 
   async function loadWeekly() {
     setLoading(true)
-    const rows = await fetchReportRows({ sb, category, from: wFrom, to: wTo, fid, scopeIds, commIds })
+    const rows = await fetchReportRows({ category, from: wFrom, to: wTo, fid, scopeIds, commIds })
     setSummary({ rows, label: `${wFrom} → ${wTo}` })
     setLoading(false)
   }
@@ -95,7 +95,7 @@ export function Reports({ embedded = false } = {}) {
     const from = month + '-01'
     const lastDay = new Date(month.split('-')[0], month.split('-')[1], 0).getDate()
     const to = `${month}-${String(lastDay).padStart(2,'0')}`
-    const rows = await fetchReportRows({ sb, category, from, to, fid, scopeIds, commIds })
+    const rows = await fetchReportRows({ category, from, to, fid, scopeIds, commIds })
     setSummary({ rows, label: month })
     setLoading(false)
   }
@@ -124,10 +124,14 @@ export function Reports({ embedded = false } = {}) {
       store.allFacilities.forEach(f => { lgaByName[f.name] = f.lga || '' })
       const PAGE = 1000
       for (let offset = 0; ; offset += PAGE) {
-        let sq = sb.from('stock').select('commodity_id,quantity,facilities(name)').range(offset, offset + PAGE - 1)
-        if (scopeIds && scopeIds.length) sq = sq.in('facility_id', scopeIds)
-        const { data, error } = await sq
-        if (error || !data || !data.length) break
+        let data
+        try {
+          data = await api.stock.list({
+            facility_ids: (scopeIds && scopeIds.length) ? scopeIds : undefined,
+            limit: PAGE, offset,
+          })
+        } catch { break }
+        if (!data || !data.length) break
         data.forEach(r => {
           const fname = r.facilities?.name, cname = commLookup[r.commodity_id]
           if (!fname || !cname) return
@@ -148,11 +152,15 @@ export function Reports({ embedded = false } = {}) {
     if (fid || isAdmin) {
       const PAGE = 1000
       for (let offset = 0; ; offset += PAGE) {
-        let sq = sb.from('stock').select('commodity_id,quantity').range(offset, offset + PAGE - 1)
-        if (fid) sq = sq.eq('facility_id', fid)
-        else if (scopeIds && scopeIds.length) sq = sq.in('facility_id', scopeIds)
-        const { data, error } = await sq
-        if (error || !data || !data.length) break
+        let data
+        try {
+          data = await api.stock.list({
+            facility_id: fid || undefined,
+            facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+            limit: PAGE, offset,
+          })
+        } catch { break }
+        if (!data || !data.length) break
         data.forEach(r => {
           const name = commLookup[r.commodity_id]
           if (name) stockMap[name] = (stockMap[name] || 0) + r.quantity

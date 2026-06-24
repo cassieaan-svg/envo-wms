@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
@@ -14,7 +14,6 @@ export function Dashboard() {
   const store            = useAppStore()
   const { loadStock }    = useStock()
   const commoditySection = store.commoditySection
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [amcMap, setAmcMap]   = useState({})
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
@@ -39,20 +38,24 @@ export function Dashboard() {
     // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility
     // scoped, use it; for an admin viewing all facilities, aggregate across the
     // whole scope (paginated past the 1000-row cap).
-    const aggSiteStock = async (table) => {
+    const aggSiteStock = async (listFn) => {
       const map = {}
       for (let offset = 0; ; offset += 1000) {
-        let q = sb.from(table).select('commodity_id,quantity').range(offset, offset + 999)
-        if (fid) q = q.eq('facility_id', fid)
-        else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
-        const { data, error } = await q
-        if (error || !data || !data.length) break
+        let data
+        try {
+          data = await listFn({
+            facility_id: fid || undefined,
+            facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+            limit: 1000, offset,
+          })
+        } catch { break }
+        if (!data || !data.length) break
         data.forEach(d => { map[d.commodity_id] = (map[d.commodity_id] || 0) + d.quantity })
         if (data.length < 1000) break
       }
       return map
     }
-    const [dsdAgg, sdpAgg] = await Promise.all([aggSiteStock('dsd_stock'), aggSiteStock('sdp_stock')])
+    const [dsdAgg, sdpAgg] = await Promise.all([aggSiteStock(api.stock.dsd.list), aggSiteStock(api.stock.sdp.list)])
     setDsdMap(dsdAgg)
     setSdpMap(sdpAgg)
 
@@ -61,7 +64,7 @@ export function Dashboard() {
     // AMC (and the status counts in the cards above) matches the summed stock.
     const amcWin = resolveAmcWindow(fid ? store.amcWindows[fid] : null)
     const commIds = store.allCommodities.map(c => c.id)
-    const amc = await loadConsumptionAmcMap(sb, { commIds, fid, scopeIds, amcWin, applySection: sec })
+    const amc = await loadConsumptionAmcMap({ commIds, fid, scopeIds, amcWin, section: commoditySection })
     setAmcMap(amc)
     setLoading(false)
   }

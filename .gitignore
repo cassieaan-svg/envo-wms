@@ -46,3 +46,6 @@ amc_staging_load.csv
 create_new_facility_users.js
 new_facility_logins_confirmed.csv
 *_logins*.csv
+
+# Local migration dumps (contain real data)
+db/_migration/

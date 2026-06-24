@@ -1,23 +1,16 @@
-import { verifyToken } from '../supabase.js'
+import jwt from 'jsonwebtoken'
 
-export async function authMiddleware(req, res, next) {
+// Verify our own JWT (issued by /auth/login). Replaces the Supabase token
+// verification. On success req.user = { sub, email, user_metadata }.
+export function authMiddleware(req, res, next) {
+  const header = req.headers.authorization
+  if (!header || !header.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid authorization header' })
+  }
   try {
-    const authHeader = req.headers.authorization
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or invalid authorization header' })
-    }
-
-    const token = authHeader.slice(7)
-    const user = await verifyToken(token)
-
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid or expired token' })
-    }
-
-    req.user = user
+    req.user = jwt.verify(header.slice(7), process.env.JWT_SECRET)
     next()
-  } catch (err) {
-    console.error('Auth middleware error:', err)
-    res.status(500).json({ error: 'Authentication failed' })
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' })
   }
 }

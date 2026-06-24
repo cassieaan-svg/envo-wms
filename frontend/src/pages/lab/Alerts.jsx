@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
+import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
@@ -7,12 +8,11 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, capExpiryBatchesToStock } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
   const commoditySection = useAppStore(s => s.commoditySection)
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [tab, setTab]           = useState('expiry')
   const [expiryDays, setDays]   = useState(180)
   const [expiryRows, setExpiry] = useState([])
@@ -30,14 +30,10 @@ export function Alerts() {
   useEffect(() => {
     loadAll()
     if (!store.isAdmin() && fid) loadFacReqAlerts()
-    const channel = sb.channel(`alerts-transfers-${fid}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_transfer_log' },
-        (payload) => {
-          const row = payload.new?.receiving_facility_id ? payload.new : (payload.old || {})
-          if ((row.receiving_facility_id === fid || row.sending_facility_id === fid) && !store.isAdmin() && fid) loadFacReqAlerts()
-        })
-      .subscribe()
-    return () => sb.removeChannel(channel)
+    return subscribeRealtime(['stock_transfer_log'], (payload) => {
+      const row = payload.new?.receiving_facility_id ? payload.new : (payload.old || {})
+      if ((row.receiving_facility_id === fid || row.sending_facility_id === fid) && !store.isAdmin() && fid) loadFacReqAlerts()
+    })
   }, [fid])
 
   async function loadAll() {
@@ -47,22 +43,19 @@ export function Alerts() {
   }
 
   async function loadFacReqAlerts() {
-    let q = sb.from('stock_transfer_log')
-      .select('*').in('status',['pending','in_transit'])
-      .eq('receiving_facility_id', fid)
-      .order('initiated_at',{ascending:false})
-    q = sec(q)
-    const { data } = await q
-    setFacReqAlerts(data||[])
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'incoming', status: 'pending,in_transit',
+      section: commoditySection || undefined,
+    }).catch(() => [])
+    setFacReqAlerts(data || [])
   }
 
   async function cancelFacRequest(id) {
     const confirmed = window.confirm('Cancel this redistribution request?')
     if (!confirmed) return
-    const { error } = await sb.from('stock_transfer_log').update({
-      status: 'cancelled', resolved_at: new Date().toISOString(), resolved_by: store.user?.email||'',
-    }).eq('id', id)
-    if (error) { toast('Error cancelling request','red'); return }
+    try {
+      await api.transfers.cancel(id, { cancelled_by: store.user?.email || '' })
+    } catch { toast('Error cancelling request','red'); return }
     toast('Request cancelled','green')
     loadFacReqAlerts()
   }
@@ -70,36 +63,20 @@ export function Alerts() {
   async function confirmAccept(req) {
     if (!acceptReceiverName.trim()) { toast('Receiver name is required','red'); return }
     setAcceptLoading(true)
-    // The sending facility's stock was already deducted when it dispatched the
-    // transfer (confirmDispatch). The receiver only credits its own stock — it
-    // cannot read another facility's stock rows under RLS, which previously made
-    // this re-check see 0 and wrongly report "insufficient stock".
-    const { data: recStk } = await sb.from('stock').select('id,quantity')
-      .eq('facility_id', req.receiving_facility_id).eq('commodity_id', req.commodity_id).eq('location_type','store').maybeSingle()
-    if (recStk) {
-      await sb.from('stock').update({ quantity: recStk.quantity + req.quantity, updated_at: new Date().toISOString() }).eq('id', recStk.id)
-    } else {
-      await sb.from('stock').insert({ facility_id: req.receiving_facility_id, commodity_id: req.commodity_id, quantity: req.quantity, location_type: 'store', updated_at: new Date().toISOString() })
-    }
-    await sb.from('intake_log').insert({
-      facility_id: req.receiving_facility_id, commodity_id: req.commodity_id, quantity: req.quantity,
-      supplier_source: req.sending_facility_name, condition_on_arrival: 'Good', received_by: acceptReceiverName.trim(),
-      received_at: new Date().toISOString(), notes: 'Facility transfer in from ' + req.sending_facility_name,
-      section: commoditySection,
-    })
-    const { error: updateErr } = await sb.from('stock_transfer_log').update({
-      status: 'accepted', resolved_at: new Date().toISOString(), resolved_by: acceptReceiverName.trim(),
-    }).eq('id', req.id)
-    if (updateErr) { toast('Error updating transfer: ' + updateErr.message,'red'); setAcceptLoading(false); return }
+    // Server credits the receiver store, writes the intake_log entry, and marks accepted.
+    try {
+      await api.transfers.accept(req.id, { received_by: acceptReceiverName.trim() })
+    } catch (updateErr) { toast('Error updating transfer: ' + updateErr.message,'red'); setAcceptLoading(false); return }
     setAcceptingId(null); setAcceptReceiverName(''); setAcceptLoading(false)
     toast('Transfer accepted — stock updated','green')
     loadFacReqAlerts()
   }
 
   async function disputeTransfer(req) {
-    await sb.from('stock_transfer_log').update({
-      status: 'disputed', resolved_at: new Date().toISOString(), resolved_by: store.user?.email||'', dispute_note: 'Disputed by receiver',
-    }).eq('id', req.id)
+    await api.transfers.dispute(req.id, {
+      disputed_by: store.user?.email || '',
+      dispute_note: 'Disputed by receiver',
+    }).catch(() => {})
     toast('Transfer marked as disputed','amber')
     loadFacReqAlerts()
   }
@@ -108,35 +85,43 @@ export function Alerts() {
     const today  = new Date()
     const cutoff = new Date(today.getTime()+expiryDays*86400000).toISOString().split('T')[0]
     const todayS = today.toISOString().split('T')[0]
-    let q = sb.from('intake_log')
-      .select('*,commodities(name,category,unit)')
-      .not('expiry_date','is',null)
-      .lte('expiry_date',cutoff).gte('expiry_date',todayS)
-      .gt('quantity',0).eq('facility_id',fid).in('commodity_id',commIds)
-      .order('expiry_date',{ascending:true})
-    q = sec(q)
-    const { data } = await q
-    setExpiry(data||[])
+    const data = await api.intake.history({
+      facility_id: fid, commodity_ids: commIds,
+      expiry_from: todayS, expiry_to: cutoff, has_quantity: true,
+      section: commoditySection || undefined,
+    }).catch(() => [])
+
+    // Cap each batch to current stock on hand (store + SDP site stock) so the
+    // expiry list reflects what's physically left, not the original receipt.
+    let sdpMap = {}
+    if (fid) {
+      const sdpData = await api.stock.sdp.list({ facility_id: fid }).catch(() => [])
+      ;(sdpData || []).forEach(d => { sdpMap[d.commodity_id] = (sdpMap[d.commodity_id] || 0) + d.quantity })
+    }
+    const sohByComm = {}
+    groupStockByComm(store.stockData).forEach(g => {
+      sohByComm[g.commodity_id] = (g.storeQty || 0) + (sdpMap[g.commodity_id] || 0)
+    })
+    const capped = capExpiryBatchesToStock(data || [], sohByComm)
+    setExpiry(capped)
   }
 
   async function loadStockAlerts() {
     const amcWin = resolveAmcWindow(store.amcWindows[fid])
     let amcMap = {}
     if (commIds.length && fid) {
-      let q = sb.from('dispense_log')
-        .select('commodity_id,quantity,dispensed_at')
-        .gte('dispensed_at',amcWin.start.toISOString())
-        .lt('dispensed_at',amcWin.end.toISOString())
-        .in('commodity_id',commIds).eq('facility_id',fid)
-      q = sec(q)
-      const { data } = await q
+      const data = await api.dispense.history({
+        facility_id: fid, commodity_ids: commIds,
+        from: amcWin.start.toISOString(), to: amcWin.end.toISOString(),
+        section: commoditySection || undefined,
+      }).catch(() => [])
       amcMap = amcMapFromRows(data, amcWin)
     }
 
     // Aggregate SDP stock (lab total = store + SDP) so totals match the Dashboard.
     let sdpMap = {}
     if (fid) {
-      const { data: sdpData } = await sb.from('sdp_stock').select('commodity_id,quantity').eq('facility_id', fid)
+      const sdpData = await api.stock.sdp.list({ facility_id: fid }).catch(() => [])
       ;(sdpData||[]).forEach(d=>{ sdpMap[d.commodity_id]=(sdpMap[d.commodity_id]||0)+d.quantity })
     }
 

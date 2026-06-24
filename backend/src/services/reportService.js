@@ -1,4 +1,26 @@
-import { sbAdmin } from '../supabase.js'
+import { query } from '../db.js'
+
+// Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
+// embedded select, rebuilt with json_build_object (PostgREST replacement).
+const COMM4_OBJ = `
+  json_build_object('id', c.id, 'name', c.name, 'category', c.category, 'unit', c.unit) as commodities`
+
+// Lighter commodity object for the CSV export (only id + name are used).
+const COMM2_OBJ = `
+  json_build_object('id', c.id, 'name', c.name) as commodities`
+
+// Inclusive timestamp bounds for a YYYY-MM-DD date (mirrors the old gte/lte).
+function dayBounds(date) {
+  return [`${date}T00:00:00`, `${date}T23:59:59`]
+}
+
+// YYYY-MM-DD portion of a timestamp. Supabase returned ISO strings; node-pg
+// returns Date objects for timestamptz columns, so handle both.
+function dateOnly(v) {
+  if (!v) return ''
+  if (v instanceof Date) return v.toISOString().split('T')[0]
+  return String(v).split('T')[0]
+}
 
 export class ReportService {
   /**
@@ -11,8 +33,7 @@ export class ReportService {
       throw new Error('date is required in YYYY-MM-DD format')
     }
 
-    const startOfDay = `${date}T00:00:00`
-    const endOfDay = `${date}T23:59:59`
+    const [startOfDay, endOfDay] = dayBounds(date)
 
     try {
       const report = {
@@ -33,61 +54,58 @@ export class ReportService {
 
       // Get intake data
       if (category === 'all' || category === 'intake') {
-        const { data: intake, error: intakeError } = await sbAdmin
-          .from('intake_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('received_at', startOfDay)
-          .lte('received_at', endOfDay)
-          .order('received_at')
-
-        if (intakeError) throw intakeError
-        report.intake = intake || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from intake_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3
+           order by l.received_at`,
+          [facilityId, startOfDay, endOfDay]
+        )
+        report.intake = rows
         report.summary.total_intake = report.intake.reduce((sum, item) => sum + item.quantity, 0)
       }
 
       // Get dispense data
       if (category === 'all' || category === 'dispense') {
-        const { data: dispense, error: dispenseError } = await sbAdmin
-          .from('dispense_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('dispensed_at', startOfDay)
-          .lte('dispensed_at', endOfDay)
-          .order('dispensed_at')
-
-        if (dispenseError) throw dispenseError
-        report.dispense = dispense || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from dispense_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3
+           order by l.dispensed_at`,
+          [facilityId, startOfDay, endOfDay]
+        )
+        report.dispense = rows
         report.summary.total_dispense = report.dispense.reduce((sum, item) => sum + item.quantity, 0)
       }
 
       // Get adjustment data
       if (category === 'all' || category === 'adjustment') {
-        const { data: adjustments, error: adjError } = await sbAdmin
-          .from('stock_adjustment_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('adjusted_at', startOfDay)
-          .lte('adjusted_at', endOfDay)
-          .order('adjusted_at')
-
-        if (adjError) throw adjError
-        report.adjustments = adjustments || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from stock_adjustment_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3
+           order by l.adjusted_at`,
+          [facilityId, startOfDay, endOfDay]
+        )
+        report.adjustments = rows
         report.summary.total_adjustments = report.adjustments.length
       }
 
       // Get transfer data
       if (category === 'all' || category === 'transfer') {
-        const { data: transfers, error: transferError } = await sbAdmin
-          .from('stock_transfer_log')
-          .select('*,commodities(id,name,category,unit)')
-          .or(`sending_facility_id.eq.${facilityId},receiving_facility_id.eq.${facilityId}`)
-          .gte('initiated_at', startOfDay)
-          .lte('initiated_at', endOfDay)
-          .order('initiated_at')
-
-        if (transferError) throw transferError
-        report.transfers = transfers || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from stock_transfer_log l
+           left join commodities c on c.id = l.commodity_id
+           where (l.sending_facility_id = $1 or l.receiving_facility_id = $1)
+             and l.initiated_at >= $2 and l.initiated_at <= $3
+           order by l.initiated_at`,
+          [facilityId, startOfDay, endOfDay]
+        )
+        report.transfers = rows
         report.summary.total_transfers = report.transfers.length
       }
 
@@ -135,54 +153,51 @@ export class ReportService {
         allTransfers = []
 
       if (category === 'all' || category === 'intake') {
-        const { data, error } = await sbAdmin
-          .from('intake_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('received_at', startDate)
-          .lte('received_at', endDate)
-
-        if (error) throw error
-        allIntake = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from intake_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allIntake = rows
         report.summary.total_intake = allIntake.reduce((sum, item) => sum + item.quantity, 0)
       }
 
       if (category === 'all' || category === 'dispense') {
-        const { data, error } = await sbAdmin
-          .from('dispense_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('dispensed_at', startDate)
-          .lte('dispensed_at', endDate)
-
-        if (error) throw error
-        allDispense = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from dispense_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allDispense = rows
         report.summary.total_dispense = allDispense.reduce((sum, item) => sum + item.quantity, 0)
       }
 
       if (category === 'all' || category === 'adjustment') {
-        const { data, error } = await sbAdmin
-          .from('stock_adjustment_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('adjusted_at', startDate)
-          .lte('adjusted_at', endDate)
-
-        if (error) throw error
-        allAdjustments = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from stock_adjustment_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allAdjustments = rows
         report.summary.total_adjustments = allAdjustments.length
       }
 
       if (category === 'all' || category === 'transfer') {
-        const { data, error } = await sbAdmin
-          .from('stock_transfer_log')
-          .select('*,commodities(id,name,category,unit)')
-          .or(`sending_facility_id.eq.${facilityId},receiving_facility_id.eq.${facilityId}`)
-          .gte('initiated_at', startDate)
-          .lte('initiated_at', endDate)
-
-        if (error) throw error
-        allTransfers = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from stock_transfer_log l
+           left join commodities c on c.id = l.commodity_id
+           where (l.sending_facility_id = $1 or l.receiving_facility_id = $1)
+             and l.initiated_at >= $2 and l.initiated_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allTransfers = rows
         report.summary.total_transfers = allTransfers.length
       }
 
@@ -251,54 +266,51 @@ export class ReportService {
         allTransfers = []
 
       if (category === 'all' || category === 'intake') {
-        const { data, error } = await sbAdmin
-          .from('intake_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('received_at', startDate)
-          .lte('received_at', endDate)
-
-        if (error) throw error
-        allIntake = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from intake_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allIntake = rows
         report.summary.total_intake = allIntake.reduce((sum, item) => sum + item.quantity, 0)
       }
 
       if (category === 'all' || category === 'dispense') {
-        const { data, error } = await sbAdmin
-          .from('dispense_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('dispensed_at', startDate)
-          .lte('dispensed_at', endDate)
-
-        if (error) throw error
-        allDispense = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from dispense_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allDispense = rows
         report.summary.total_dispense = allDispense.reduce((sum, item) => sum + item.quantity, 0)
       }
 
       if (category === 'all' || category === 'adjustment') {
-        const { data, error } = await sbAdmin
-          .from('stock_adjustment_log')
-          .select('*,commodities(id,name,category,unit)')
-          .eq('facility_id', facilityId)
-          .gte('adjusted_at', startDate)
-          .lte('adjusted_at', endDate)
-
-        if (error) throw error
-        allAdjustments = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from stock_adjustment_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allAdjustments = rows
         report.summary.total_adjustments = allAdjustments.length
       }
 
       if (category === 'all' || category === 'transfer') {
-        const { data, error } = await sbAdmin
-          .from('stock_transfer_log')
-          .select('*,commodities(id,name,category,unit)')
-          .or(`sending_facility_id.eq.${facilityId},receiving_facility_id.eq.${facilityId}`)
-          .gte('initiated_at', startDate)
-          .lte('initiated_at', endDate)
-
-        if (error) throw error
-        allTransfers = data || []
+        const { rows } = await query(
+          `select l.*, ${COMM4_OBJ}
+           from stock_transfer_log l
+           left join commodities c on c.id = l.commodity_id
+           where (l.sending_facility_id = $1 or l.receiving_facility_id = $1)
+             and l.initiated_at >= $2 and l.initiated_at <= $3`,
+          [facilityId, startDate, endDate]
+        )
+        allTransfers = rows
         report.summary.total_transfers = allTransfers.length
       }
 
@@ -334,18 +346,20 @@ export class ReportService {
    */
   static async getStockBalance(facilityId, asOfDate = null) {
     try {
-      let query = sbAdmin
-        .from('stock')
-        .select('*,commodities(id,name,category,unit),facilities(id,name)')
-        .eq('facility_id', facilityId)
-
-      const { data, error } = await query
-
-      if (error) throw error
+      const { rows } = await query(
+        `select s.*,
+                json_build_object('id', c.id, 'name', c.name, 'category', c.category, 'unit', c.unit) as commodities,
+                json_build_object('id', f.id, 'name', f.name) as facilities
+         from stock s
+         left join commodities c on c.id = s.commodity_id
+         left join facilities f on f.id = s.facility_id
+         where s.facility_id = $1`,
+        [facilityId]
+      )
 
       // Calculate balance accounting for all transactions up to asOfDate if provided
       const balance = {}
-      data?.forEach(stock => {
+      rows.forEach(stock => {
         balance[stock.commodity_id] = {
           id: stock.id,
           commodity_id: stock.commodity_id,
@@ -374,44 +388,44 @@ export class ReportService {
       let csvData = 'Date,Type,Commodity,Quantity,Reference,Notes\n'
 
       if (category === 'all' || category === 'intake') {
-        const { data } = await sbAdmin
-          .from('intake_log')
-          .select('*,commodities(id,name)')
-          .eq('facility_id', facilityId)
-          .gte('received_at', startDate)
-          .lte('received_at', endDate)
-          .order('received_at')
-
-        data?.forEach(item => {
-          csvData += `${item.received_at?.split('T')[0]},INTAKE,"${item.commodities?.name}",${item.quantity},"${item.delivery_note_ref || ''}","${item.notes || ''}"\n`
+        const { rows } = await query(
+          `select l.*, ${COMM2_OBJ}
+           from intake_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3
+           order by l.received_at`,
+          [facilityId, startDate, endDate]
+        )
+        rows.forEach(item => {
+          csvData += `${dateOnly(item.received_at)},INTAKE,"${item.commodities?.name}",${item.quantity},"${item.delivery_note_ref || ''}","${item.notes || ''}"\n`
         })
       }
 
       if (category === 'all' || category === 'dispense') {
-        const { data } = await sbAdmin
-          .from('dispense_log')
-          .select('*,commodities(id,name)')
-          .eq('facility_id', facilityId)
-          .gte('dispensed_at', startDate)
-          .lte('dispensed_at', endDate)
-          .order('dispensed_at')
-
-        data?.forEach(item => {
-          csvData += `${item.dispensed_at?.split('T')[0]},DISPENSE,"${item.commodities?.name}",${item.quantity},"${item.dispensed_by || ''}","${item.notes || ''}"\n`
+        const { rows } = await query(
+          `select l.*, ${COMM2_OBJ}
+           from dispense_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3
+           order by l.dispensed_at`,
+          [facilityId, startDate, endDate]
+        )
+        rows.forEach(item => {
+          csvData += `${dateOnly(item.dispensed_at)},DISPENSE,"${item.commodities?.name}",${item.quantity},"${item.dispensed_by || ''}","${item.notes || ''}"\n`
         })
       }
 
       if (category === 'all' || category === 'adjustment') {
-        const { data } = await sbAdmin
-          .from('stock_adjustment_log')
-          .select('*,commodities(id,name)')
-          .eq('facility_id', facilityId)
-          .gte('adjusted_at', startDate)
-          .lte('adjusted_at', endDate)
-          .order('adjusted_at')
-
-        data?.forEach(item => {
-          csvData += `${item.adjusted_at?.split('T')[0]},${item.adjustment_type},"${item.commodities?.name}",${item.quantity},"${item.reason}","${item.notes || ''}"\n`
+        const { rows } = await query(
+          `select l.*, ${COMM2_OBJ}
+           from stock_adjustment_log l
+           left join commodities c on c.id = l.commodity_id
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3
+           order by l.adjusted_at`,
+          [facilityId, startDate, endDate]
+        )
+        rows.forEach(item => {
+          csvData += `${dateOnly(item.adjusted_at)},${item.adjustment_type},"${item.commodities?.name}",${item.quantity},"${item.reason}","${item.notes || ''}"\n`
         })
       }
 

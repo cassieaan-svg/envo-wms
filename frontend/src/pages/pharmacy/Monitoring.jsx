@@ -1,17 +1,16 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate } from '../../utils/helpers'
+import { fmtDate, capExpiryBatchesToStockByFacility } from '../../utils/helpers'
 
 export function Monitoring() {
   const store = useAppStore()
   const isAdm = store.isAdmin()
   const commoditySection = store.commoditySection
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [tab, setTab]       = useState('consumption')
   const [period, setPeriod] = useState(30)
   const [consData, setCons] = useState(null)
@@ -30,7 +29,16 @@ export function Monitoring() {
   const { fid, scopeIds } = store.getAdminStockScope()
   const scopeKey = fid || (scopeIds && scopeIds.length ? scopeIds.join(',') : 'all')
   const commIds  = store.allCommodities.map(c => c.id)
-  const applyScope = q => fid ? q.eq('facility_id', fid) : (scopeIds && scopeIds.length ? q.in('facility_id', scopeIds) : q)
+  // Resolve the facility_ids view-filter for the log queries: the admin's scope
+  // (single facility or LGA/state set) optionally narrowed by a picked LGA. Returns
+  // an array for facility_ids, or undefined to span the whole token scope. An empty
+  // result becomes a sentinel id so the server returns nothing (not everything).
+  const facilityFilter = (lgaIds) => {
+    let base = fid ? [fid] : (scopeIds && scopeIds.length ? scopeIds : null)
+    if (lgaIds) base = base ? base.filter(id => lgaIds.includes(id)) : lgaIds
+    if (base == null) return undefined
+    return base.length ? base : ['00000000-0000-0000-0000-000000000000']
+  }
 
   // Facility metadata for LGA / facility drill-downs
   const facMeta = {}
@@ -45,21 +53,24 @@ export function Monitoring() {
     setCatDrill(null); setCommDrill(null); setMetricDrill(null)
     const start = new Date(); start.setDate(start.getDate()-period)
     const lgaIds = lgaFilter ? store.allFacilities.filter(f => f.lga === lgaFilter).map(f => f.id) : null
+    const facility_ids = facilityFilter(lgaIds)
 
-    // Paginate — an admin over a long period easily exceeds PostgREST's 1000-row
-    // cap, which would otherwise silently understate totals and drill-downs.
+    // Paginate — an admin over a long period easily exceeds the 1000-row cap,
+    // which would otherwise silently understate totals and drill-downs.
     const PAGE = 1000
     let rows = []
     for (let offset = 0; ; offset += PAGE) {
-      let q = sb.from('dispense_log')
-        .select('facility_id,commodity_id,quantity,dispensed_at,commodities(name,category,unit),facilities(name)')
-        .gte('dispensed_at',start.toISOString()).in('commodity_id',commIds)
-        .order('dispensed_at',{ascending:true}).range(offset, offset + PAGE - 1)
-      q = applyScope(q)
-      if (lgaIds) q = q.in('facility_id', lgaIds.length ? lgaIds : ['00000000-0000-0000-0000-000000000000'])
-      q = sec(q)
-      const { data, error } = await q
-      if (error || !data || !data.length) break
+      let data
+      try {
+        data = await api.dispense.history({
+          facility_ids,
+          commodity_ids: commIds,
+          from: start.toISOString(),
+          section: commoditySection || undefined,
+          limit: PAGE, offset,
+        })
+      } catch { break }
+      if (!data || !data.length) break
       rows = rows.concat(data)
       if (data.length < PAGE) break
     }
@@ -85,26 +96,44 @@ export function Monitoring() {
     const now=new Date()
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
     const lgaIds = expLga ? store.allFacilities.filter(f => f.lga === expLga).map(f => f.id) : null
+    const facility_ids = facilityFilter(lgaIds)
 
-    // Paginate — large jurisdictions over a long window exceed PostgREST's 1000-row cap.
+    // Paginate — large jurisdictions over a long window exceed the 1000-row cap.
     const PAGE = 1000
-    let all = []
-    for (let offset = 0; ; offset += PAGE) {
-      let q = sb.from('intake_log')
-        .select('*,commodities(name,category,unit)')
-        .not('expiry_date','is',null).lte('expiry_date',cutoff)
-        .gte('expiry_date',now.toISOString().split('T')[0])
-        .gt('quantity',0).in('commodity_id',commIds)
-        .order('expiry_date',{ascending:true}).range(offset, offset + PAGE - 1)
-      q = applyScope(q)
-      if (lgaIds) q = q.in('facility_id', lgaIds.length ? lgaIds : ['00000000-0000-0000-0000-000000000000'])
-      q = sec(q)
-      const { data, error } = await q
-      if (error || !data || !data.length) break
-      all = all.concat(data)
-      if (data.length < PAGE) break
+    const fetchAllPages = async (fn, params) => {
+      const out = []
+      for (let offset = 0; ; offset += PAGE) {
+        let data
+        try { data = await fn({ ...params, limit: PAGE, offset }) } catch { break }
+        if (!data || !data.length) break
+        out.push(...data)
+        if (data.length < PAGE) break
+      }
+      return out
     }
-    setExpiryData(all)
+
+    const all = await fetchAllPages(api.intake.history, {
+      facility_ids, commodity_ids: commIds,
+      expiry_from: now.toISOString().split('T')[0], expiry_to: cutoff,
+      has_quantity: true, section: commoditySection || undefined,
+    })
+
+    // Intake records the quantity RECEIVED and is never decremented as stock is
+    // consumed/transferred, so cap each batch to its own facility's current stock
+    // on hand for that commodity. Batches span many facilities here, so SOH is
+    // keyed per (facility, commodity) — not a single per-commodity total. Pharmacy
+    // SOH = store + dispensary (both from /api/stock) + DSD.
+    const [stockRows, dsdRows] = await Promise.all([
+      fetchAllPages(api.stock.list, { facility_ids, commodity_ids: commIds }),
+      fetchAllPages(api.stock.dsd.list, { facility_ids }),
+    ])
+    const sohByFacComm = {}
+    const addSoh = (fId, cId, q) => { const k = `${fId}|${cId}`; sohByFacComm[k] = (sohByFacComm[k] || 0) + (q || 0) }
+    stockRows.forEach(s => addSoh(s.facility_id, s.commodity_id, s.quantity))
+    dsdRows.forEach(d => addSoh(d.facility_id, d.commodity_id, d.quantity))
+
+    // capExpiryBatchesToStockByFacility drops depleted batches and returns soonest-first.
+    setExpiryData(capExpiryBatchesToStockByFacility(all, sohByFacComm))
     setLoading(false)
   }
 

@@ -1,3 +1,5 @@
+import { api } from '../lib/api'
+
 export const REPORT_CATEGORIES = [
   { key: 'all', label: 'All' },
   { key: 'dispense', label: 'Consumption' },
@@ -85,75 +87,61 @@ const normalizeTransfer = (row, fid) => {
   }
 }
 
-const queryLog = async ({ sb, table, select, dateField, from, to, fid, scopeIds, commIds, section }) => {
+// Pull a log table's rows over a date range, paginating past the 1000-row cap.
+// `listFn` is the api history method (api.dispense.history / intake / adjustments);
+// it already applies the right date field, facility scoping (server-side) and the
+// nested commodity/facility objects the normalizers read. `fid` pins one facility;
+// `scopeIds` is an admin's multi-facility view-filter (intersected server-side).
+const queryLog = async ({ listFn, from, to, fid, scopeIds, commIds, section }) => {
   const { start, end } = toRange(from, to)
-
-  // Filter by date SERVER-SIDE and paginate. The previous approach fetched
-  // without a date filter and narrowed client-side, but PostgREST caps results
-  // at 1000 rows — so once a table grew large (e.g. an admin report spanning
-  // every facility) the recent rows fell outside that first page and the report
-  // silently showed nothing. Pull only the date range, in 1000-row pages.
   const PAGE = 1000
   let all = []
   for (let offset = 0; ; offset += PAGE) {
-    let q = sb.from(table).select(select)
-      .gte(dateField, start).lte(dateField, end)
-      .range(offset, offset + PAGE - 1)
-    if (commIds && commIds.length) q = q.in('commodity_id', commIds)
-    if (fid) q = q.eq('facility_id', fid)
-    else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
-    if (section) q = q.eq('section', section)
-    const { data, error } = await q
-    if (error || !data || !data.length) break
+    let data
+    try {
+      data = await listFn({
+        facility_id: fid || undefined,
+        facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+        commodity_ids: (commIds && commIds.length) ? commIds : undefined,
+        from: start, to: end,
+        section: section || undefined,
+        limit: PAGE, offset,
+      })
+    } catch { break }
+    if (!data || !data.length) break
     all = all.concat(data)
     if (data.length < PAGE) break
   }
   return all
 }
 
-export async function fetchReportRows({ sb, category = 'all', from, to, fid, scopeIds, commIds, section }) {
-  const getDispense = async () => {
-    const data = await queryLog({
-      sb, table: 'dispense_log', select: '*,commodities(name,category,unit),facilities(name,lga)',
-      dateField: 'dispensed_at', from, to, fid, scopeIds, commIds, section,
-    })
-    return data.map(normalizeDispense)
-  }
+export async function fetchReportRows({ category = 'all', from, to, fid, scopeIds, commIds, section }) {
+  const getDispense = async () =>
+    (await queryLog({ listFn: api.dispense.history, from, to, fid, scopeIds, commIds, section })).map(normalizeDispense)
 
-  const getIntake = async () => {
-    const data = await queryLog({
-      sb, table: 'intake_log', select: '*,commodities(name,category,unit),facilities(name,lga)',
-      dateField: 'received_at', from, to, fid, scopeIds, commIds, section,
-    })
-    return data.map(normalizeIntake)
-  }
+  const getIntake = async () =>
+    (await queryLog({ listFn: api.intake.history, from, to, fid, scopeIds, commIds, section })).map(normalizeIntake)
 
-  const getAdjustment = async () => {
-    const data = await queryLog({
-      sb, table: 'stock_adjustment_log', select: '*,commodities(name,category,unit),facilities(name,lga)',
-      dateField: 'adjusted_at', from, to, fid, scopeIds, commIds, section,
-    })
-    return data.map(normalizeAdjustment)
-  }
+  const getAdjustment = async () =>
+    (await queryLog({ listFn: api.adjustments.history, from, to, fid, scopeIds, commIds, section })).map(normalizeAdjustment)
 
   const getTransfer = async () => {
-    const { start, end } = toRange(from, to)
+    // section already scopes transfers to pharmacy/lab, so no commodity filter is
+    // needed. from/to are plain dates (the transfers endpoint adds the day bounds).
     const PAGE = 1000
     let all = []
     for (let offset = 0; ; offset += PAGE) {
-      let q = sb.from('stock_transfer_log')
-        .select('*,commodities(name,category,unit)')
-        .gte('initiated_at', start).lte('initiated_at', end)
-        .range(offset, offset + PAGE - 1)
-      if (commIds && commIds.length) q = q.in('commodity_id', commIds)
-      if (fid) q = q.or(`sending_facility_id.eq.${fid},receiving_facility_id.eq.${fid}`)
-      else if (scopeIds && scopeIds.length) {
-        const ids = scopeIds.join(',')
-        q = q.or(`sending_facility_id.in.(${ids}),receiving_facility_id.in.(${ids})`)
-      }
-      if (section) q = q.eq('section', section)
-      const { data, error } = await q
-      if (error || !data || !data.length) break
+      let data
+      try {
+        data = await api.transfers.list({
+          facility_id: fid || undefined,
+          facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+          section: section || undefined,
+          date_field: 'initiated_at', from, to,
+          limit: PAGE, offset,
+        })
+      } catch { break }
+      if (!data || !data.length) break
       all = all.concat(data)
       if (data.length < PAGE) break
     }

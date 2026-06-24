@@ -4,12 +4,21 @@ dotenv.config()
 import express from 'express'
 import cors from 'cors'
 
+import { authMiddleware } from './middleware/auth.js'
+import { attachScope } from './middleware/scope.js'
+import { initRealtime, sseHandler } from './realtime.js'
+
+import authRoutes from './routes/auth.js'
 import stockRoutes from './routes/stock.js'
 import transferRoutes from './routes/transfers.js'
 import dispenseRoutes from './routes/dispense.js'
 import intakeRoutes from './routes/intake.js'
 import adjustmentRoutes from './routes/adjustments.js'
 import reportRoutes from './routes/reports.js'
+import facilityRoutes from './routes/facilities.js'
+import commodityRoutes from './routes/commodities.js'
+import amcSettingsRoutes from './routes/amcSettings.js'
+import editHistoryRoutes from './routes/editHistory.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -28,13 +37,29 @@ app.get('/health', (req, res) => {
   })
 })
 
-// API Routes
+// Auth routes are public (login) or self-guarded (/me, /password apply authMiddleware
+// per-route). Everything under /api/* requires a valid JWT and a derived scope.
+app.use('/auth', authRoutes)
+
+// Realtime SSE stream. Registered BEFORE the /api auth middleware because
+// EventSource can't send an Authorization header — sseHandler verifies ?token= itself.
+app.get('/api/events', sseHandler)
+
+// Gate the entire data surface. authMiddleware verifies the bearer token and sets
+// req.user; attachScope normalizes user_metadata into req.scope. Both run before any
+// /api route handler, so individual routes can assume req.user / req.scope exist.
+app.use('/api', authMiddleware, attachScope)
+
 app.use('/api/stock', stockRoutes)
 app.use('/api/transfers', transferRoutes)
 app.use('/api/dispense', dispenseRoutes)
 app.use('/api/intake', intakeRoutes)
 app.use('/api/adjustments', adjustmentRoutes)
 app.use('/api/reports', reportRoutes)
+app.use('/api/facilities', facilityRoutes)
+app.use('/api/commodities', commodityRoutes)
+app.use('/api/amc-settings', amcSettingsRoutes)
+app.use('/api/edit-history', editHistoryRoutes)
 
 // 404 handler
 app.use((req, res) => {
@@ -54,6 +79,8 @@ app.use((err, req, res, next) => {
     code: 'INTERNAL_ERROR'
   })
 })
+
+initRealtime()
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend API running on http://localhost:${PORT}`)

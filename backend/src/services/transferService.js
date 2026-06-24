@@ -1,354 +1,465 @@
-import { sbAdmin } from '../supabase.js'
+import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
 
+// Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
+// embedded select, rebuilt with json_build_object (PostgREST replacement).
+// stock_transfer_log has two FKs to facilities (sending + receiving), so we do
+// NOT embed a `facilities` object — the frontend reads the denormalized
+// sending_facility_name / receiving_facility_name text columns instead.
+const COMM4_OBJ = `
+  json_build_object('id', c.id, 'name', c.name, 'category', c.category, 'unit', c.unit) as commodities`
+
+const DATE_FIELDS = new Set(['initiated_at', 'resolved_at'])
+
+// Columns written by createTransfers (transfer_type is NOT a column — type is
+// re-derived from notes; see _deriveTransferType).
+const INSERT_COLS = [
+  'sending_facility_id', 'sending_facility_name',
+  'receiving_facility_id', 'receiving_facility_name',
+  'commodity_id', 'commodity_name', 'quantity', 'qty_requested',
+  'status', 'notes', 'initiated_by', 'initiated_at', 'section'
+]
+
 export class TransferService {
+  // ── Reads ──────────────────────────────────────────────────────────────────
+
   /**
-   * Get transfers for a facility
+   * Flexible transfer list. All filters optional:
+   *   facilityId + direction: 'incoming' (receiving=fid), 'outgoing' (sending=fid),
+   *     or 'any'/'all' (either side).
+   *   statuses: array of status values (or `status`: single value).
+   *   section: pharmacy | lab.
+   *   dateField ('initiated_at' | 'resolved_at') + from / to (YYYY-MM-DD).
+   *   notesIncludes: substring the notes must contain (e.g. '[Internal:').
+   *   limit / offset.
    */
-  static async getTransfers(facilityId, options = {}) {
-    const { status, type = 'all', limit = 1000, offset = 0 } = options
+  static async listTransfers(options = {}) {
+    const {
+      facilityId, facilityIds, direction = 'any', status, statuses, section,
+      dateField, from, to, notesIncludes, limit = 1000, offset = 0
+    } = options
 
-    let query = sbAdmin
-      .from('stock_transfer_log')
-      .select('*,commodities(id,name,category,unit),facilities(id,name)')
-      .order('initiated_at', { ascending: false })
-      .range(offset, offset + limit - 1)
+    const params = []
+    const conds = []
 
-    // Filter by facility (incoming or outgoing)
-    if (type === 'incoming') {
-      query = query.eq('receiving_facility_id', facilityId)
-    } else if (type === 'outgoing') {
-      query = query.eq('sending_facility_id', facilityId)
-    } else {
-      // all = incoming + outgoing
-      query = query.or(`receiving_facility_id.eq.${facilityId},sending_facility_id.eq.${facilityId}`)
+    if (facilityId) {
+      params.push(facilityId)
+      const p = `$${params.length}`
+      if (direction === 'incoming') conds.push(`t.receiving_facility_id = ${p}`)
+      else if (direction === 'outgoing') conds.push(`t.sending_facility_id = ${p}`)
+      else conds.push(`(t.receiving_facility_id = ${p} or t.sending_facility_id = ${p})`)
+    } else if (facilityIds && facilityIds.length) {
+      // Scope an admin list to a set of facilities (state/lga narrowing): the
+      // transfer must have either endpoint inside the allowed set.
+      params.push(facilityIds)
+      const p = `$${params.length}`
+      conds.push(`(t.sending_facility_id = any(${p}) or t.receiving_facility_id = any(${p}))`)
     }
 
-    // Filter by status if provided
-    if (status) {
-      query = query.eq('status', status)
+    const statusList = statuses || (status ? [status] : null)
+    if (statusList && statusList.length) {
+      params.push(statusList)
+      conds.push(`t.status = any($${params.length})`)
     }
 
-    const { data, error } = await query
+    if (section) { params.push(section); conds.push(`t.section = $${params.length}`) }
 
-    if (error) throw error
-    return data || []
+    if (notesIncludes) { params.push(`%${notesIncludes}%`); conds.push(`t.notes like $${params.length}`) }
+
+    const orderField = DATE_FIELDS.has(dateField) ? dateField : 'initiated_at'
+    if (from && DATE_FIELDS.has(dateField)) {
+      params.push(`${from}T00:00:00`); conds.push(`t.${orderField} >= $${params.length}`)
+    }
+    if (to && DATE_FIELDS.has(dateField)) {
+      params.push(`${to}T23:59:59`); conds.push(`t.${orderField} <= $${params.length}`)
+    }
+
+    let sql = `select t.*, ${COMM4_OBJ}
+               from stock_transfer_log t
+               left join commodities c on c.id = t.commodity_id`
+    if (conds.length) sql += ` where ${conds.join(' and ')}`
+    params.push(limit, offset)
+    sql += ` order by t.${orderField} desc nulls last limit $${params.length - 1} offset $${params.length}`
+
+    const { rows } = await query(sql, params)
+    return rows
   }
 
   /**
-   * Get single transfer with details
+   * Single transfer with nested commodity. Returns null when not found.
    */
   static async getTransferById(transferId) {
-    const { data, error } = await sbAdmin
-      .from('stock_transfer_log')
-      .select('*,commodities(id,name,category,unit),facilities(id,name)')
-      .eq('id', transferId)
-      .single()
-
-    if (error?.code === 'PGRST116') return null
-    if (error) throw error
-    return data
+    const { rows } = await query(
+      `select t.*, ${COMM4_OBJ}
+       from stock_transfer_log t
+       left join commodities c on c.id = t.commodity_id
+       where t.id = $1`,
+      [transferId]
+    )
+    return rows[0] || null
   }
 
-  /**
-   * Create transfer request
-   * Supports multiple line items
-   */
-  static async createTransfer(transferData) {
-    const {
-      lines,
-      receiving_facility_id,
-      sending_facility_id,
-      transfer_type,
-      notes,
-      initiated_by,
-      section
-    } = transferData
+  // ── Create ───────────────────────────────────────────────────────────────
 
-    if (!lines || lines.length === 0) {
+  /**
+   * Bulk-create transfer rows. Each line is a (mostly) complete row; the caller
+   * sets status/notes (the frontend already encodes the type into notes and the
+   * appropriate initial status). NOT NULL name columns are resolved from the
+   * line, then looked up, so the insert always satisfies the schema.
+   */
+  static async createTransfers(lines) {
+    if (!Array.isArray(lines) || lines.length === 0) {
       throw new Error('At least one line item required')
     }
 
-    if (!transfer_type) {
-      throw new Error('transfer_type is required')
+    // Resolve commodity names in one query.
+    const commodityIds = [...new Set(lines.map(l => l.commodity_id).filter(Boolean))]
+    const commodityNames = {}
+    if (commodityIds.length) {
+      const { rows } = await query('select id, name from commodities where id = any($1)', [commodityIds])
+      rows.forEach(r => { commodityNames[r.id] = r.name })
     }
 
-    // Prepare payloads for all lines
-    const payloads = lines.map(line => ({
-      sending_facility_id: sending_facility_id || null,
-      receiving_facility_id: receiving_facility_id || null,
-      commodity_id: line.commodity_id,
-      quantity: parseInt(line.quantity),
-      qty_requested: parseInt(line.qty_requested || line.quantity),
-      status: this._getInitialStatus(transfer_type),
-      transfer_type,
-      notes: notes || '',
-      initiated_by,
-      initiated_at: new Date().toISOString(),
-      section
-    }))
+    const params = []
+    const valueGroups = []
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i]
+      if (!l.commodity_id || l.quantity === undefined) {
+        throw new Error('Each line requires commodity_id and quantity')
+      }
+      const sendName = l.sending_facility_name ?? (await this._facilityName(l.sending_facility_id))
+      const recvName = l.receiving_facility_name ?? (await this._facilityName(l.receiving_facility_id))
+      const base = i * INSERT_COLS.length
+      params.push(
+        l.sending_facility_id || null,
+        sendName || null,
+        l.receiving_facility_id || null,
+        recvName || '',
+        l.commodity_id,
+        l.commodity_name || commodityNames[l.commodity_id] || '',
+        parseInt(l.quantity),
+        parseInt(l.qty_requested ?? l.quantity),
+        l.status || 'pending',
+        l.notes ?? null,
+        l.initiated_by || null,
+        l.initiated_at || new Date().toISOString(),
+        l.section ?? null
+      )
+      valueGroups.push(`(${INSERT_COLS.map((_, j) => `$${base + j + 1}`).join(',')})`)
+    }
 
-    // Batch insert all lines
-    const { data, error } = await sbAdmin
-      .from('stock_transfer_log')
-      .insert(payloads)
-      .select()
-
-    if (error) throw error
-    return data || []
+    const { rows } = await query(
+      `insert into stock_transfer_log (${INSERT_COLS.join(', ')})
+       values ${valueGroups.join(', ')}
+       returning *`,
+      params
+    )
+    return rows
   }
 
+  // ── Lifecycle transitions (each transactional) ─────────────────────────────
+
   /**
-   * Approve transfer (complex operation with stock updates)
+   * Dispatch an approved/pending external transfer: status → in_transit, set the
+   * issued quantity, append dispatch metadata to notes, and decrement the sender
+   * store stock.
    */
-  static async approveTransfer(transferId, approvalData) {
-    const { approved_by, notes, facility_assignment } = approvalData
-
-    // Get transfer details
+  static async dispatch(transferId, data) {
+    const { approved_by, carrier, expiry, batch, quantity } = data
     const transfer = await this.getTransferById(transferId)
-    if (!transfer) throw new Error('Transfer not found')
+    if (!transfer) return null
+    const qty = parseInt(quantity ?? transfer.quantity)
 
-    // Determine if this is a DSD/SDP request that needs facility assignment
-    const needsFacilityAssignment = ['dsd', 'sdp'].includes(transfer.transfer_type)
-    if (needsFacilityAssignment && !facility_assignment) {
-      throw new Error(`${transfer.transfer_type.toUpperCase()} transfer requires facility_assignment`)
-    }
-
-    const issuedQuantity = parseInt(approvalData.quantity || transfer.quantity)
-
-    try {
-      // Update transfer status
-      const updatePayload = {
-        status: transfer.transfer_type === 'dsd' || transfer.transfer_type === 'sdp'
-          ? 'in_transit'
-          : 'in_transit',
-        resolved_by: approved_by,
-        resolved_at: new Date().toISOString()
-      }
-
-      if (notes) updatePayload.notes = transfer.notes + ` [Approved: ${notes}]`
-
-      const { data: updatedTransfer, error: updateError } = await sbAdmin
-        .from('stock_transfer_log')
-        .update(updatePayload)
-        .eq('id', transferId)
-        .select()
-
-      if (updateError) throw updateError
-
-      // Deduct from sender stock if applicable
+    return withTransaction(async exec => {
+      const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${expiry || ''}] [Batch: ${batch || ''}]`
+      const newNotes = transfer.notes ? `${transfer.notes} ${meta}` : meta
+      const { rows } = await exec(
+        `update stock_transfer_log set status = 'in_transit', quantity = $2, notes = $3
+         where id = $1 returning *`,
+        [transferId, qty, newNotes]
+      )
       if (transfer.sending_facility_id) {
-        const senderStock = await StockService.getStockByFacilityAndCommodity(
-          transfer.sending_facility_id,
-          transfer.commodity_id,
-          'store'
-        )
-
-        if (senderStock) {
-          await StockService.decrementStock(senderStock.id, issuedQuantity)
-        }
+        const stk = await StockService.getStockByFacilityAndCommodity(
+          transfer.sending_facility_id, transfer.commodity_id, 'store', exec)
+        if (stk) await StockService.decrementStock(stk.id, qty, exec)
       }
-
-      // Add to receiver stock or DSD/SDP stock
-      if (transfer.receiving_facility_id && transfer.transfer_type !== 'dsd' && transfer.transfer_type !== 'sdp') {
-        const receiverStock = await StockService.getStockByFacilityAndCommodity(
-          transfer.receiving_facility_id,
-          transfer.commodity_id,
-          'store'
-        )
-
-        if (receiverStock) {
-          await StockService.incrementStock(receiverStock.id, issuedQuantity)
-        } else {
-          await StockService.createStock({
-            facility_id: transfer.receiving_facility_id,
-            commodity_id: transfer.commodity_id,
-            quantity: issuedQuantity,
-            location_type: 'store',
-            section: transfer.section
-          })
-        }
-      } else if (transfer.transfer_type === 'dsd') {
-        // Update DSD stock
-        const dsdSiteName = facility_assignment || transfer.receiving_facility_name
-        const dsdStock = await StockService.getDsdStockByFacilitySiteCommodity(
-          transfer.sending_facility_id,
-          dsdSiteName,
-          transfer.commodity_id
-        )
-
-        if (dsdStock) {
-          await sbAdmin
-            .from('dsd_stock')
-            .update({
-              quantity: dsdStock.quantity + issuedQuantity,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', dsdStock.id)
-        } else {
-          await sbAdmin
-            .from('dsd_stock')
-            .insert({
-              facility_id: transfer.sending_facility_id,
-              dsd_site_name: dsdSiteName,
-              commodity_id: transfer.commodity_id,
-              quantity: issuedQuantity,
-              updated_at: new Date().toISOString()
-            })
-        }
-      } else if (transfer.transfer_type === 'sdp') {
-        // Update SDP stock
-        const sdpName = facility_assignment || transfer.receiving_facility_name
-        const sdpStock = await StockService.getSdpStockByFacilitySiteCommodity(
-          transfer.sending_facility_id,
-          sdpName,
-          transfer.commodity_id
-        )
-
-        if (sdpStock) {
-          await sbAdmin
-            .from('sdp_stock')
-            .update({
-              quantity: sdpStock.quantity + issuedQuantity,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', sdpStock.id)
-        } else {
-          await sbAdmin
-            .from('sdp_stock')
-            .insert({
-              facility_id: transfer.sending_facility_id,
-              sdp_name: sdpName,
-              commodity_id: transfer.commodity_id,
-              quantity: issuedQuantity,
-              updated_at: new Date().toISOString()
-            })
-        }
-      }
-
-      return updatedTransfer?.[0] || null
-    } catch (err) {
-      console.error('Error approving transfer:', err)
-      throw err
-    }
+      return rows[0] || null
+    })
   }
 
   /**
-   * Accept transfer (receiver side)
+   * Admin assigns a source facility to a pending request (no stock movement).
    */
-  static async acceptTransfer(transferId, acceptanceData) {
-    const { accepted_by, notes } = acceptanceData
-
+  static async assignSource(transferId, data) {
+    const { sending_facility_id, sending_facility_name, quantity, reviewed_by } = data
     const transfer = await this.getTransferById(transferId)
-    if (!transfer) throw new Error('Transfer not found')
+    if (!transfer) return null
+    if (!sending_facility_id) throw new Error('sending_facility_id is required')
 
-    try {
-      // Add to receiver stock
-      const receiverStock = await StockService.getStockByFacilityAndCommodity(
-        transfer.receiving_facility_id,
-        transfer.commodity_id,
-        'store'
+    const name = sending_facility_name ?? (await this._facilityName(sending_facility_id))
+    const note = `[Reviewed by: ${reviewed_by || ''}]`
+    const newNotes = transfer.notes ? `${transfer.notes} ${note}` : note
+    const { rows } = await query(
+      `update stock_transfer_log
+       set sending_facility_id = $2, sending_facility_name = $3, quantity = $4, notes = $5
+       where id = $1 returning *`,
+      [transferId, sending_facility_id, name || '', parseInt(quantity ?? transfer.quantity), newNotes]
+    )
+    return rows[0] || null
+  }
+
+  /**
+   * Receiver accepts an in-transit external transfer: credit receiver store
+   * stock, write an intake_log entry, and mark accepted.
+   */
+  static async accept(transferId, data) {
+    const { received_by } = data
+    const transfer = await this.getTransferById(transferId)
+    if (!transfer) return null
+    if (!transfer.receiving_facility_id) throw new Error('Transfer has no receiving facility')
+
+    return withTransaction(async exec => {
+      await this._creditStock(exec, transfer.receiving_facility_id, transfer.commodity_id, transfer.quantity, 'store', transfer.section)
+
+      await exec(
+        `insert into intake_log
+           (facility_id, commodity_id, quantity, supplier_source, condition_on_arrival, received_by, received_at, notes, section)
+         values ($1,$2,$3,$4,'Good',$5, now(), $6, $7)`,
+        [transfer.receiving_facility_id, transfer.commodity_id, transfer.quantity,
+         transfer.sending_facility_name, received_by,
+         `Facility transfer in from ${transfer.sending_facility_name || 'Unknown'}`, transfer.section]
       )
 
-      if (receiverStock) {
-        await StockService.incrementStock(receiverStock.id, transfer.quantity)
-      } else {
-        await StockService.createStock({
-          facility_id: transfer.receiving_facility_id,
-          commodity_id: transfer.commodity_id,
-          quantity: transfer.quantity,
-          location_type: 'store',
-          section: transfer.section
-        })
-      }
-
-      // Record intake log
-      await sbAdmin
-        .from('intake_log')
-        .insert({
-          facility_id: transfer.receiving_facility_id,
-          commodity_id: transfer.commodity_id,
-          quantity: transfer.quantity,
-          supplier_source: transfer.sending_facility_id || transfer.sending_facility_name,
-          received_by: accepted_by,
-          received_at: new Date().toISOString(),
-          notes: `Transfer from ${transfer.sending_facility_name || 'Unknown'}. ${notes || ''}`,
-          section: transfer.section
-        })
-
-      // Update transfer status
-      const { data, error } = await sbAdmin
-        .from('stock_transfer_log')
-        .update({
-          status: 'accepted',
-          resolved_at: new Date().toISOString(),
-          resolved_by: accepted_by
-        })
-        .eq('id', transferId)
-        .select()
-
-      if (error) throw error
-      return data?.[0] || null
-    } catch (err) {
-      console.error('Error accepting transfer:', err)
-      throw err
-    }
+      const { rows } = await exec(
+        `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2
+         where id = $1 returning *`,
+        [transferId, received_by]
+      )
+      return rows[0] || null
+    })
   }
 
   /**
-   * Cancel transfer
+   * Receiver disputes an in-transit transfer (no stock movement here — the
+   * sender later restores via restoreDisputed). Optional facilityId guard
+   * matches the frontend's receiving_facility_id check.
    */
-  static async cancelTransfer(transferId, cancellationData) {
-    const { cancelled_by, reason } = cancellationData
+  static async dispute(transferId, data) {
+    const { disputed_by, facilityId, dispute_note } = data
+    const params = [transferId, disputed_by || null, dispute_note || 'Disputed by receiver']
+    let sql = `update stock_transfer_log
+               set status = 'disputed', resolved_at = now(), resolved_by = $2, dispute_note = $3
+               where id = $1`
+    if (facilityId) { params.push(facilityId); sql += ` and receiving_facility_id = $${params.length}` }
+    sql += ` returning *`
+    const { rows } = await query(sql, params)
+    return rows[0] || null
+  }
 
+  /**
+   * Sender restores stock for a disputed transfer: credit sender store stock and
+   * mark accepted with a 'stock restored' note. Optional facilityId guard
+   * (sending side).
+   */
+  static async restoreDisputed(transferId, data) {
+    const { facilityId } = data
     const transfer = await this.getTransferById(transferId)
-    if (!transfer) throw new Error('Transfer not found')
+    if (!transfer) return null
+    const senderId = facilityId || transfer.sending_facility_id
+    if (!senderId) throw new Error('Transfer has no sending facility')
 
-    try {
-      // If transfer was already in transit, return stock to sender
-      if (transfer.status === 'in_transit' && transfer.sending_facility_id) {
-        const senderStock = await StockService.getStockByFacilityAndCommodity(
-          transfer.sending_facility_id,
-          transfer.commodity_id,
-          'store'
-        )
+    return withTransaction(async exec => {
+      await this._creditStock(exec, senderId, transfer.commodity_id, transfer.quantity, 'store', transfer.section)
+      const params = [transferId]
+      let sql = `update stock_transfer_log
+                 set status = 'accepted', resolved_at = now(), dispute_note = 'Disputed — stock restored'
+                 where id = $1`
+      if (facilityId) { params.push(facilityId); sql += ` and sending_facility_id = $${params.length}` }
+      sql += ` returning *`
+      const { rows } = await exec(sql, params)
+      return rows[0] || null
+    })
+  }
 
-        if (senderStock) {
-          await StockService.incrementStock(senderStock.id, transfer.quantity)
+  /**
+   * Cancel / reject a transfer (no stock movement — used for pending requests
+   * and pending_approval requests that never moved stock).
+   */
+  static async cancel(transferId, data = {}) {
+    const { cancelled_by, reason } = data
+    const transfer = await this.getTransferById(transferId)
+    if (!transfer) return null
+    const notes = reason ? `${transfer.notes || ''} [Cancelled: ${reason}]`.trim() : transfer.notes
+    const { rows } = await query(
+      `update stock_transfer_log
+       set status = 'cancelled', resolved_at = now(), resolved_by = $2, notes = $3
+       where id = $1 returning *`,
+      [transferId, cancelled_by || null, notes]
+    )
+    return rows[0] || null
+  }
+
+  /**
+   * Store manager approves an internal (Store → Dispensary) request: move
+   * `quantity` from store to dispensary stock and mark accepted.
+   */
+  static async approveInternal(transferId, data) {
+    const { approved_by, quantity } = data
+    const transfer = await this.getTransferById(transferId)
+    if (!transfer) return null
+    const fid = transfer.sending_facility_id
+    const qty = parseInt(quantity ?? transfer.quantity)
+
+    return withTransaction(async exec => {
+      const storeStk = await StockService.getStockByFacilityAndCommodity(fid, transfer.commodity_id, 'store', exec)
+      if (!storeStk || storeStk.quantity < qty) {
+        { const e = new Error(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`); e.status = 409; throw e }
+      }
+      await StockService.decrementStock(storeStk.id, qty, exec)
+      await this._creditStock(exec, fid, transfer.commodity_id, qty, 'dispensary', transfer.section)
+
+      const { rows } = await exec(
+        `update stock_transfer_log set status = 'accepted', quantity = $2, resolved_at = now(), resolved_by = $3
+         where id = $1 returning *`,
+        [transferId, qty, approved_by]
+      )
+      return rows[0] || null
+    })
+  }
+
+  /**
+   * Store manager approves a SDP/DSD request: deduct store stock and mark
+   * dispatched (the site user confirms receipt later via receive()).
+   */
+  static async approveDsd(transferId, data) {
+    const { approved_by, quantity } = data
+    const transfer = await this.getTransferById(transferId)
+    if (!transfer) return null
+    const fid = transfer.sending_facility_id
+    const qty = parseInt(quantity ?? transfer.quantity)
+
+    return withTransaction(async exec => {
+      const storeStk = await StockService.getStockByFacilityAndCommodity(fid, transfer.commodity_id, 'store', exec)
+      if (!storeStk || storeStk.quantity < qty) {
+        { const e = new Error(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`); e.status = 409; throw e }
+      }
+      await StockService.decrementStock(storeStk.id, qty, exec)
+
+      const { rows } = await exec(
+        `update stock_transfer_log set status = 'dispatched', quantity = $2, resolved_by = $3
+         where id = $1 returning *`,
+        [transferId, qty, `[Approved: ${approved_by || ''}]`]
+      )
+      return rows[0] || null
+    })
+  }
+
+  /**
+   * Site user confirms receipt of a dispatched SDP/DSD transfer: credit the
+   * site stock bucket (sdp_stock / dsd_stock keyed by the site name parsed from
+   * notes) and mark accepted, appending the receiver to resolved_by.
+   */
+  static async receive(transferId, data) {
+    const { received_by } = data
+    const transfer = await this.getTransferById(transferId)
+    if (!transfer) return null
+
+    const fid = transfer.sending_facility_id
+    const isDsd = /\[DSD:/i.test(transfer.notes || '')
+    const site = this._siteFromNotes(transfer.notes) || transfer.receiving_facility_name
+    if (!site) throw new Error('Could not resolve the destination site name')
+    const qty = transfer.quantity
+
+    return withTransaction(async exec => {
+      if (isDsd) {
+        const existing = await StockService.getDsdStockByFacilitySiteCommodity(fid, site, transfer.commodity_id, exec)
+        if (existing) {
+          await exec('update dsd_stock set quantity = quantity + $2, updated_at = now() where id = $1', [existing.id, qty])
+        } else {
+          await exec(`insert into dsd_stock (facility_id, dsd_site_name, commodity_id, quantity, updated_at)
+                      values ($1,$2,$3,$4, now())`, [fid, site, transfer.commodity_id, qty])
+        }
+      } else {
+        const existing = await StockService.getSdpStockByFacilitySiteCommodity(fid, site, transfer.commodity_id, exec)
+        if (existing) {
+          await exec('update sdp_stock set quantity = quantity + $2, updated_at = now() where id = $1', [existing.id, qty])
+        } else {
+          await exec(`insert into sdp_stock (facility_id, sdp_name, commodity_id, quantity, updated_at)
+                      values ($1,$2,$3,$4, now())`, [fid, site, transfer.commodity_id, qty])
         }
       }
 
-      // Update transfer status
-      const { data, error } = await sbAdmin
-        .from('stock_transfer_log')
-        .update({
-          status: 'cancelled',
-          resolved_at: new Date().toISOString(),
-          resolved_by: cancelled_by,
-          notes: transfer.notes + ` [Cancelled: ${reason}]`
-        })
-        .eq('id', transferId)
-        .select()
-
-      if (error) throw error
-      return data?.[0] || null
-    } catch (err) {
-      console.error('Error cancelling transfer:', err)
-      throw err
-    }
+      const resolvedBy = `${transfer.resolved_by || ''} [Received by: ${received_by || ''}]`.trim()
+      const { rows } = await exec(
+        `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2
+         where id = $1 returning *`,
+        [transferId, resolvedBy]
+      )
+      return rows[0] || null
+    })
   }
 
   /**
-   * Get initial status based on transfer type
+   * Metadata-only update (no stock side-effects). For edit-quantity, dismiss,
+   * mark-fulfilled, or notes edits. Only whitelisted fields are written.
    */
-  static _getInitialStatus(transferType) {
-    const statusMap = {
-      'request_for_redistribution': 'pending',
-      'external_redistribution': 'in_transit',
-      'internal': 'pending_approval',
-      'dsd': 'pending_approval',
-      'sdp': 'pending_approval'
+  static async updateTransfer(transferId, fields = {}) {
+    const allowed = ['status', 'quantity', 'qty_requested', 'notes', 'dispute_note', 'resolved_by', 'resolved_at']
+    const sets = []
+    const params = [transferId]
+    for (const k of allowed) {
+      if (fields[k] !== undefined) {
+        params.push(k === 'quantity' || k === 'qty_requested' ? parseInt(fields[k]) : fields[k])
+        sets.push(`${k} = $${params.length}`)
+      }
     }
-    return statusMap[transferType] || 'pending'
+    if (!sets.length) throw new Error('No updatable fields provided')
+    const { rows } = await query(
+      `update stock_transfer_log set ${sets.join(', ')} where id = $1 returning *`,
+      params
+    )
+    return rows[0] || null
+  }
+
+  /**
+   * Hard-delete a transfer row.
+   */
+  static async deleteTransfer(transferId) {
+    const { rowCount } = await query('delete from stock_transfer_log where id = $1', [transferId])
+    return rowCount > 0
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /** Credit (increment-or-create) store/dispensary stock within a transaction. */
+  static async _creditStock(exec, facilityId, commodityId, qty, locationType, section) {
+    const existing = await StockService.getStockByFacilityAndCommodity(facilityId, commodityId, locationType, exec)
+    if (existing) {
+      await StockService.incrementStock(existing.id, qty, exec)
+    } else {
+      await StockService.createStock(
+        { facility_id: facilityId, commodity_id: commodityId, quantity: qty, location_type: locationType, section },
+        exec
+      )
+    }
+  }
+
+  static async _facilityName(facilityId) {
+    if (!facilityId) return null
+    const { rows } = await query('select name from facilities where id = $1', [facilityId])
+    return rows[0]?.name || null
+  }
+
+  static _siteFromNotes(notes) {
+    const m = (notes || '').match(/\[(?:SDP|DSD):\s*([^\]]+)\]/i)
+    return m ? m[1].trim() : null
+  }
+
+  static _deriveTransferType(transfer) {
+    const notes = transfer.notes || ''
+    if (/\[DSD:/i.test(notes)) return 'dsd'
+    if (/\[SDP:/i.test(notes)) return 'sdp'
+    if (/\[Internal:/i.test(notes)) return 'internal'
+    return 'facility'
   }
 }

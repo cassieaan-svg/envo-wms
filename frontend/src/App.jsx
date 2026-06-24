@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sb } from './lib/supabase'
+import { auth, getToken } from './lib/api'
 import { useAppStore } from './store/appStore'
 import { useRealtimeStock } from './hooks/useStock'
 import { hydrateSession } from './utils/session'
@@ -153,15 +153,21 @@ export default function App() {
   const [authed, setAuthed]     = useState(false)
 
   useEffect(() => {
-    sb.auth.getSession().then(async ({ data: { session } }) => {
-      // Restore a persisted session on refresh by rebuilding the store from it,
-      // instead of forcing the user to sign in again.
-      if (session?.user) {
-        try { await hydrateSession(session.user) }
-        catch { /* hydration failed — fall through to the sign-in screen */ }
+    (async () => {
+      // Restore a persisted session on refresh by validating the stored JWT and
+      // rebuilding the store from it, instead of forcing a fresh sign-in.
+      if (getToken()) {
+        try {
+          const u = await auth.me()
+          await hydrateSession(u)
+        } catch {
+          // Token missing/expired or hydration failed — clear it and fall
+          // through to the sign-in screen.
+          auth.signOut()
+        }
       }
       setChecking(false)
-    })
+    })()
   }, [])
 
   if (checking) {

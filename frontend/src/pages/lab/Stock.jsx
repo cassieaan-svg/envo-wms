@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
@@ -13,7 +13,6 @@ export function Stock() {
   const store         = useAppStore()
   const { loadStock } = useStock()
   const commoditySection = store.commoditySection
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [rows, setRows]       = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
@@ -36,22 +35,14 @@ export function Stock() {
     setLoading(true)
 
     if (isSDP) {
-      const { data } = await sb.from('sdp_stock')
-        .select('*, commodities(name,unit,category)')
-        .eq('facility_id', fid)
-        .eq('sdp_name', sdpName)
-        .order('commodities(name)')
+      const data = await api.stock.sdp.list({ facility_id: fid, sdp_name: sdpName }).catch(() => [])
       setRows(data || [])
       setLoading(false)
       return
     }
 
     if (isDSD) {
-      const { data } = await sb.from('dsd_stock')
-        .select('*, commodities(name,unit,category)')
-        .eq('facility_id', fid)
-        .eq('dsd_site_name', dsdSiteName)
-        .order('commodities(name)')
+      const data = await api.stock.dsd.list({ facility_id: fid, dsd_site_name: dsdSiteName }).catch(() => [])
       setRows(data || [])
       setLoading(false)
       return
@@ -66,14 +57,12 @@ export function Stock() {
     const { fid: amcFid, scopeIds } = store.getAdminStockScope()
     const amcWin = resolveAmcWindow(amcFid ? store.amcWindows[amcFid] : null)
     const commIds = store.stockData.map(r => r.commodity_id)
-    const amcMap = await loadConsumptionAmcMap(sb, { commIds, fid: amcFid, scopeIds, amcWin, applySection: sec })
+    const amcMap = await loadConsumptionAmcMap({ commIds, fid: amcFid, scopeIds, amcWin, section: commoditySection })
 
     // Fetch SDP stock data and aggregate by commodity
     let sdpMap = {}
     if (fid) {
-      const { data: sdpData } = await sb.from('sdp_stock')
-        .select('commodity_id,quantity')
-        .eq('facility_id', fid)
+      const sdpData = await api.stock.sdp.list({ facility_id: fid }).catch(() => [])
       ;(sdpData || []).forEach(d => {
         sdpMap[d.commodity_id] = (sdpMap[d.commodity_id] || 0) + d.quantity
       })

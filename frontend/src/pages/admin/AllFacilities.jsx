@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Metric } from '../../components/ui/Metric'
@@ -132,14 +132,15 @@ export function AllFacilities() {
   useEffect(() => {
     let active = true
     const facIds = store.isOverallAdmin() ? null : store.allFacilities.map(f => f.id)
-    const fetchAll = async (table) => {
+    const fetchAll = async (listFn) => {
       const map = {}
       const PAGE = 1000
       for (let offset = 0; ; offset += PAGE) {
-        let q = sb.from(table).select('commodity_id,facility_id,quantity').range(offset, offset + PAGE - 1)
-        if (facIds && facIds.length) q = q.in('facility_id', facIds)
-        const { data, error } = await q
-        if (error || !data || !data.length) break
+        let data
+        try {
+          data = await listFn({ facility_ids: (facIds && facIds.length) ? facIds : undefined, limit: PAGE, offset })
+        } catch { break }
+        if (!data || !data.length) break
         data.forEach(d => {
           if (!map[d.commodity_id]) map[d.commodity_id] = {}
           map[d.commodity_id][d.facility_id] = (map[d.commodity_id][d.facility_id] || 0) + d.quantity
@@ -155,12 +156,15 @@ export function AllFacilities() {
       const map = {}
       const PAGE = 1000
       for (let offset = 0; ; offset += PAGE) {
-        let q = sb.from('dispense_log').select('commodity_id,facility_id')
-          .gte('dispensed_at', cutoff.toISOString())
-          .range(offset, offset + PAGE - 1)
-        if (facIds && facIds.length) q = q.in('facility_id', facIds)
-        const { data, error } = await q
-        if (error || !data || !data.length) break
+        let data
+        try {
+          data = await api.dispense.history({
+            facility_ids: (facIds && facIds.length) ? facIds : undefined,
+            from: cutoff.toISOString(),
+            limit: PAGE, offset,
+          })
+        } catch { break }
+        if (!data || !data.length) break
         data.forEach(d => {
           if (!map[d.commodity_id]) map[d.commodity_id] = new Set()
           map[d.commodity_id].add(d.facility_id)
@@ -169,7 +173,7 @@ export function AllFacilities() {
       }
       return map
     }
-    Promise.all([fetchAll('sdp_stock'), fetchAll('dsd_stock'), fetchConsumption()]).then(([sdp, dsd, cons]) => {
+    Promise.all([fetchAll(api.stock.sdp.list), fetchAll(api.stock.dsd.list), fetchConsumption()]).then(([sdp, dsd, cons]) => {
       if (active) { setSiteByComm({ sdp, dsd }); setConsByComm(cons) }
     })
     return () => { active = false }

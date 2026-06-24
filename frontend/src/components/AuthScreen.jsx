@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { sb } from '../lib/supabase'
+import { auth } from '../lib/api'
 import { useAppStore } from '../store/appStore'
 import { hydrateSession } from '../utils/session'
 
@@ -20,11 +20,10 @@ export function AuthScreen({ onSuccess }) {
       const fullEmail = email.trim().toLowerCase().includes('@')
         ? email.trim().toLowerCase()
         : email.trim().toLowerCase() + '@envo.ng'
-      const { data, error: authErr } = await sb.auth.signInWithPassword({ email: fullEmail, password })
-      if (authErr) throw authErr
+      const user = await auth.login(fullEmail, password)
 
       // Build the store from the authenticated user (shared with refresh path)
-      const { facilityRole } = await hydrateSession(data.user)
+      const { facilityRole } = await hydrateSession(user)
 
       // On a fresh sign-in, SDP/DSD users land on the dispense page
       if (facilityRole === 'sdp' || facilityRole === 'dsd') store.setCurrentPage('dispense')

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
@@ -36,7 +36,6 @@ function generateYears() {
 export function CRRF() {
   const store = useAppStore()
   const commoditySection = store.commoditySection
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
   const [periodIdx, setPeriodIdx] = useState(getCurrentPeriodIndex())
@@ -58,22 +57,15 @@ export function CRRF() {
 
     const LOSS_REASONS = ['Expired', 'Damaged', 'Lost / Stolen']
 
+    const sec2 = commoditySection || undefined
+    const range = { from: from + 'T00:00:00', to: to + 'T23:59:59' }
     const [intakeRes, dispRes, adjRes, stockRes, transferRes] = await Promise.all([
-      sec(sb.from('intake_log').select('commodity_id,quantity')
-        .eq('facility_id', fid).in('commodity_id', commIds)
-        .gte('received_at', from + 'T00:00:00').lte('received_at', to + 'T23:59:59')),
-      sec(sb.from('dispense_log').select('commodity_id,quantity')
-        .eq('facility_id', fid).in('commodity_id', commIds)
-        .gte('dispensed_at', from + 'T00:00:00').lte('dispensed_at', to + 'T23:59:59')),
-      sec(sb.from('stock_adjustment_log').select('commodity_id,quantity,adjustment_type,reason')
-        .eq('facility_id', fid).in('commodity_id', commIds)
-        .gte('adjusted_at', from + 'T00:00:00').lte('adjusted_at', to + 'T23:59:59')),
-      sb.from('stock').select('commodity_id,quantity')
-        .eq('facility_id', fid).in('commodity_id', commIds),
-      sec(sb.from('stock_transfer_log').select('commodity_id,quantity,sending_facility_id,receiving_facility_id')
-        .eq('status', 'accepted').in('commodity_id', commIds)
-        .or(`sending_facility_id.eq.${fid},receiving_facility_id.eq.${fid}`)
-        .gte('resolved_at', from + 'T00:00:00').lte('resolved_at', to + 'T23:59:59')),
+      api.intake.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
+      api.dispense.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
+      api.adjustments.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
+      api.stock.list({ facility_ids: [fid], commodity_ids: commIds }).catch(() => []),
+      // section already scopes transfers; date_field/resolved_at uses plain dates.
+      api.transfers.list({ facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to, section: sec2 }).catch(() => []),
     ])
 
     // Build per-commodity aggregates
@@ -82,16 +74,16 @@ export function CRRF() {
       agg[c.id] = { commodity: c.name, category: c.category || '', unit: c.unit || '', received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0, soh: 0 }
     })
 
-    ;(intakeRes.data || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].received += r.quantity })
-    ;(dispRes.data || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
-    ;(adjRes.data || []).forEach(r => {
+    ;(intakeRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].received += r.quantity })
+    ;(dispRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
+    ;(adjRes || []).forEach(r => {
       if (!agg[r.commodity_id]) return
       if (r.adjustment_type === 'Increase')          agg[r.commodity_id].adjPos  += r.quantity
       else if (LOSS_REASONS.includes(r.reason))      agg[r.commodity_id].losses  += r.quantity
       else                                           agg[r.commodity_id].adjNeg  += r.quantity
     })
-    ;(stockRes.data || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
-    ;(transferRes.data || []).forEach(r => {
+    ;(stockRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
+    ;(transferRes || []).forEach(r => {
       if (!agg[r.commodity_id]) return
       // Only EXTERNAL redistribution (facility → another facility) affects the
       // CRRF positive/negative adjustment. Internal moves (Store→Dispensary,

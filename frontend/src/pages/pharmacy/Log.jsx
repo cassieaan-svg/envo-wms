@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
+import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { Reports } from './Reports'
 import { fmtDateTime, fmtDate, fmtDispenseQty, fmtStockQty, getCommodityPackSize } from '../../utils/helpers'
 
@@ -13,7 +15,6 @@ export function Log() {
   const store     = useAppStore()
   const canManage = store.canManageStock()
   const commoditySection = store.commoditySection
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [typeFilter, setTypeFilter] = useState('')
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
@@ -26,38 +27,37 @@ export function Log() {
   const fid    = store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
   const isAdmin = store.isAdmin()
+  // Admins must drill down to a single facility before any activity is shown —
+  // the log is per-facility, not a cross-facility feed, and admins don't edit it.
+  const adminFid = store.adminFilterFacility?.id || null
+  const needsFacility = isAdmin && !adminFid
+  // Edits belong to the facility's own store manager. Admins are read-only here.
+  const canEdit = canManage && !isAdmin
 
-  useEffect(() => { loadAll() }, [fid, store.adminFilterFacility?.id])
+  useEffect(() => { loadAll() }, [fid, adminFid])
 
   // Reload when commodity section changes to ensure proper filtering
   useEffect(() => { if(fid) loadAll() }, [store.commoditySection])
 
   async function loadAll() {
+    // Don't fetch (or show) anything for an admin until they've picked a facility.
+    if (needsFacility) { setAllRecords([]); setLoading(false); return }
     setLoading(true)
-    const selComm = 'commodities(name,unit,dispensing_unit,pack_size),facilities(name)'
-    // Admins span every facility (or the one they've filtered to) and both
-    // sections, so don't scope by a single facility or the full commodity list.
-    const scopeFid = isAdmin ? (store.adminFilterFacility?.id || null) : fid
-    const loadTable = (table, dateField) => {
-      let q = sec(sb.from(table).select('*,'+selComm))
-      if (scopeFid) q = q.eq('facility_id', scopeFid)
-      if (!isAdmin) q = q.in('commodity_id', commIds)
-      return q.order(dateField, { ascending: false }).limit(50).then(r => r.data || [])
-    }
-    // Transfers live in stock_transfer_log as a sending/receiving pair (no
-    // single facility_id) with denormalized facility names, so they need their
-    // own query scoped to either side of the move.
-    const loadTransfers = () => {
-      let q = sec(sb.from('stock_transfer_log').select('*,commodities(name,unit,dispensing_unit,pack_size)'))
-      if (scopeFid) q = q.or(`sending_facility_id.eq.${scopeFid},receiving_facility_id.eq.${scopeFid}`)
-      if (!isAdmin) q = q.in('commodity_id', commIds)
-      return q.order('initiated_at', { ascending: false }).limit(50).then(r => r.data || [])
+    // Admins span a single filtered facility and both sections, so don't scope by
+    // the full commodity list.
+    const scopeFid = isAdmin ? adminFid : fid
+    const logParams = {
+      facility_id: scopeFid || undefined,
+      commodity_ids: !isAdmin ? commIds : undefined,
+      section: commoditySection || undefined,
+      limit: 50,
     }
     const [disp, intake, adj, transfers] = await Promise.all([
-      (!typeFilter||typeFilter==='dispense')    ? loadTable('dispense_log','dispensed_at') : [],
-      (!typeFilter||typeFilter==='intake')      ? loadTable('intake_log','received_at') : [],
-      (!typeFilter||typeFilter==='adjustment')  ? loadTable('stock_adjustment_log','adjusted_at') : [],
-      (!typeFilter||typeFilter==='transfer')    ? loadTransfers() : [],
+      (!typeFilter||typeFilter==='dispense')    ? api.dispense.history(logParams).catch(()=>[]) : [],
+      (!typeFilter||typeFilter==='intake')      ? api.intake.history(logParams).catch(()=>[]) : [],
+      (!typeFilter||typeFilter==='adjustment')  ? api.adjustments.history(logParams).catch(()=>[]) : [],
+      // section already scopes transfers; facility_id covers both sending/receiving sides.
+      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, limit: 50 }).catch(()=>[]) : [],
     ])
     const merged = [
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
@@ -80,13 +80,7 @@ export function Log() {
   // adjustment row changes anywhere in the viewer's scope (RLS-filtered).
   useEffect(() => {
     const reload = () => loadAllRef.current()
-    const channel = sb.channel('activity-log-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dispense_log' }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'intake_log' }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_adjustment_log' }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_transfer_log' }, reload)
-      .subscribe()
-    return () => sb.removeChannel(channel)
+    return subscribeRealtime(['dispense_log', 'intake_log', 'stock_adjustment_log', 'stock_transfer_log'], reload)
   }, [])
 
   const typeBadge = { dispense:'out', intake:'ok', adjustment:'info', transfer:'low' }
@@ -96,7 +90,7 @@ export function Log() {
     <div>
       <div className="mb-6">
         <h1 className="text-xl font-medium text-gray-100">{view === 'reports' ? 'Reports' : 'Activity Log'}</h1>
-        <p className="text-sm text-gray-500 mt-1">{view === 'reports' ? 'Weekly and monthly activity summaries' : 'All stock, intake, transfer and adjustment events at your facility'}</p>
+        <p className="text-sm text-gray-500 mt-1">{view === 'reports' ? 'Weekly and monthly activity summaries' : isAdmin ? 'Stock, intake, transfer and adjustment events for a selected facility' : 'All stock, intake, transfer and adjustment events at your facility'}</p>
       </div>
 
       <div className="flex gap-2 mb-4">
@@ -110,7 +104,19 @@ export function Log() {
 
       {view === 'reports' ? <Reports embedded /> : (
       <>
-      {editRecord && (
+      {/* Admins drill down to a single facility (State → LGA → Facility) before
+          any activity is shown. The picker is a no-op for facility users. */}
+      <FacilityPicker />
+
+      {needsFacility ? (
+        <Card><CardBody className="text-center py-12">
+          <div className="text-4xl mb-3">🏥</div>
+          <div className="font-medium text-gray-100 mb-1">Select a facility</div>
+          <div className="text-sm text-gray-500">Choose a facility above to view its activity log.</div>
+        </CardBody></Card>
+      ) : (
+      <>
+      {canEdit && editRecord && (
         <EditModal record={editRecord} onClose={()=>setEditRecord(null)} onSave={()=>{setEditRecord(null);loadAll()}}/>
       )}
 
@@ -134,10 +140,10 @@ export function Log() {
         {loading && allRecords.length===0 ? <LoadingState/> : allRecords.length===0 ? <EmptyState message="No activity recorded yet."/> : (
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
-              {['Date','Type','Commodity',...(isAdmin?['Facility']:[]),'Qty','Details',...(canManage?['']:[''])].map((h,i)=>(
+              {['Date','Type','Commodity',...(isAdmin?['Facility']:[]),'Qty','Details'].map((h,i)=>(
                 <th key={i} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
               ))}
-              {canManage && <th className="px-4 py-3"/>}
+              {canEdit && <th className="px-4 py-3"/>}
             </tr></thead>
             <tbody>{allRecords.map(r=>{
               let qty='', details=''
@@ -172,7 +178,7 @@ export function Log() {
                   {isAdmin && <td className="px-4 py-3 text-xs text-gray-400">{r._type==='transfer' ? `${r.sending_facility_name||'—'} → ${r.receiving_facility_name||'—'}` : (r.facilities?.name||'—')}</td>}
                   <td className="px-4 py-3">{qty}</td>
                   <td className="px-4 py-3 text-xs text-gray-500">{details}</td>
-                  {canManage && (
+                  {canEdit && (
                     <td className="px-4 py-3">
                       {r._type!=='transfer' && (
                         <button onClick={()=>setEditRecord(r)}
@@ -188,6 +194,8 @@ export function Log() {
           </table></div>
         )}
       </Card>
+      </>
+      )}
       </>
       )}
     </div>

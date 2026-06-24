@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -14,7 +14,6 @@ import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, SECTION_CATEGO
 export function Intake() {
   const store = useAppStore()
   const commoditySection = useAppStore(s => s.commoditySection)
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const { loadStock } = useStock()
   const canManage = store.canManageStock()
 
@@ -80,8 +79,7 @@ export function Intake() {
 
   async function refreshCommodities() {
     const cats = SECTION_CATEGORIES[store.commoditySection] || []
-    const { data: comms } = await sb.from('commodities')
-      .select('id,name,category,unit,pack_size,dispensing_unit').order('category').order('name')
+    const comms = await api.commodities.list().catch(() => null)
     if (comms) {
       const filtered = cats.length
         ? comms.filter(c => cats.includes(c.category))
@@ -99,41 +97,25 @@ export function Intake() {
     if (supplier === 'Other' && !supplierOther.trim()) { setMsg({type:'error',text:'Specify the other supplier.'}); return }
     if (!batch)      { setMsg({type:'error',text:'Batch / lot number is required.'}); return }
     if (!expiry)     { setMsg({type:'error',text:'Expiry date is required.'}); return }
-    if (!deliveryRef){ setMsg({type:'error',text:'Delivery note reference is required.'}); return }
     if (!receivedBy) { setMsg({type:'error',text:'Received by is required.'}); return }
     if (!fid)        { setMsg({type:'error',text:'No facility assigned.'}); return }
 
     const supplierSource = supplier === 'Other' ? supplierOther.trim() : supplier
 
     setSaving(true)
-    const { error: e1 } = await sb.from('intake_log').insert({
-      facility_id: fid, commodity_id: commId, quantity: qty,
-      supplier_source: supplierSource||null,
-      batch_number: batch||null, expiry_date: expiry||null,
-      delivery_note_ref: deliveryRef||null, condition_on_arrival: condition,
-      received_by: receivedBy||null,
-      received_at: receivedDate ? new Date(receivedDate).toISOString() : new Date().toISOString(),
-      notes: notes||null,
-      section: commoditySection,
-    })
-    if (e1) { setMsg({type:'error',text:'Error: '+e1.message}); setSaving(false); return }
-
-    // Update stock — quantity is in comm.unit, goes to STORE
-    const myStock = store.stockData.find(r => r.commodity_id === commId && r.facility_id === fid && r.location_type === 'store')
-    if (myStock) {
-      await sb.from('stock').update({ quantity: myStock.quantity + parseInt(qty), updated_at: new Date().toISOString() }).eq('id', myStock.id)
-    } else {
-      await sb.from('stock').insert({ facility_id: fid, commodity_id: commId, quantity: parseInt(qty), location_type: 'store' })
-    }
-
-    // If dispensing unit or pack size provided, update the commodity record
-    if (dispUnitInput.trim() || packSzInput) {
-      const updates = {}
-      if (dispUnitInput.trim()) updates.dispensing_unit = dispUnitInput.trim()
-      if (packSzInput)          updates.pack_size = parseInt(packSzInput)
-      await sb.from('commodities').update(updates).eq('id', commId)
-      await refreshCommodities()
-    }
+    // One call records the intake AND credits the store stock (transactional, server-side).
+    try {
+      await api.intake.record({
+        facility_id: fid, commodity_id: commId, quantity: qty,
+        supplier_source: supplierSource || null,
+        batch_number: batch || null, expiry_date: expiry || null,
+        delivery_note_ref: deliveryRef || null, condition_on_arrival: condition,
+        received_by: receivedBy || null,
+        received_at: receivedDate ? new Date(receivedDate).toISOString() : new Date().toISOString(),
+        notes: notes || null,
+        section: commoditySection,
+      })
+    } catch (e1) { setMsg({type:'error',text:'Error: '+e1.message}); setSaving(false); return }
 
     toast(`Intake of ${qty} ${selectedComm?.unit || dispUnit} recorded`, 'green')
     setMsg({type:'success',text:'Intake saved. Stock updated.'})
@@ -150,18 +132,10 @@ export function Intake() {
     setLoadingR(true)
     const d    = dateStr || historyDate
     const cats = SECTION_CATEGORIES[store.commoditySection] || []
-    let query  = sb.from('intake_log')
-      .select('*,commodities(name,unit,dispensing_unit,pack_size,category)')
-      .eq('facility_id', fid)
-      .gte('received_at', `${d}T00:00:00`)
-      .lte('received_at', `${d}T23:59:59`)
-      .order('received_at', { ascending: false })
-    if (cats.length) {
-      const commIds = store.allCommodities.map(c => c.id)
-      if (commIds.length) query = query.in('commodity_id', commIds)
-    }
-    query = sec(query)
-    const { data } = await query
+    const commodity_ids = cats.length ? store.allCommodities.map(c => c.id) : undefined
+    const data = await api.intake.history({
+      facility_id: fid, date: d, commodity_ids, section: commoditySection || undefined,
+    }).catch(() => [])
     setRecent(data || [])
     setLoadingR(false)
   }
@@ -258,8 +232,8 @@ export function Intake() {
                 <input type="date" value={expiry} onChange={e=>setExpiry(e.target.value)} required className={inputCls}/>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Delivery note ref *</label>
-                <input type="text" value={deliveryRef} onChange={e=>setRef(e.target.value)} placeholder="e.g. DN-2024-001" required className={inputCls}/>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Delivery note ref</label>
+                <input type="text" value={deliveryRef} onChange={e=>setRef(e.target.value)} placeholder="e.g. DN-2024-001" className={inputCls}/>
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

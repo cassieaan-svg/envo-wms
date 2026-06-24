@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { sb } from '../lib/supabase'
+import { api } from '../lib/api'
 import { useAppStore } from '../store/appStore'
 import { Card } from './ui/Card'
 import { toast } from './ui/Toast'
@@ -58,12 +58,13 @@ export function AmcWindowEditor({ facilityId, facilityName, onSaved }) {
     if (count < 1) { toast('Pick at least one month', 'red'); return }
     setSaving(true)
     const months = [...selected].sort()
-    const { error } = await sb.from('facility_amc_settings').upsert(
-      { facility_id: facilityId, months, updated_at: new Date().toISOString(), updated_by: store.user?.email || null },
-      { onConflict: 'facility_id' },
-    )
+    try {
+      await api.amcSettings.upsert({ facility_id: facilityId, months, updated_by: store.user?.email || null })
+    } catch (e) {
+      setSaving(false)
+      toast(`Could not save AMC months: ${e.message}`, 'red'); return
+    }
     setSaving(false)
-    if (error) { toast(`Could not save AMC months: ${error.message}`, 'red'); return }
     store.setAmcWindow(facilityId, { months })
     setOpen(false)
     toast('AMC months saved', 'green')
@@ -72,9 +73,13 @@ export function AmcWindowEditor({ facilityId, facilityName, onSaved }) {
 
   async function resetToDefault() {
     setSaving(true)
-    const { error } = await sb.from('facility_amc_settings').delete().eq('facility_id', facilityId)
+    try {
+      await api.amcSettings.remove(facilityId)
+    } catch (e) {
+      setSaving(false)
+      toast(`Could not reset: ${e.message}`, 'red'); return
+    }
     setSaving(false)
-    if (error) { toast(`Could not reset: ${error.message}`, 'red'); return }
     store.setAmcWindow(facilityId, null)
     setSelected(new Set())
     setOpen(false)

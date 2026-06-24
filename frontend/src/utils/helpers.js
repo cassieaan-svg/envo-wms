@@ -1,3 +1,5 @@
+import { api } from '../lib/api'
+
 // ── Date formatting (Africa/Lagos timezone) ───────────────────────────────
 const LAGOS = 'Africa/Lagos'
 
@@ -192,28 +194,79 @@ export function groupStockByComm(stockRows) {
   }))
 }
 
+// Intake rows record the quantity *received* in a batch and are never decremented
+// as stock is consumed or transferred, so an expiry view that prints intake.quantity
+// overstates what's physically left. This caps each batch to the commodity's current
+// stock on hand, allocating FEFO: stock is consumed soonest-expiry-first, so the
+// remaining units are attributed to the latest-expiring batches and the soonest ones
+// deplete first. Batches left with nothing are dropped. `sohByComm` maps
+// commodity_id → units on hand; a commodity missing from the map is treated as 0
+// (no stock row ⇒ nothing on hand ⇒ nothing to expire). Returns the kept batches
+// (with `quantity` capped) sorted soonest-expiry first.
+export function capExpiryBatchesToStock(batches, sohByComm) {
+  const byComm = {}
+  ;(batches || []).forEach(b => { (byComm[b.commodity_id] ||= []).push(b) })
+  const kept = []
+  Object.entries(byComm).forEach(([cid, list]) => {
+    let remaining = sohByComm[cid] || 0
+    // Fill latest-expiry batches first (they hold the remaining stock under FEFO).
+    const ordered = list.slice().sort((a, b) => new Date(b.expiry_date) - new Date(a.expiry_date))
+    ordered.forEach(b => {
+      const received = Number(b.quantity) || 0
+      const keep = Math.max(0, Math.min(received, remaining))
+      remaining -= keep
+      if (keep > 0) kept.push({ ...b, quantity: keep })
+    })
+  })
+  return kept.sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date))
+}
+
+// Facility-aware variant of capExpiryBatchesToStock for multi-facility (admin)
+// views: batches span many facilities, so capping against a single per-commodity
+// total would pool facilities together and mis-cap. This caps each batch to its
+// OWN facility's stock on hand for that commodity, allocating FEFO per (facility,
+// commodity). `sohByFacComm` maps `${facility_id}|${commodity_id}` → units on hand.
+export function capExpiryBatchesToStockByFacility(batches, sohByFacComm) {
+  const byKey = {}
+  ;(batches || []).forEach(b => { (byKey[`${b.facility_id}|${b.commodity_id}`] ||= []).push(b) })
+  const kept = []
+  Object.entries(byKey).forEach(([key, list]) => {
+    let remaining = sohByFacComm[key] || 0
+    // Fill latest-expiry batches first (they hold the remaining stock under FEFO).
+    const ordered = list.slice().sort((a, b) => new Date(b.expiry_date) - new Date(a.expiry_date))
+    ordered.forEach(b => {
+      const received = Number(b.quantity) || 0
+      const keep = Math.max(0, Math.min(received, remaining))
+      remaining -= keep
+      if (keep > 0) kept.push({ ...b, quantity: keep })
+    })
+  })
+  return kept.sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date))
+}
+
 // Build a { commodity_id: amc } map of LIVE consumption over `amcWin`, scoped to
 // a single facility (`fid`), a set of facilities (`scopeIds`), or — when both are
-// null — every facility (overall admin). Aggregates dispenses across the whole
-// scope and paginates past PostgREST's 1000-row cap, so an admin's aggregate AMC
-// matches the summed stock. `sb` is the Supabase client; `applySection` lets the
-// caller add its pharmacy/lab section filter to the query.
-export async function loadConsumptionAmcMap(sb, { commIds, fid, scopeIds, amcWin, applySection }) {
+// null — every facility in the caller's token scope. Aggregates dispenses across
+// the whole scope and paginates past the 1000-row cap, so an admin's aggregate AMC
+// matches the summed stock. `section` adds the pharmacy/lab filter server-side.
+export async function loadConsumptionAmcMap({ commIds, fid, scopeIds, amcWin, section }) {
   const ids = [...new Set((commIds || []).filter(Boolean))]
   if (!ids.length) return {}
   const rows = []
   for (let offset = 0; ; offset += 1000) {
-    let q = sb.from('dispense_log')
-      .select('commodity_id,quantity,dispensed_at')
-      .gte('dispensed_at', amcWin.start.toISOString())
-      .lt('dispensed_at', amcWin.end.toISOString())
-      .in('commodity_id', ids)
-      .range(offset, offset + 999)
-    if (fid) q = q.eq('facility_id', fid)
-    else if (scopeIds && scopeIds.length) q = q.in('facility_id', scopeIds)
-    if (typeof applySection === 'function') q = applySection(q)
-    const { data, error } = await q
-    if (error || !data || !data.length) break
+    let data
+    try {
+      data = await api.dispense.history({
+        facility_id: fid || undefined,
+        facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+        commodity_ids: ids,
+        from: amcWin.start.toISOString(),
+        to: amcWin.end.toISOString(),
+        section: section || undefined,
+        limit: 1000, offset,
+      })
+    } catch { break }
+    if (!data || !data.length) break
     rows.push(...data)
     if (data.length < 1000) break
   }

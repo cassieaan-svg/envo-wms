@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -37,10 +37,9 @@ export function Dispense() {
 
   useEffect(() => {
     if (!fid || !sdpName || !commId) { setSdpStockRow(null); return }
-    sb.from('sdp_stock').select('id,quantity')
-      .eq('facility_id', fid).eq('sdp_name', sdpName).eq('commodity_id', commId)
-      .maybeSingle()
-      .then(({ data }) => setSdpStockRow(data || null))
+    api.stock.sdp.list({ facility_id: fid, sdp_name: sdpName, commodity_id: commId })
+      .then(rows => setSdpStockRow((rows && rows[0]) || null))
+      .catch(() => setSdpStockRow(null))
   }, [commId, fid, sdpName])
 
   const selectedComm = store.allCommodities.find(c => c.id === commId)
@@ -65,19 +64,18 @@ export function Dispense() {
       setMsg({ type:'error', text:`Insufficient stock. Available: ${sdpStockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return
     }
     setSaving(true)
-    const { error } = await sb.from('dispense_log').insert({
-      facility_id:  fid,
-      commodity_id: commId,
-      quantity:     parsedQty,
-      dispensed_by: by || null,
-      dispensed_at: date ? new Date(date).toISOString() : new Date().toISOString(),
-      notes:        `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`,
-    })
-    if (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-    await sb.from('sdp_stock').update({
-      quantity:   Math.max(0, sdpStockRow.quantity - parsedQty),
-      updated_at: new Date().toISOString(),
-    }).eq('id', sdpStockRow.id)
+    // One call logs the dispense AND decrements the SDP site stock (server-side).
+    try {
+      await api.dispense.record({
+        facility_id:  fid,
+        commodity_id: commId,
+        quantity:     parsedQty,
+        dispensed_by: by || null,
+        dispensed_at: date ? new Date(date).toISOString() : new Date().toISOString(),
+        notes:        `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`,
+        sdp_name:     sdpName,
+      })
+    } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
     setSdpStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
     toast('Stock recorded', 'green')
     setMsg({ type:'success', text:'Stock saved successfully.' })
@@ -90,13 +88,10 @@ export function Dispense() {
   async function loadRecent() {
     setLoadingRecent(true)
     const d = historyDate
-    const { data } = await sb.from('dispense_log')
-      .select('*,commodities(name,unit,dispensing_unit,pack_size)')
-      .eq('facility_id', fid)
-      .gte('dispensed_at', `${d}T00:00:00`)
-      .lte('dispensed_at', `${d}T23:59:59`)
-      .order('dispensed_at', { ascending: false })
-    setRecent((data || []).filter(r => r.notes?.includes(`[SDP: ${sdpName}]`)))
+    const data = await api.dispense.history({
+      facility_id: fid, date: d, sdp_name: sdpName,
+    }).catch(() => [])
+    setRecent(data || [])
     setLoadingRecent(false)
   }
 

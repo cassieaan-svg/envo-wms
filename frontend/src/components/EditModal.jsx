@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { sb } from '../lib/supabase'
+import { api } from '../lib/api'
 import { useAppStore } from '../store/appStore'
 import { useStock } from '../hooks/useStock'
 import { toast } from './ui/Toast'
@@ -29,17 +29,9 @@ export function EditModal({ record, onClose, onSave }) {
   // store / dispensary / dsd rows.
   async function adjustStockLocation(locationType, delta) {
     if (delta === 0) return
-    const { data: stk } = await sb.from('stock').select('id,quantity')
-      .eq('facility_id', fid)
-      .eq('commodity_id', record.commodity_id)
-      .eq('location_type', locationType)
-      .maybeSingle()
-    if (stk) {
-      await sb.from('stock').update({
-        quantity: Math.max(0, stk.quantity + delta),
-        updated_at: new Date().toISOString(),
-      }).eq('id', stk.id)
-    }
+    const rows = await api.stock.list({ facility_id: fid, commodity_id: record.commodity_id, location_type: locationType }).catch(() => [])
+    const stk = rows && rows[0]
+    if (stk) await api.stock.update(stk.id, Math.max(0, stk.quantity + delta))
   }
 
   async function save() {
@@ -63,9 +55,9 @@ export function EditModal({ record, onClose, onSave }) {
         const m = (record.notes || '').match(/^\[DSD:\s*([^\]]+)\]/)
         const siteName = m ? m[1].trim() : null
         if (siteName && returnToStock !== 0) {
-          const { data: ds } = await sb.from('dsd_stock').select('id,quantity')
-            .eq('facility_id',fid).eq('dsd_site_name',siteName).eq('commodity_id',record.commodity_id).maybeSingle()
-          if (ds) await sb.from('dsd_stock').update({quantity:Math.max(0,ds.quantity+returnToStock),updated_at:new Date().toISOString()}).eq('id',ds.id)
+          const dsRows = await api.stock.dsd.list({ facility_id: fid, dsd_site_name: siteName, commodity_id: record.commodity_id }).catch(() => [])
+          const ds = dsRows && dsRows[0]
+          if (ds) await api.stock.dsd.setQuantity(ds.id, Math.max(0, ds.quantity + returnToStock))
         }
       } else {
         await adjustStockLocation('dispensary', returnToStock)
@@ -85,13 +77,15 @@ export function EditModal({ record, onClose, onSave }) {
       await adjustStockLocation('store', delta)
     }
 
-    const { error } = await sb.from(table).update(updateData).eq('id',record.id)
-    if (error) { setErr('Error: '+error.message); setSaving(false); return }
+    const apiByType = { dispense: api.dispense, intake: api.intake, adjustment: api.adjustments }
+    try {
+      await apiByType[record._type].update(record.id, updateData)
+    } catch (e) { setErr('Error: '+e.message); setSaving(false); return }
 
     // Record the change in the audit trail (best-effort — won't block the save).
     const noteForTrail = record._type === 'adjustment' ? reason : notes
     try {
-      await sb.from('edit_history').insert({
+      await api.editHistory.create({
         record_id:     record.id,
         record_type:   record._type,
         facility_id:   fid,
@@ -102,7 +96,7 @@ export function EditModal({ record, onClose, onSave }) {
         edited_by:     editedBy || null,
         note:          noteForTrail || null,
       })
-    } catch { /* edit_history table not present yet — ignore */ }
+    } catch { /* audit insert is best-effort — ignore */ }
 
     toast('Record updated','green')
     await loadStock()

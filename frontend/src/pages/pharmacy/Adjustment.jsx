@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -30,7 +30,6 @@ const RULES = {
 export function Adjustment() {
   const store = useAppStore()
   const commoditySection = useAppStore(s => s.commoditySection)
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const { loadStock } = useStock()
   const canManage = store.canManageStock()
 
@@ -67,9 +66,8 @@ export function Adjustment() {
     let active = true
     if (!isReturn || !fid || !commId) { setSiteOptions([]); return }
     setLoadingSites(true)
-    sb.from(SITE_CFG.table).select(`${SITE_CFG.col},quantity`)
-      .eq('facility_id', fid).eq('commodity_id', commId)
-      .then(({ data }) => {
+    api.stock.dsd.list({ facility_id: fid, commodity_id: commId })
+      .then(data => {
         if (!active) return
         const opts = (data || [])
           .filter(r => r.quantity > 0)
@@ -79,6 +77,7 @@ export function Adjustment() {
         setReturnSite(prev => opts.some(o => o.site === prev) ? prev : '')
         setLoadingSites(false)
       })
+      .catch(() => { if (active) { setSiteOptions([]); setLoadingSites(false) } })
     return () => { active = false }
   }, [isReturn, fid, commId])
 
@@ -137,35 +136,29 @@ export function Adjustment() {
     if (isReturn) {
       if (!returnSite) { setMsg({type:'error',text:`Select the ${SITE_CFG.label} the stock is returned from.`}); return }
       setSaving(true)
-      const { data: siteStk } = await sb.from(SITE_CFG.table).select('id,quantity')
-        .eq('facility_id', fid).eq(SITE_CFG.col, returnSite).eq('commodity_id', commId).maybeSingle()
+      const siteRows = await api.stock.dsd.list({ facility_id: fid, dsd_site_name: returnSite, commodity_id: commId }).catch(() => [])
+      const siteStk = siteRows && siteRows[0]
       if (!siteStk || siteStk.quantity < qtyN) {
         setMsg({type:'error',text:`${returnSite} only has ${siteStk?.quantity || 0} in stock — cannot return ${qtyN}.`}); setSaving(false); return
       }
 
       const returnNote = `Returned from ${SITE_CFG.label}: ${returnSite}${adjNotes ? ' — ' + adjNotes : ''}`
-      const { error: logErr } = await sb.from('stock_adjustment_log').insert({
-        facility_id:fid, commodity_id:commId, quantity:qtyN,
-        adjustment_type:'Increase', reason, adjusted_by:adjBy||null,
-        reference_number:adjRef||null, notes:returnNote, adjusted_at:new Date().toISOString(),
-        expiry_date:adjExpiry||null, batch_number:adjBatch||null,
-        section:commoditySection,
-      })
-      if (logErr) { setMsg({type:'error',text:'Error: '+logErr.message}); setSaving(false); return }
+      // Records the adjustment AND credits the store stock (transactional, server-side).
+      try {
+        await api.adjustments.record({
+          facility_id:fid, commodity_id:commId, quantity:qtyN,
+          adjustment_type:'Increase', reason, adjusted_by:adjBy||null,
+          reference_number:adjRef||null, notes:returnNote, adjusted_at:new Date().toISOString(),
+          expiry_date:adjExpiry||null, batch_number:adjBatch||null,
+          section:commoditySection,
+        })
+      } catch (logErr) { setMsg({type:'error',text:'Error: '+logErr.message}); setSaving(false); return }
 
-      // Credit the store (create the row if the store holds none yet).
-      const { data: storeStk } = await sb.from('stock').select('id,quantity')
-        .eq('facility_id', fid).eq('commodity_id', commId).eq('location_type', 'store').maybeSingle()
-      const newStoreQty = (storeStk?.quantity || 0) + qtyN
-      if (storeStk) {
-        await sb.from('stock').update({ quantity:newStoreQty, updated_at:new Date().toISOString() }).eq('id', storeStk.id)
-      } else {
-        await sb.from('stock').insert({ facility_id:fid, commodity_id:commId, quantity:qtyN, location_type:'store', updated_at:new Date().toISOString() })
-      }
+      // Debit the site (the server already credited the store).
+      await api.stock.dsd.setQuantity(siteStk.id, Math.max(0, siteStk.quantity - qtyN))
 
-      // Debit the site.
-      await sb.from(SITE_CFG.table).update({ quantity: Math.max(0, siteStk.quantity - qtyN), updated_at:new Date().toISOString() }).eq('id', siteStk.id)
-
+      const prevStore = store.stockData.find(r => r.commodity_id === commId && r.facility_id === fid && r.location_type === 'store')?.quantity || 0
+      const newStoreQty = prevStore + qtyN
       toast('Return recorded','green')
       setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from ${returnSite} to store. Store stock: ${fmtStockQty(newStoreQty, selectedComm)}`})
       setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setReturnSite(''); setSiteOptions([])
@@ -178,22 +171,19 @@ export function Adjustment() {
     // facility+commodity with maybeSingle() fails when a commodity has
     // multiple location rows (store/dispensary/dsd); use the row id instead.
     if (!stockRow) { setMsg({type:'error',text:'No stock record found.'}); setSaving(false); return }
-    const { data: stk } = await sb.from('stock').select('id,quantity').eq('id', stockRow.id).maybeSingle()
-    if (!stk) { setMsg({type:'error',text:'No stock record found.'}); setSaving(false); return }
 
-    const newQty = adjType==='Increase' ? stk.quantity + parseInt(qty) : Math.max(0, stk.quantity - parseInt(qty))
+    // Records the adjustment AND applies it to the store stock (transactional, server-side).
+    try {
+      await api.adjustments.record({
+        facility_id:fid, commodity_id:commId, quantity:parseInt(qty),
+        adjustment_type:adjType, reason, adjusted_by:adjBy||null,
+        reference_number:adjRef||null, notes:adjNotes||null, adjusted_at:new Date().toISOString(),
+        expiry_date:adjExpiry||null, batch_number:adjBatch||null,
+        section:commoditySection,
+      })
+    } catch (error) { setMsg({type:'error',text:'Error: '+error.message}); setSaving(false); return }
 
-    const { error } = await sb.from('stock_adjustment_log').insert({
-      facility_id:fid, commodity_id:commId, quantity:parseInt(qty),
-      adjustment_type:adjType, reason, adjusted_by:adjBy||null,
-      reference_number:adjRef||null, notes:adjNotes||null, adjusted_at:new Date().toISOString(),
-      expiry_date:adjExpiry||null, batch_number:adjBatch||null,
-      section:commoditySection,
-    })
-    if (error) { setMsg({type:'error',text:'Error: '+error.message}); setSaving(false); return }
-
-    await sb.from('stock').update({quantity:newQty, updated_at:new Date().toISOString()}).eq('id',stk.id)
-
+    const newQty = adjType==='Increase' ? stockRow.quantity + parseInt(qty) : Math.max(0, stockRow.quantity - parseInt(qty))
     toast('Adjustment saved','green')
     setMsg({type:'success',text:`Adjustment saved. New stock: ${fmtStockQty(newQty, selectedComm)}`})
     setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch('')
@@ -205,14 +195,9 @@ export function Adjustment() {
   async function loadRecent() {
     setLoadingR(true)
     const d = historyDate
-    let q = sb.from('stock_adjustment_log')
-      .select('*,commodities(name,unit,dispensing_unit,pack_size),facilities(name)')
-      .eq('facility_id',fid)
-      .gte('adjusted_at', `${d}T00:00:00`)
-      .lte('adjusted_at', `${d}T23:59:59`)
-      .order('adjusted_at', { ascending: false })
-    q = sec(q)
-    const { data } = await q
+    const data = await api.adjustments.history({
+      facility_id: fid, date: d, section: commoditySection || undefined,
+    }).catch(() => [])
     setRecent(data||[])
     setLoadingR(false)
   }

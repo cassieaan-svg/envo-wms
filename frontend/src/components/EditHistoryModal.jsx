@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../lib/supabase'
+import { api } from '../lib/api'
 import { fmtDate } from '../utils/helpers'
 
 // Read-only audit trail for a single log record (dispense / intake / adjustment).
@@ -12,14 +12,16 @@ export function EditHistoryModal({ record, onClose }) {
   useEffect(() => {
     let active = true
     ;(async () => {
-      const { data, error } = await sb.from('edit_history')
-        .select('*')
-        .eq('record_id', record.id)
-        .order('created_at', { ascending: false })
-      if (!active) return
-      if (error) setError(error.message)
-      setRows(data || [])
-      setLoading(false)
+      try {
+        const data = await api.editHistory.byRecord(record.id)
+        if (!active) return
+        setRows(data || [])
+      } catch (e) {
+        if (!active) return
+        setError(e.message)
+      } finally {
+        if (active) setLoading(false)
+      }
     })()
     return () => { active = false }
   }, [record.id])

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
@@ -13,7 +13,6 @@ export function Dashboard() {
   const store            = useAppStore()
   const { loadStock }    = useStock()
   const commoditySection = store.commoditySection
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   const [amcMap, setAmcMap]   = useState({})
   const [sdpMap, setSdpMap]   = useState({})
   const [search, setSearch]   = useState('')
@@ -35,9 +34,7 @@ export function Dashboard() {
     // Aggregate Service Delivery Point stock (lab has no dispensary/DSD)
     const sdpAgg = {}
     if (fid || store.currentFacility?.id) {
-      const { data: sdpData } = await sb.from('sdp_stock')
-        .select('commodity_id,quantity')
-        .eq('facility_id', fid || store.currentFacility?.id)
+      const sdpData = await api.stock.sdp.list({ facility_id: fid || store.currentFacility?.id }).catch(() => [])
       ;(sdpData || []).forEach(d => {
         sdpAgg[d.commodity_id] = (sdpAgg[d.commodity_id] || 0) + d.quantity
       })
@@ -51,7 +48,7 @@ export function Dashboard() {
     const { fid: amcFid, scopeIds } = store.getAdminStockScope()
     const amcWin = resolveAmcWindow(amcFid ? store.amcWindows[amcFid] : null)
     const commIds = store.allCommodities.map(c => c.id)
-    const amc = await loadConsumptionAmcMap(sb, { commIds, fid: amcFid, scopeIds, amcWin, applySection: sec })
+    const amc = await loadConsumptionAmcMap({ commIds, fid: amcFid, scopeIds, amcWin, section: commoditySection })
     setAmcMap(amc)
     setLoading(false)
   }

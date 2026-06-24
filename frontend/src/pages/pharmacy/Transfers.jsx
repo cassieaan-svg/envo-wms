@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { sb } from '../../lib/supabase'
+import { api } from '../../lib/api'
+import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -59,7 +60,6 @@ export function Transfers() {
   const isDispenser = accessLevel === 'facility' && facilityRole === 'dispenser'
   const isDSD       = accessLevel === 'facility' && facilityRole === 'dsd'
   const userDsdSiteName = useAppStore(s => s.dsdSiteName)
-  const sec = q => commoditySection ? q.eq('section', commoditySection) : q
   // Non-reactive store access for callbacks (avoids full-store subscription)
   const getStore = useAppStore.getState
   // Suppress the next pending reload triggered by restoreDispatchedStock's own DB update
@@ -207,13 +207,10 @@ export function Transfers() {
     loadIntPendingApprovals(); loadIntHistory(); loadDsdPendingApprovals(); loadDsdDispatched(); loadDsdHistory()
     loadAllIntHistory()
 
-    // Realtime: reload whenever any transfer row involving this facility changes.
-    // Using a single unfiltered subscription and checking client-side avoids Supabase
-    // replica identity issues where filtered UPDATE events may not fire cross-facility.
-    const channel = sb.channel(fid ? `transfers-${fid}` : 'transfers-admin')
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'stock_transfer_log',
-      }, async (payload) => {
+    // Realtime: reload whenever any transfer row changes. A single unfiltered
+    // subscription with client-side checks (the SSE stream carries the few transfer
+    // fields the toast needs in payload.new).
+    return subscribeRealtime(['stock_transfer_log'], async (payload) => {
         if (suppressNextPendingReload.current) {
           suppressNextPendingReload.current = false
         } else {
@@ -231,9 +228,7 @@ export function Transfers() {
           if (newRow.status === 'in_transit') {
             const rowId = newRow.id || payload.old?.id
             if (rowId) {
-              const { data: fullRow } = await sb.from('stock_transfer_log')
-                .select('receiving_facility_id, commodity_name')
-                .eq('id', rowId).maybeSingle()
+              const fullRow = await api.transfers.get(rowId).catch(() => null)
               if (fullRow?.receiving_facility_id === fid && !isDSD) {
                 setPrimary('request')
                 setReqSub('alerts')
@@ -242,21 +237,17 @@ export function Transfers() {
             }
           }
         }
-      })
-      .subscribe()
-
-    return () => { sb.removeChannel(channel) }
+    })
   }, [fid])
 
   // ── Pending ───────────────────────────────────────────────────────────────
   async function loadPending(showSpinner = false) {
     if (showSpinner) setLoadingP(true)
-    let q = sb.from('stock_transfer_log').select('*')
-      .in('status', ['pending', 'in_transit', 'disputed'])
-      .order('initiated_at', { ascending: false })
-    if (fid) q = q.or(`sending_facility_id.eq.${fid},receiving_facility_id.eq.${fid}`)
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid || undefined,
+      status: 'pending,in_transit,disputed',
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setPending(data || [])
     if (showSpinner) setLoadingP(false)
   }
@@ -271,22 +262,20 @@ export function Transfers() {
     const parsedQty = parseInt(dispatchQty)
     if (!parsedQty || parsedQty < 1) { toast('Qty issued must be at least 1', 'red'); return }
     setDispatchLoading(true)
-    const appendNote = `[Approved by: ${dispatchApprovedBy.trim()}] [Carrier: ${dispatchCarrier.trim()}] [Expiry: ${dispatchExpiry.trim()}] [Batch: ${dispatchBatch.trim()}]`
-    const newNotes = t.notes ? t.notes + ' ' + appendNote : appendNote
-    const { error } = await sb.from('stock_transfer_log').update({
-      status: 'in_transit',
-      quantity: parsedQty,
-      notes: newNotes,
-    }).eq('id', t.id)
-    if (error) { toast('Error confirming dispatch: ' + error.message, 'red'); setDispatchLoading(false); return }
-    const { data: senderStk } = await sb.from('stock').select('id,quantity')
-      .eq('facility_id', fid).eq('commodity_id', t.commodity_id).eq('location_type', 'store').maybeSingle()
-    if (senderStk) {
-      await sb.from('stock').update({ quantity: Math.max(0, senderStk.quantity - parsedQty), updated_at: new Date().toISOString() }).eq('id', senderStk.id)
-      await loadStock()
-    }
+    // Server marks in_transit, sets qty, appends the dispatch note, and decrements sender store.
+    let updatedRow
+    try {
+      updatedRow = await api.transfers.dispatch(t.id, {
+        approved_by: dispatchApprovedBy.trim(),
+        carrier: dispatchCarrier.trim(),
+        expiry: dispatchExpiry.trim(),
+        batch: dispatchBatch.trim(),
+        quantity: parsedQty,
+      })
+    } catch (error) { toast('Error confirming dispatch: ' + error.message, 'red'); setDispatchLoading(false); return }
+    await loadStock()
     toast('Transfer dispatched — awaiting receiver acceptance', 'green')
-    setPending(prev => prev.map(p => p.id === t.id ? { ...p, status: 'in_transit', quantity: parsedQty, notes: newNotes } : p))
+    setPending(prev => prev.map(p => p.id === t.id ? { ...p, status: 'in_transit', quantity: parsedQty, notes: updatedRow?.notes ?? p.notes } : p))
     setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLoading(false)
   }
 
@@ -297,15 +286,14 @@ export function Transfers() {
     if (!parsedQty || parsedQty < 1) { toast('Qty must be at least 1', 'red'); return }
     setAssignLoading(true)
     const srcFac = allFacilities.find(f => f.id === assignFacId)
-    const reviewNote = `[Reviewed by: ${assignApprovedBy.trim()}]`
-    const newNotes = t.notes ? t.notes + ' ' + reviewNote : reviewNote
-    const { error } = await sb.from('stock_transfer_log').update({
-      sending_facility_id: assignFacId,
-      sending_facility_name: srcFac?.name || '',
-      quantity: parsedQty,
-      notes: newNotes,
-    }).eq('id', t.id)
-    if (error) { toast('Error assigning facility: ' + error.message, 'red'); setAssignLoading(false); return }
+    try {
+      await api.transfers.assignSource(t.id, {
+        sending_facility_id: assignFacId,
+        sending_facility_name: srcFac?.name || '',
+        quantity: parsedQty,
+        reviewed_by: assignApprovedBy.trim(),
+      })
+    } catch (error) { toast('Error assigning facility: ' + error.message, 'red'); setAssignLoading(false); return }
     toast(`Request sent to ${srcFac?.name || 'facility'}`, 'green')
     setAssigningId(null); setAssignFacState(''); setAssignFacLga(''); setAssignFacId('')
     setAssignApprovedBy(''); setAssignCarrier(''); setAssignQty(1); setAssignLoading(false)
@@ -316,48 +304,34 @@ export function Transfers() {
     if (!acceptReceiverName.trim()) { toast('Receiver name is required', 'red'); return }
     if (!t.sending_facility_id) { toast('Transfer has no sending facility — cannot accept', 'red'); return }
     setAcceptLoading(true)
-    const { data: recStk } = await sb.from('stock').select('id,quantity')
-      .eq('facility_id', t.receiving_facility_id).eq('commodity_id', t.commodity_id).eq('location_type', 'store').maybeSingle()
-    if (recStk) {
-      await sb.from('stock').update({ quantity: recStk.quantity + t.quantity, updated_at: new Date().toISOString() }).eq('id', recStk.id)
-    } else {
-      await sb.from('stock').insert({ facility_id: t.receiving_facility_id, commodity_id: t.commodity_id, quantity: t.quantity, location_type: 'store', updated_at: new Date().toISOString() })
-    }
-    await sb.from('intake_log').insert({
-      facility_id: t.receiving_facility_id, commodity_id: t.commodity_id, quantity: t.quantity,
-      supplier_source: t.sending_facility_name, condition_on_arrival: 'Good', received_by: acceptReceiverName.trim(),
-      received_at: new Date().toISOString(), notes: 'Facility transfer in from ' + t.sending_facility_name,
-    })
-    const { error: updateErr } = await sb.from('stock_transfer_log').update({ status: 'accepted', resolved_at: new Date().toISOString(), resolved_by: acceptReceiverName.trim() }).eq('id', t.id)
-    if (updateErr) { toast('Error updating transfer status: ' + updateErr.message, 'red'); setAcceptLoading(false); return }
+    // Server credits the receiver store, writes the intake_log entry, and marks accepted.
+    try {
+      await api.transfers.accept(t.id, { received_by: acceptReceiverName.trim() })
+    } catch (updateErr) { toast('Error updating transfer status: ' + updateErr.message, 'red'); setAcceptLoading(false); return }
     setAcceptingId(null); setAcceptReceiverName(''); setAcceptLoading(false)
     toast('Transfer accepted — stock updated', 'green')
     await loadStock(); loadPending(); loadMyRequests()
   }
 
   async function disputeTransfer(t) {
-    const { error: dispErr } = await sb.from('stock_transfer_log')
-      .update({ status: 'disputed', resolved_at: new Date().toISOString(), resolved_by: getStore().user?.email || '', dispute_note: 'Disputed by receiver' })
-      .eq('id', t.id)
-      .eq('receiving_facility_id', fid)
-    if (dispErr) { toast('Error disputing transfer: ' + dispErr.message, 'red'); return }
+    try {
+      await api.transfers.dispute(t.id, {
+        disputed_by: getStore().user?.email || '',
+        facilityId: fid,
+        dispute_note: 'Disputed by receiver',
+      })
+    } catch (dispErr) { toast('Error disputing transfer: ' + dispErr.message, 'red'); return }
     toast('Transfer marked as disputed', 'amber'); loadPending()
   }
 
   async function restoreDispatchedStock(t) {
-    const { data: senderStk } = await sb.from('stock').select('id,quantity')
-      .eq('facility_id', fid).eq('commodity_id', t.commodity_id).eq('location_type', 'store').maybeSingle()
-    if (!senderStk) { toast('No stock record found to restore', 'red'); return }
-    const { error: stockErr } = await sb.from('stock').update({ quantity: senderStk.quantity + t.quantity, updated_at: new Date().toISOString() }).eq('id', senderStk.id)
-    if (stockErr) { toast('Error restoring stock: ' + stockErr.message, 'red'); return }
     suppressNextPendingReload.current = true
-    const { data: updated, error: logErr } = await sb.from('stock_transfer_log')
-      .update({ dispute_note: 'Disputed — stock restored', status: 'accepted', resolved_at: new Date().toISOString() })
-      .eq('id', t.id)
-      .eq('sending_facility_id', fid)
-      .select('id')
-    if (logErr) { suppressNextPendingReload.current = false; toast('Error updating transfer: ' + logErr.message, 'red'); return }
-    if (!updated || updated.length === 0) {
+    // Server credits the sender store and marks the disputed transfer accepted (stock restored).
+    let updated
+    try {
+      updated = await api.transfers.restore(t.id, { facilityId: fid })
+    } catch (logErr) { suppressNextPendingReload.current = false; toast('Error updating transfer: ' + logErr.message, 'red'); return }
+    if (!updated) {
       suppressNextPendingReload.current = false
       toast('Could not restore — permission denied or record not found', 'red')
       return
@@ -381,12 +355,10 @@ export function Transfers() {
   // Request alerts: rows where I am the receiver and status=pending (awaiting sending facility to dispatch)
   async function loadMyRequests() {
     if (!fid) return
-    let q = sb.from('stock_transfer_log').select('*')
-      .in('status', ['pending', 'in_transit'])
-      .eq('receiving_facility_id', fid)
-      .order('initiated_at', { ascending: false })
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'incoming', status: 'pending,in_transit',
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setMyRequests(data || [])
   }
 
@@ -394,19 +366,17 @@ export function Transfers() {
     if (!fid) return
     const f = from || reqHistFrom; const t2 = to || reqHistTo
     setLoadingReqHist(true)
-    let q = sb.from('stock_transfer_log').select('*')
-      .in('status', ['accepted', 'cancelled', 'dismissed'])
-      .eq('receiving_facility_id', fid)
-      .gte('initiated_at', f + 'T00:00:00').lte('initiated_at', t2 + 'T23:59:59')
-      .order('initiated_at', { ascending: false }).limit(200)
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'incoming', status: 'accepted,cancelled,dismissed',
+      date_field: 'initiated_at', from: f, to: t2, limit: 200,
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setRequestHistory(data || []); setLoadingReqHist(false)
   }
 
   async function cancelRequest(id) {
     if (!window.confirm('Cancel this stock request?')) return
-    await sb.from('stock_transfer_log').update({ status: 'cancelled', resolved_at: new Date().toISOString(), resolved_by: getStore().user?.email || '' }).eq('id', id)
+    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '' }).catch(() => {})
     toast('Request cancelled', 'green'); loadMyRequests(); loadPending()
   }
 
@@ -437,8 +407,9 @@ export function Transfers() {
         section: commoditySection,
       }
     })
-    const { error } = await sb.from('stock_transfer_log').insert(payload)
-    if (error) { setReqMsg({ type: 'error', text: 'Error: ' + error.message }); setReqSending(false); return }
+    try {
+      await api.transfers.create(payload)
+    } catch (error) { setReqMsg({ type: 'error', text: 'Error: ' + error.message }); setReqSending(false); return }
     toast('Request submitted — awaiting admin assignment', 'green')
     setReqMsg({ type: 'success', text: 'Request submitted. Admin will assign a source facility and arrange the transfer.' })
     setRequestLines([{ id: Date.now(), commodity_id: '', requested_qty: 1, issued_qty: 0 }])
@@ -450,12 +421,11 @@ export function Transfers() {
   async function loadSendHistory(from, to) {
     const f = from || extHistFrom; const t2 = to || extHistTo
     setLoadingS(true)
-    let q = sb.from('stock_transfer_log').select('*').in('status', ['accepted', 'disputed'])
-      .or(`sending_facility_id.eq.${fid},receiving_facility_id.eq.${fid}`)
-      .gte('resolved_at', f + 'T00:00:00').lte('resolved_at', t2 + 'T23:59:59')
-      .order('resolved_at', { ascending: false }).limit(200)
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, status: 'accepted,disputed',
+      date_field: 'resolved_at', from: f, to: t2, limit: 200,
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setSendHistory((data || []).filter(t => t.sending_facility_id !== t.receiving_facility_id && !t.notes?.includes('[Internal:') && !t.notes?.includes('[DSD:')))
     setLoadingS(false)
   }
@@ -476,15 +446,16 @@ export function Transfers() {
     const recFac = allFacilities.find(f => f.id === recFacId)
     const comm = allCommodities.find(c => c.id === commId)
     const fullNotes = `[Approved by: ${sendApprovedBy}] [Carrier: ${sendCarrier}] [Expiry: ${sendExpiry}] [Batch: ${sendBatch}]${notes ? ' ' + notes : ''}`
-    const { error } = await sb.from('stock_transfer_log').insert({
-      sending_facility_id: fid, sending_facility_name: myFac?.name || '',
-      receiving_facility_id: recFacId, receiving_facility_name: recFac?.name || '',
-      commodity_id: commId, commodity_name: comm?.name || '',
-      quantity: parseInt(qty), qty_requested: parseInt(qty), status: 'in_transit', initiated_by: sentBy || '',
-      initiated_at: new Date().toISOString(), notes: fullNotes,
-      section: commoditySection,
-    })
-    if (error) { setMsg({ type: 'error', text: 'Error: ' + error.message }); setSending(false); return }
+    try {
+      await api.transfers.create({
+        sending_facility_id: fid, sending_facility_name: myFac?.name || '',
+        receiving_facility_id: recFacId, receiving_facility_name: recFac?.name || '',
+        commodity_id: commId, commodity_name: comm?.name || '',
+        quantity: parseInt(qty), qty_requested: parseInt(qty), status: 'in_transit', initiated_by: sentBy || '',
+        initiated_at: new Date().toISOString(), notes: fullNotes,
+        section: commoditySection,
+      })
+    } catch (error) { setMsg({ type: 'error', text: 'Error: ' + error.message }); setSending(false); return }
     toast('Transfer dispatched to ' + recFac?.name, 'green')
     setMsg({ type: 'success', text: 'Transfer dispatched. Awaiting receiver acceptance.' })
     setCommId(''); setQty(1); setRecFacId(''); setNotes(''); setSentBy(''); setSendExpiry(''); setSendBatch(''); setSendApprovedBy(''); setSendCarrier('')
@@ -509,18 +480,20 @@ export function Transfers() {
   async function loadIntPendingApprovals() {
     if (!fid) return
     setLoadingIntPending(true)
-    let q = sb.from('stock_transfer_log').select('*').eq('status', 'pending_approval').eq('sending_facility_id', fid).order('initiated_at', { ascending: false })
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'outgoing', status: 'pending_approval', notes_includes: '[Internal:',
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setIntPendingApprovals((data || []).filter(r => r.notes?.includes('[Internal:')))
     setLoadingIntPending(false)
   }
 
   async function loadIntHistory() {
     setLoadingI(true)
-    let q = sb.from('stock_transfer_log').select('*').eq('status', 'accepted').eq('sending_facility_id', fid).order('resolved_at', { ascending: false }).limit(50)
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'outgoing', status: 'accepted', notes_includes: '[Internal:',
+      date_field: 'resolved_at', limit: 50, section: commoditySection || undefined,
+    }).catch(() => [])
     setIntHistory((data || []).filter(t => t.notes?.includes('[Internal:')))
     setLoadingI(false)
   }
@@ -528,11 +501,11 @@ export function Transfers() {
   async function loadAllIntHistory(from, to) {
     const f = from || intHistFrom; const t2 = to || intHistTo
     setLoadingAllInt(true)
-    let q = sb.from('stock_transfer_log').select('*').eq('status', 'accepted').eq('sending_facility_id', fid)
-      .gte('resolved_at', f + 'T00:00:00').lte('resolved_at', t2 + 'T23:59:59')
-      .order('resolved_at', { ascending: false }).limit(200)
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'outgoing', status: 'accepted',
+      date_field: 'resolved_at', from: f, to: t2, limit: 200,
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setAllIntHistory((data || []).filter(t => t.notes?.includes('[Internal:') || t.notes?.includes('[DSD:')))
     setLoadingAllInt(false)
   }
@@ -555,8 +528,9 @@ export function Transfers() {
         section: commoditySection,
       }
     })
-    const { error } = await sb.from('stock_transfer_log').insert(payload)
-    if (error) { setIntMsg({ type: 'error', text: 'Error: ' + error.message }); setIntSending(false); return }
+    try {
+      await api.transfers.create(payload)
+    } catch (error) { setIntMsg({ type: 'error', text: 'Error: ' + error.message }); setIntSending(false); return }
     toast('Submitted for store manager approval', 'green')
     setIntMsg({ type: 'success', text: 'Submitted. Awaiting store manager approval.' })
     setIntLines([{ id: Date.now(), commodity_id: '', stock_balance: 0, stock_required: 1, stock_issued: 1 }])
@@ -571,14 +545,12 @@ export function Transfers() {
     setIntApproving(true)
     const storeStk = stockData.find(r => r.commodity_id === record.commodity_id && r.facility_id === fid && r.location_type === 'store')
     if (!storeStk || storeStk.quantity < parsedQty) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setIntApproving(false); return }
-    await sb.from('stock').update({ quantity: storeStk.quantity - parsedQty, updated_at: new Date().toISOString() }).eq('id', storeStk.id)
-    const { data: dispStk } = await sb.from('stock').select('id,quantity').eq('facility_id', fid).eq('commodity_id', record.commodity_id).eq('location_type', 'dispensary').maybeSingle()
-    if (dispStk) {
-      await sb.from('stock').update({ quantity: dispStk.quantity + parsedQty, updated_at: new Date().toISOString() }).eq('id', dispStk.id)
-    } else {
-      await sb.from('stock').insert({ facility_id: fid, commodity_id: record.commodity_id, quantity: parsedQty, location_type: 'dispensary', updated_at: new Date().toISOString() })
+    // Server moves the qty store→dispensary and marks accepted (transactional).
+    try {
+      await api.transfers.approveInternal(record.id, { approved_by: intApprovedBy, quantity: parsedQty })
+    } catch (err) {
+      toast(err.status === 409 ? err.message : 'Error approving: ' + err.message, 'red'); setIntApproving(false); return
     }
-    await sb.from('stock_transfer_log').update({ status: 'accepted', quantity: parsedQty, resolved_at: new Date().toISOString(), resolved_by: intApprovedBy }).eq('id', record.id)
     const comm = allCommodities.find(c => c.id === record.commodity_id)
     toast(`${parsedQty} ${comm?.unit || 'units'} moved to dispensary`, 'green')
     setIntApprovingId(null); setIntApprovedBy('')
@@ -587,7 +559,7 @@ export function Transfers() {
 
   async function rejectInternal(id) {
     if (!window.confirm('Reject this transfer request?')) return
-    await sb.from('stock_transfer_log').update({ status: 'cancelled', resolved_at: new Date().toISOString(), resolved_by: getStore().user?.email || '' }).eq('id', id)
+    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '' }).catch(() => {})
     toast('Transfer request rejected', 'green'); loadIntPendingApprovals()
   }
 
@@ -598,8 +570,8 @@ export function Transfers() {
     if (field === 'commodity_id') {
       const effectiveSiteName = isDSD ? userDsdSiteName : dsdSiteName
       if (!effectiveSiteName) return
-      const { data: dsdStk } = await sb.from('dsd_stock').select('quantity')
-        .eq('facility_id', fid).eq('dsd_site_name', effectiveSiteName).eq('commodity_id', value).maybeSingle()
+      const dsdRows = await api.stock.dsd.list({ facility_id: fid, dsd_site_name: effectiveSiteName, commodity_id: value }).catch(() => [])
+      const dsdStk = dsdRows && dsdRows[0]
       setDsdLines(prev => prev.map(l => {
         if (l.id !== id) return l
         return { ...l, [field]: value, stock_balance: dsdStk?.quantity || 0 }
@@ -612,11 +584,10 @@ export function Transfers() {
   async function loadDsdPendingApprovals() {
     if (!fid) return
     setLoadingDsdPending(true)
-    let q = sb.from('stock_transfer_log').select('*')
-      .eq('status', 'pending_approval')
-      .eq('sending_facility_id', fid).order('initiated_at', { ascending: false })
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'outgoing', status: 'pending_approval', notes_includes: '[DSD:',
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setDsdPendingApprovals((data || []).filter(r => r.notes?.includes('[DSD:')))
     setLoadingDsdPending(false)
   }
@@ -624,22 +595,20 @@ export function Transfers() {
   async function loadDsdDispatched() {
     if (!fid) return
     setLoadingDsdDispatched(true)
-    let q = sb.from('stock_transfer_log').select('*')
-      .eq('status', 'dispatched')
-      .eq('sending_facility_id', fid).order('initiated_at', { ascending: false })
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'outgoing', status: 'dispatched', notes_includes: '[DSD:',
+      section: commoditySection || undefined,
+    }).catch(() => [])
     setDsdDispatched((data || []).filter(r => r.notes?.includes('[DSD:')))
     setLoadingDsdDispatched(false)
   }
 
   async function loadDsdHistory() {
     setLoadingD(true)
-    let q = sb.from('stock_transfer_log').select('*')
-      .in('status', ['accepted', 'disputed'])
-      .eq('sending_facility_id', fid).order('resolved_at', { ascending: false }).limit(50)
-    q = sec(q)
-    const { data } = await q
+    const data = await api.transfers.list({
+      facility_id: fid, direction: 'outgoing', status: 'accepted,disputed',
+      date_field: 'resolved_at', limit: 50, section: commoditySection || undefined,
+    }).catch(() => [])
     setDsdHistory((data || []).filter(t => t.notes?.includes('[DSD:')))
     setLoadingD(false)
   }
@@ -665,8 +634,9 @@ export function Transfers() {
         section: commoditySection,
       }
     })
-    const { error } = await sb.from('stock_transfer_log').insert(payload)
-    if (error) { setDsdMsg({ type: 'error', text: 'Error: ' + error.message }); setDsdSending(false); return }
+    try {
+      await api.transfers.create(payload)
+    } catch (error) { setDsdMsg({ type: 'error', text: 'Error: ' + error.message }); setDsdSending(false); return }
     toast('Submitted for store manager approval', 'green')
     setDsdMsg({ type: 'success', text: 'Submitted. Awaiting store manager approval.' })
     setDsdLines([{ id: Date.now(), commodity_id: '', stock_balance: 0, stock_required: 1, stock_issued: 1 }])
@@ -679,29 +649,15 @@ export function Transfers() {
     const issued = parseInt(dsdIssuedQty)
     if (!issued || issued < 1) { toast('Stock issued quantity is required', 'red'); return }
     setDsdApproving(true)
-    const { data: storeStk } = await sb.from('stock').select('id,quantity')
-      .eq('facility_id', fid).eq('commodity_id', record.commodity_id)
-      .eq('location_type', 'store').maybeSingle()
+    const storeStk = stockData.find(r => r.commodity_id === record.commodity_id && r.facility_id === fid && r.location_type === 'store')
     if (!storeStk || storeStk.quantity < issued) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setDsdApproving(false); return }
-    await sb.from('stock').update({ quantity: storeStk.quantity - issued, updated_at: new Date().toISOString() }).eq('id', storeStk.id)
-
-    // Update DSD site stock
-    const dsdSiteNameFromNotes = record.notes?.match(/\[DSD:\s*([^\]]+)\]/)?.[1]?.trim() || record.receiving_facility_name || ''
-    const { data: dsdStk } = await sb.from('dsd_stock').select('id,quantity')
-      .eq('facility_id', fid).eq('dsd_site_name', dsdSiteNameFromNotes).eq('commodity_id', record.commodity_id).maybeSingle()
-    if (dsdStk) {
-      await sb.from('dsd_stock').update({ quantity: dsdStk.quantity + issued, updated_at: new Date().toISOString() }).eq('id', dsdStk.id)
-    } else {
-      await sb.from('dsd_stock').insert({ facility_id: fid, dsd_site_name: dsdSiteNameFromNotes, commodity_id: record.commodity_id, quantity: issued, updated_at: new Date().toISOString() })
+    // Server decrements the store and marks the request dispatched. The DSD site is
+    // credited when it confirms receipt (api.transfers.receive), matching the SDP/lab flow.
+    try {
+      await api.transfers.approveDsd(record.id, { approved_by: dsdApprovedBy, quantity: issued })
+    } catch (updateErr) {
+      toast(updateErr.status === 409 ? updateErr.message : 'Error updating transfer: ' + updateErr.message, 'red'); setDsdApproving(false); return
     }
-
-    const { error: updateErr } = await sb.from('stock_transfer_log').update({
-      status: 'dispatched',
-      quantity: issued,
-      resolved_at: new Date().toISOString(),
-      resolved_by: `[Approved: ${dsdApprovedBy}]`,
-    }).eq('id', record.id)
-    if (updateErr) { toast('Error updating transfer: ' + updateErr.message, 'red'); setDsdApproving(false); return }
     const comm = allCommodities.find(c => c.id === record.commodity_id)
     toast(`${issued} ${comm?.unit || 'units'} dispatched — awaiting DSD confirmation`, 'green')
     setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty('')
@@ -710,7 +666,7 @@ export function Transfers() {
 
   async function rejectDsd(id) {
     if (!window.confirm('Reject this DSD request?')) return
-    await sb.from('stock_transfer_log').update({ status: 'cancelled', resolved_at: new Date().toISOString(), resolved_by: getStore().user?.email || '' }).eq('id', id)
+    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '' }).catch(() => {})
     toast('DSD request rejected', 'green'); loadDsdPendingApprovals()
   }
 
