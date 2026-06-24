@@ -44,10 +44,10 @@ jobs:
         shell: powershell
         working-directory: frontend
         run: |
-          npm ci
+          npm install
           npm run build
 
       - name: Install backend deps
         shell: powershell
         working-directory: backend
-        run: npm ci
+        run: npm install
