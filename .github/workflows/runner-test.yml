@@ -1,0 +1,53 @@
+name: Self-Hosted Runner Test
+
+# Run on pushes/PRs to main, and let you trigger it by hand from the Actions tab
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    name: Runner smoke test
+    runs-on: self-hosted   # <-- this is what sends the job to YOUR runner
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Say hello from the runner
+        shell: pwsh
+        run: |
+          Write-Host "Runner is alive ✅"
+          Write-Host "Machine : $env:COMPUTERNAME"
+          Write-Host "Runner  : $env:RUNNER_NAME"
+          Write-Host "OS      : $env:RUNNER_OS"
+          Write-Host "Workdir : $(Get-Location)"
+
+      - name: Show tool versions
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          git --version
+
+  build:
+    name: Install & build
+    runs-on: self-hosted
+    needs: smoke-test
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Install & build frontend
+        shell: pwsh
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install backend deps
+        shell: pwsh
+        working-directory: backend
+        run: npm ci
