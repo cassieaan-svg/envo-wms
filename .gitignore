@@ -47,5 +47,8 @@ create_new_facility_users.js
 new_facility_logins_confirmed.csv
 *_logins*.csv
 
-# Local migration dumps (contain real data)
-db/_migration/
+# Local migration dumps (contain real data) — but keep the realtime trigger DDL,
+# which the production DB needs (pure schema, no data). Ignore the dir CONTENTS
+# (db/_migration/*) rather than the dir itself, so the negation can re-include.
+db/_migration/*
+!db/_migration/realtime_triggers.sql
