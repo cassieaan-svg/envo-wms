@@ -1,0 +1,49 @@
+name: Deploy to VM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # lets you redeploy by hand from the Actions tab
+
+# Never let two deploys run at the same time; queue them instead
+concurrency:
+  group: deploy-vm
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false       # IMPORTANT: keep backend/.env (untracked) on the VM
+
+      - name: Install & build frontend
+        shell: powershell
+        working-directory: frontend
+        run: |
+          npm install
+          npm run build
+          # vite outputs to repo-root /dist (see vite.config.js outDir: '../dist')
+
+      - name: Copy frontend to IIS
+        shell: powershell
+        run: xcopy ".\dist\*" "C:\sites\envo\" /E /I /Y
+
+      - name: Install backend dependencies
+        shell: powershell
+        working-directory: backend
+        run: npm install
+
+      - name: Start or restart backend with pm2
+        shell: powershell
+        working-directory: backend
+        run: |
+          pm2 describe backend > $null 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            pm2 start src/server.js --name backend
+          } else {
+            pm2 restart backend --update-env
+          }
+          pm2 save
