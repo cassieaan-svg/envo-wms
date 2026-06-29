@@ -3,6 +3,7 @@ import { api } from '../../lib/api'
 import { subscribeRealtime } from '../../lib/realtime'
 import { NavSection, NavItem } from '../../components/NavItem'
 import { useAppStore } from '../../store/appStore'
+import { fetchFacilityAlertCounts } from '../../utils/alertCounts'
 
 const icons = {
   dispense:   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4"><circle cx="8" cy="8" r="6"/><path d="M8 5v6M5 8h6"/></svg>,
@@ -28,11 +29,15 @@ export function PharmacyNav() {
   const isRestricted = facilityRole === 'sdp' || facilityRole === 'dsd'
 
   const [pendingCount, setPendingCount] = useState(0)
+  const [alertCount, setAlertCount]     = useState(0)
 
   useEffect(() => {
-    if (!fid) { setPendingCount(0); return }
+    if (!fid) { setPendingCount(0); setAlertCount(0); return }
     loadPendingCount()
-    return subscribeRealtime(['stock_transfer_log'], loadPendingCount)
+    loadAlertCount()
+    const unsubT = subscribeRealtime(['stock_transfer_log'], loadPendingCount)
+    const unsubS = subscribeRealtime(['stock'], loadAlertCount)
+    return () => { unsubT?.(); unsubS?.() }
   }, [fid, commoditySection])
 
   async function loadPendingCount() {
@@ -42,10 +47,20 @@ export function PharmacyNav() {
     try {
       const [incoming, outgoing] = await Promise.all([
         api.transfers.list({ facility_id: fid, direction: 'incoming', status: 'pending,in_transit', section: commoditySection || undefined }),
-        api.transfers.list({ facility_id: fid, direction: 'outgoing', status: 'pending_approval,in_transit', section: commoditySection || undefined }),
+        api.transfers.list({ facility_id: fid, direction: 'outgoing', status: 'pending,pending_approval,in_transit', section: commoditySection || undefined }),
       ])
       setPendingCount((incoming?.length || 0) + (outgoing?.length || 0))
     } catch { setPendingCount(0) }
+  }
+
+  async function loadAlertCount() {
+    if (!fid) { setAlertCount(0); return }
+    const s = useAppStore.getState()
+    // Expiry + low stock + overstock (out-of-stock excluded by request).
+    const { total } = await fetchFacilityAlertCounts({
+      fid, allCommodities: s.allCommodities, amcWindows: s.amcWindows, commoditySection,
+    }).catch(() => ({ total: 0 }))
+    setAlertCount(total || 0)
   }
 
   return (
@@ -59,7 +74,7 @@ export function PharmacyNav() {
       {!isRestricted && <NavSection>Overview</NavSection>}
       {!isRestricted && <NavItem page="dashboard" icon={icons.dashboard}>Dashboard</NavItem>}
       <NavItem page="stock"     icon={icons.stock}>Stock Levels</NavItem>
-      {!isRestricted && <NavItem page="alerts"    icon={icons.alerts} badge={pendingCount}>Alerts</NavItem>}
+      {!isRestricted && <NavItem page="alerts"    icon={icons.alerts} badge={pendingCount + alertCount}>Alerts</NavItem>}
 
       {!isRestricted && <NavSection>Reports</NavSection>}
       {!isRestricted && <NavItem page="log"        icon={icons.log}>Activity Log</NavItem>}

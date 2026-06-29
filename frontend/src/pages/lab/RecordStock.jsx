@@ -232,7 +232,8 @@ export function RecordStock() {
                   <select value={recordSdp} onChange={e => { setRecordSdp(e.target.value); setRecordSdpCt('') }}
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                     <option value="">Select service delivery point…</option>
-                    {['OPD','ANC','Labour Ward',"Children's Ward",'Immunization','TB Dot','Male Ward','Female Ward','A & E','Family Planning','CT'].map(s => (
+                    {/* Hidden SDPs (not shown to avoid wrong entries): OPD, ANC, Labour Ward, Children's Ward, Immunization, TB Dot, Female Ward, A & E, Family Planning, CT */}
+                    {['Main Lab'].map(s => (
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>

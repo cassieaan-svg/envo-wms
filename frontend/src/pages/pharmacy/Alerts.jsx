@@ -35,6 +35,10 @@ export function Alerts() {
   const [assignReviewedBy, setAssignReviewedBy] = useState('')
   const [assignQty, setAssignQty]               = useState(1)
   const [assignLoading, setAssignLoading]       = useState(false)
+  // Unscoped facility list for the assign picker only — lets a state admin
+  // assign a source facility from another state for emergency orders, without
+  // widening their scoped dashboard/stock views.
+  const [assignFacPool, setAssignFacPool]       = useState([])
   const [reqHistory, setReqHistory]   = useState([])
   const [loadingHist, setLoadingHist] = useState(false)
   const [histFrom, setHistFrom] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10))
@@ -46,6 +50,7 @@ export function Alerts() {
   useEffect(() => {
     loadAll()
     loadFacReqAlerts()
+    if (store.isAdmin()) api.facilities.list({}).then(setAssignFacPool).catch(() => setAssignFacPool([]))
     return subscribeRealtime(['stock_transfer_log'], (payload) => {
       if (store.isAdmin()) { loadFacReqAlerts(); return }
       const row = payload.new?.receiving_facility_id ? payload.new : (payload.old || {})
@@ -67,10 +72,20 @@ export function Alerts() {
       data = await api.transfers.list({ status: 'pending', section: commoditySection || undefined }).catch(() => [])
       data = (data || []).filter(t => !t.sending_facility_id)
     } else {
-      data = await api.transfers.list({
-        facility_id: fid, direction: 'incoming', status: 'pending,in_transit',
-        section: commoditySection || undefined,
-      }).catch(() => [])
+      // Incoming = own requests; to-dispatch = requests this facility was assigned
+      // to fulfil as the source (possibly from another state), still pending.
+      const [incoming, toDispatch] = await Promise.all([
+        api.transfers.list({
+          facility_id: fid, direction: 'incoming', status: 'pending,in_transit',
+          section: commoditySection || undefined,
+        }).catch(() => []),
+        api.transfers.list({
+          facility_id: fid, direction: 'outgoing', status: 'pending',
+          section: commoditySection || undefined,
+        }).catch(() => []),
+      ])
+      const tagged = (toDispatch || []).map(t => ({ ...t, _toDispatch: true }))
+      data = [...tagged, ...(incoming || [])]
     }
     setFacReqAlerts(data || [])
   }
@@ -93,7 +108,7 @@ export function Alerts() {
     const parsedQty = parseInt(assignQty)
     if (!parsedQty || parsedQty < 1) { toast('Qty must be at least 1','red'); return }
     setAssignLoading(true)
-    const srcFac = store.allFacilities.find(f => f.id === assignFacId)
+    const srcFac = (assignFacPool.length ? assignFacPool : store.allFacilities).find(f => f.id === assignFacId)
     try {
       await api.transfers.assignSource(req.id, {
         sending_facility_id: assignFacId,
@@ -338,7 +353,7 @@ export function Alerts() {
       {tab==='fac-requests' && (
         <Card>
           <CardHeader>
-            <CardTitle>{store.isAdmin() ? (reqView==='history' ? 'Redistribution request history' : 'Facility redistribution requests') : 'My redistribution requests'}</CardTitle>
+            <CardTitle>{store.isAdmin() ? (reqView==='history' ? 'Redistribution request history' : 'Facility redistribution requests') : 'Requests & dispatch tasks'}</CardTitle>
             <div className="flex gap-2">
               {store.isAdmin() ? (
                 <>
@@ -413,7 +428,7 @@ export function Alerts() {
             ) : activeReqs.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
               activeReqs.map(req => {
                 const assignFacGroups = {}
-                store.allFacilities.filter(f => f.id !== req.receiving_facility_id).forEach(f => {
+                ;(assignFacPool.length ? assignFacPool : store.allFacilities).filter(f => f.id !== req.receiving_facility_id).forEach(f => {
                   const s=f.state||'Other', l=f.lga||'Other'
                   if(!assignFacGroups[s]) assignFacGroups[s]={}
                   if(!assignFacGroups[s][l]) assignFacGroups[s][l]=[]
@@ -486,13 +501,20 @@ export function Alerts() {
                       {req.qty_requested != null && req.quantity !== req.qty_requested && (
                         <> · Issued: <span className="font-medium text-green-300">{req.quantity}{store.allCommodities.find(c=>c.id===req.commodity_id)?.unit ? ` ${store.allCommodities.find(c=>c.id===req.commodity_id).unit}` : ''}</span></>
                       )}
-                      {req.sending_facility_name && <> · From: <span className="text-blue-400">{req.sending_facility_name}</span></>}
+                      {req._toDispatch
+                        ? <> · To: <span className="text-green-400">{req.receiving_facility_name}</span></>
+                        : req.sending_facility_name && <> · From: <span className="text-blue-400">{req.sending_facility_name}</span></>}
                     </div>
                     <div className="text-xs text-gray-600 mt-1">Submitted {fmtDateTime(req.initiated_at)} by {req.initiated_by||'—'}</div>
                     {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {req.status === 'in_transit' ? (
+                    {req._toDispatch ? (
+                      <>
+                        <span className="text-xs text-purple-300 bg-purple-500/10 border border-purple-500/20 rounded-full px-2 py-0.5">📤 Dispatch requested by admin</span>
+                        <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>Go to dispatch</Button>
+                      </>
+                    ) : req.status === 'in_transit' ? (
                       <>
                         <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-full px-2 py-0.5">📦 In transit</span>
                         <Button variant="success" size="sm" onClick={()=>{ setAcceptingId(req.id); setAcceptReceiverName('') }}>✓ Accept</Button>

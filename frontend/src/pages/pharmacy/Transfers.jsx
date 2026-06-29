@@ -840,7 +840,6 @@ export function Transfers() {
           {[
             { id: 'request',  label: 'Request',                  desc: 'Submit and track redistribution requests',          badge: totalPendingBadge },
             { id: 'internal', label: 'Internal redistribution',  desc: 'Store to Dispensary and DSD transfers',             badge: allIntPendingBadge },
-            { id: 'external', label: 'External redistribution',  desc: 'Send or receive stock from other facilities',       badge: 0 },
           ].filter(card => {
             if (isDispenser) return ['request','internal'].includes(card.id)
             if (isDSD)       return ['request', 'internal'].includes(card.id)
@@ -1454,7 +1453,7 @@ export function Transfers() {
       {/* ══════════════════════════════════════════════════════════════════════
           EXTERNAL REDISTRIBUTION
       ══════════════════════════════════════════════════════════════════════ */}
-      {!isDispenser && !isDSD && primary === 'external' && (
+      {false && primary === 'external' && (
         <>
           <BackButton />
           <div className="flex gap-1.5 mb-4 flex-wrap border-b border-white/8 pb-3">

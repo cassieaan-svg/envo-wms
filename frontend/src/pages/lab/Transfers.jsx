@@ -1212,7 +1212,8 @@ export function Transfers() {
                           <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Service Delivery Point *</label>
                           <select value={dsdType} onChange={e => { setDsdType(e.target.value); setDsdCtNumber('') }} required className={inputCls}>
                             <option value="">Select service delivery point…</option>
-                            {['OPD','ANC','Labour Ward',"Children's Ward",'Immunization','TB Dot','Male Ward','Female Ward','A & E','Family Planning','CT'].map(s => (
+                            {/* Hidden SDPs (not shown to avoid wrong entries): OPD, ANC, Labour Ward, Children's Ward, Immunization, TB Dot, Female Ward, A & E, Family Planning, CT */}
+                            {['Main Lab'].map(s => (
                               <option key={s} value={s}>{s}</option>
                             ))}
                           </select>

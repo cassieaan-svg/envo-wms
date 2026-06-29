@@ -43,11 +43,21 @@ export function Alerts() {
   }
 
   async function loadFacReqAlerts() {
-    const data = await api.transfers.list({
-      facility_id: fid, direction: 'incoming', status: 'pending,in_transit',
-      section: commoditySection || undefined,
-    }).catch(() => [])
-    setFacReqAlerts(data || [])
+    // Incoming = this facility's own requests it's tracking / receiving.
+    // To-dispatch = requests the admin assigned this facility to fulfil as the
+    // source (sending = us, still pending) — possibly from another state.
+    const [incoming, toDispatch] = await Promise.all([
+      api.transfers.list({
+        facility_id: fid, direction: 'incoming', status: 'pending,in_transit',
+        section: commoditySection || undefined,
+      }).catch(() => []),
+      api.transfers.list({
+        facility_id: fid, direction: 'outgoing', status: 'pending',
+        section: commoditySection || undefined,
+      }).catch(() => []),
+    ])
+    const tagged = (toDispatch || []).map(t => ({ ...t, _toDispatch: true }))
+    setFacReqAlerts([...tagged, ...(incoming || [])])
   }
 
   async function cancelFacRequest(id) {
@@ -261,7 +271,7 @@ export function Alerts() {
       {tab==='fac-requests' && !store.isAdmin() && (
         <Card>
           <CardHeader>
-            <CardTitle>My redistribution requests</CardTitle>
+            <CardTitle>Requests &amp; dispatch tasks</CardTitle>
             <div className="flex gap-2">
               <button onClick={loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
               <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>Submit new request</Button>
@@ -278,13 +288,20 @@ export function Alerts() {
                       {req.qty_requested != null && req.quantity !== req.qty_requested && (
                         <> · Issued: <span className="font-medium text-green-300">{req.quantity}{store.allCommodities.find(c=>c.id===req.commodity_id)?.unit ? ` ${store.allCommodities.find(c=>c.id===req.commodity_id).unit}` : ''}</span></>
                       )}
-                      {req.sending_facility_name && <> · From: <span className="text-blue-400">{req.sending_facility_name}</span></>}
+                      {req._toDispatch
+                        ? <> · To: <span className="text-green-400">{req.receiving_facility_name}</span></>
+                        : req.sending_facility_name && <> · From: <span className="text-blue-400">{req.sending_facility_name}</span></>}
                     </div>
                     <div className="text-xs text-gray-600 mt-1">Submitted {fmtDateTime(req.initiated_at)} by {req.initiated_by||'—'}</div>
                     {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {req.status === 'in_transit' ? (
+                    {req._toDispatch ? (
+                      <>
+                        <span className="text-xs text-purple-300 bg-purple-500/10 border border-purple-500/20 rounded-full px-2 py-0.5">📤 Dispatch requested by admin</span>
+                        <Button variant="primary" size="sm" onClick={()=>store.setCurrentPage('transfers')}>Go to dispatch</Button>
+                      </>
+                    ) : req.status === 'in_transit' ? (
                       <>
                         <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-full px-2 py-0.5">📦 In transit</span>
                         <Button variant="success" size="sm" onClick={()=>{ setAcceptingId(req.id); setAcceptReceiverName('') }}>✓ Accept</Button>

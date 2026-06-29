@@ -1,4 +1,8 @@
+import { useState, useEffect } from 'react'
+import { api } from '../../lib/api'
+import { subscribeRealtime } from '../../lib/realtime'
 import { NavSection, NavItem } from '../../components/NavItem'
+import { useAppStore } from '../../store/appStore'
 
 const icons = {
   dispense:  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4"><circle cx="8" cy="8" r="6"/><path d="M8 5v6M5 8h6"/></svg>,
@@ -7,11 +11,34 @@ const icons = {
 }
 
 export function DsdNav() {
+  const fid = useAppStore(s => s.currentFacility?.id)
+  const commoditySection = useAppStore(s => s.commoditySection)
+  const [pendingCount, setPendingCount] = useState(0)
+
+  useEffect(() => {
+    if (!fid) { setPendingCount(0); return }
+    loadPendingCount()
+    return subscribeRealtime(['stock_transfer_log'], loadPendingCount)
+  }, [fid, commoditySection])
+
+  async function loadPendingCount() {
+    if (!fid) { setPendingCount(0); return }
+    // Incoming transfers awaiting this site (pending/in_transit) plus any outgoing
+    // request it's owed an action on (admin-assigned dispatch / approval / in-transit).
+    try {
+      const [incoming, outgoing] = await Promise.all([
+        api.transfers.list({ facility_id: fid, direction: 'incoming', status: 'pending,in_transit', section: commoditySection || undefined }),
+        api.transfers.list({ facility_id: fid, direction: 'outgoing', status: 'pending,pending_approval,in_transit', section: commoditySection || undefined }),
+      ])
+      setPendingCount((incoming?.length || 0) + (outgoing?.length || 0))
+    } catch { setPendingCount(0) }
+  }
+
   return (
     <>
       <NavSection>Operations</NavSection>
       <NavItem page="dispense"   icon={icons.dispense}>Record Stock Consumed</NavItem>
-      <NavItem page="transfers"  icon={icons.transfers}>Redistribution &amp; Emergency Order</NavItem>
+      <NavItem page="transfers"  icon={icons.transfers} badge={pendingCount}>Redistribution &amp; Emergency Order</NavItem>
 
       <NavSection>Overview</NavSection>
       <NavItem page="stock"      icon={icons.stock}>Stock Levels</NavItem>
