@@ -772,10 +772,11 @@ export function Transfers() {
   const commUnit = (commodityId) => allCommodities.find(c => c.id === commodityId)?.unit || ''
 
   const incomingCount = pending.filter(t => t.receiving_facility_id === fid && t.status === 'in_transit').length
-  const outgoingCount = pending.filter(t =>
-    (t.sending_facility_id === fid && t.status === 'pending') ||
-    (t.receiving_facility_id === fid && t.status === 'pending' && t.sending_facility_id === null)
-  ).length
+  // My requests still open (awaiting admin review or the assigned source to dispatch).
+  const myOpenRequests = pending.filter(t => t.receiving_facility_id === fid && t.status === 'pending').length
+  // Requests the admin assigned this facility to dispatch as the source.
+  const dispatchTasks  = pending.filter(t => t.sending_facility_id === fid && t.status === 'pending').length
+  const outgoingCount = myOpenRequests + dispatchTasks
   const totalPendingBadge = incomingCount + outgoingCount
   const inTransitForMe = incomingCount
   const allIntPendingBadge = intPendingApprovals.length + dsdPendingApprovals.length

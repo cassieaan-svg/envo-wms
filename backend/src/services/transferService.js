@@ -171,6 +171,15 @@ export class TransferService {
     const qty = parseInt(quantity ?? transfer.quantity)
 
     return withTransaction(async exec => {
+      // Guard: never dispatch more than the sender's store actually holds.
+      if (transfer.sending_facility_id) {
+        const stk = await StockService.getStockByFacilityAndCommodity(
+          transfer.sending_facility_id, transfer.commodity_id, 'store', exec)
+        if (!stk || stk.quantity < qty) {
+          const e = new Error(`Insufficient store stock. Available: ${stk?.quantity || 0}`); e.status = 409; throw e
+        }
+        await StockService.decrementStock(stk.id, qty, exec)
+      }
       const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${expiry || ''}] [Batch: ${batch || ''}]`
       const newNotes = transfer.notes ? `${transfer.notes} ${meta}` : meta
       const { rows } = await exec(
@@ -178,11 +187,6 @@ export class TransferService {
          where id = $1 returning *`,
         [transferId, qty, newNotes]
       )
-      if (transfer.sending_facility_id) {
-        const stk = await StockService.getStockByFacilityAndCommodity(
-          transfer.sending_facility_id, transfer.commodity_id, 'store', exec)
-        if (stk) await StockService.decrementStock(stk.id, qty, exec)
-      }
       return rows[0] || null
     })
   }

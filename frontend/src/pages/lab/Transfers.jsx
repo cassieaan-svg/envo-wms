@@ -769,10 +769,11 @@ export function Transfers() {
   const commUnit = (commodityId) => allCommodities.find(c => c.id === commodityId)?.unit || ''
 
   const incomingCount = pending.filter(t => t.receiving_facility_id === fid && t.status === 'in_transit').length
-  const outgoingCount = pending.filter(t =>
-    (t.sending_facility_id === fid && t.status === 'pending') ||
-    (t.receiving_facility_id === fid && t.status === 'pending' && t.sending_facility_id === null)
-  ).length
+  // My requests still open (awaiting admin review or the assigned source to dispatch).
+  const myOpenRequests = pending.filter(t => t.receiving_facility_id === fid && t.status === 'pending').length
+  // Requests the admin assigned this facility to dispatch as the source.
+  const dispatchTasks  = pending.filter(t => t.sending_facility_id === fid && t.status === 'pending').length
+  const outgoingCount = myOpenRequests + dispatchTasks
   const totalPendingBadge = incomingCount + outgoingCount
   const inTransitForMe = incomingCount
   const allIntPendingBadge = intPendingApprovals.length + dsdPendingApprovals.length
@@ -803,7 +804,6 @@ export function Transfers() {
           {[
             { id: 'request',  label: 'Request',                  desc: 'Submit and track redistribution requests',          badge: totalPendingBadge },
             { id: 'internal', label: 'Internal redistribution',  desc: 'Store to service delivery point transfers', badge: allIntPendingBadge },
-            { id: 'external', label: 'External redistribution',  desc: 'Send or receive stock from other facilities',       badge: 0 },
           ].filter(card => {
             if (isDispenser || isSDP) return ['request','internal'].includes(card.id)
             return true
@@ -1306,7 +1306,7 @@ export function Transfers() {
       {/* ══════════════════════════════════════════════════════════════════════
           EXTERNAL REDISTRIBUTION
       ══════════════════════════════════════════════════════════════════════ */}
-      {!isDispenser && !isSDP && primary === 'external' && (
+      {false && primary === 'external' && (
         <>
           <BackButton />
           <div className="flex gap-1.5 mb-4 flex-wrap border-b border-white/8 pb-3">
