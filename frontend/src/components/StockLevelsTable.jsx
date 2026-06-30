@@ -54,9 +54,16 @@ function SohCell({ r, kind, qty, onDrill }) {
   )
 }
 
-function renderCell(r, key, onDrill) {
+function renderCell(r, key, onDrill, onBatchDrill) {
   switch (key) {
-    case 'name':       return <td key={key} className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
+    case 'name':       return (
+      <td key={key} className="px-4 py-3 font-medium">
+        {typeof onBatchDrill === 'function'
+          ? <button type="button" onClick={() => onBatchDrill(r)} title="View stock by batch"
+              className="text-blue-400 hover:text-blue-300 text-left">{r.commodities?.name||'—'}<span className="text-gray-600 ml-1">›</span></button>
+          : <span className="text-gray-100">{r.commodities?.name||'—'}</span>}
+      </td>
+    )
     case 'unit':       return <td key={key} className="px-4 py-3 text-xs text-gray-400">{r.commodities?.unit||'—'}</td>
     case 'store':      return <td key={key} className={`px-4 py-3 font-mono text-sm ${r.storeQty===0?'text-gray-500':'text-gray-200'}`}>{fmtStockQty(r.storeQty, r.commodities)}</td>
     case 'dispensary': return <td key={key} className={`px-4 py-3 font-mono text-sm ${r.dispensaryQty===0?'text-gray-500':'text-blue-300'}`}>{fmtStockQty(r.dispensaryQty, r.commodities)}</td>
@@ -72,7 +79,7 @@ function renderCell(r, key, onDrill) {
 
 // onDrill(row, kind) — optional. When supplied, DSD/SDP SOH cells with stock
 // become clickable to reveal the per-site breakdown.
-export function StockLevelsTable({ items, onDrill }) {
+export function StockLevelsTable({ items, onDrill, onBatchDrill }) {
   const cols = buildCols(items)
   return (
     <table className="w-full text-sm">
@@ -86,7 +93,7 @@ export function StockLevelsTable({ items, onDrill }) {
       <tbody>
         {items.map(r => (
           <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-            {cols.map(c => renderCell(r, c.key, onDrill))}
+            {cols.map(c => renderCell(r, c.key, onDrill, onBatchDrill))}
           </tr>
         ))}
       </tbody>

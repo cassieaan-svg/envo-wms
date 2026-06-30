@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
+import { BatchBreakdownModal } from '../../components/BatchBreakdownModal'
 import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, fmtStockQty, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
@@ -21,6 +22,7 @@ export function Stock() {
   const [stsFilter, setSts]   = useState('')
   const [sortBy, setSortBy]   = useState('category')
   const [drill, setDrill]     = useState(null)
+  const [batchDrill, setBatchDrill] = useState(null)  // commodity row for the batch modal
 
   // Admin facility scope: a single facility, an LGA/state worth of facilities,
   // or all (resolved from the hierarchical filter). Facility users get their own.
@@ -228,14 +230,14 @@ export function Stock() {
                 <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} />
+                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={setBatchDrill} />
               </div>
             </Card>
           ))
         ) : (
           <Card className="stick-cols">
             <div className="table-wrap">
-              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} />
+              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={setBatchDrill} />
             </div>
           </Card>
         )
@@ -243,6 +245,10 @@ export function Stock() {
 
       {drill && (
         <SiteBreakdownModal commodity={drill.row} kind={drill.kind} fid={fid} scopeIds={scopeIds} onClose={() => setDrill(null)} />
+      )}
+
+      {batchDrill && (
+        <BatchBreakdownModal commodity={batchDrill} fid={fid} scopeIds={scopeIds} onClose={() => setBatchDrill(null)} />
       )}
     </div>
   )
