@@ -16,6 +16,7 @@ export function Log() {
   const canManage = store.canManageStock()
   const commoditySection = store.commoditySection
   const [typeFilter, setTypeFilter] = useState('')
+  const [catFilter, setCatFilter]   = useState('')
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
   const [editRecord, setEditRecord] = useState(null)
@@ -26,6 +27,7 @@ export function Log() {
 
   const fid    = store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
+  const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
   const isAdmin = store.isAdmin()
   // Admins must drill down to a single facility before any activity is shown —
   // the log is per-facility, not a cross-facility feed, and admins don't edit it.
@@ -85,6 +87,7 @@ export function Log() {
 
   const typeBadge = { dispense:'out', intake:'ok', adjustment:'info', transfer:'low' }
   const typeLabel = { dispense:'Consumption', intake:'Intake', adjustment:'Adjustment', transfer:'Transfer' }
+  const shownRecords = catFilter ? allRecords.filter(r => (r.commodities?.category) === catFilter) : allRecords
 
   return (
     <div>
@@ -132,12 +135,17 @@ export function Log() {
               <option value="adjustment">Adjustments</option>
               <option value="transfer">Transfers</option>
             </select>
+            <select value={catFilter} onChange={e=>setCatFilter(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+              <option value="">All categories</option>
+              {categories.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
             <button onClick={loadAll} disabled={loading} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
               {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
         </CardHeader>
-        {loading && allRecords.length===0 ? <LoadingState/> : allRecords.length===0 ? <EmptyState message="No activity recorded yet."/> : (
+        {loading && allRecords.length===0 ? <LoadingState/> : shownRecords.length===0 ? <EmptyState message={catFilter ? `No ${catFilter} activity in this view.` : "No activity recorded yet."}/> : (
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
               {['Date','Type','Commodity',...(isAdmin?['Facility']:[]),'Qty','Details'].map((h,i)=>(
@@ -145,7 +153,7 @@ export function Log() {
               ))}
               {canEdit && <th className="px-4 py-3"/>}
             </tr></thead>
-            <tbody>{allRecords.map(r=>{
+            <tbody>{shownRecords.map(r=>{
               let qty='', details=''
               if (r._type==='dispense') {
                 qty = <span className="font-mono text-sm text-red-400">-{fmtDispenseQty(r.quantity,r.commodities)}</span>
