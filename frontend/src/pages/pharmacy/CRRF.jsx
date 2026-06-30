@@ -42,9 +42,11 @@ export function CRRF() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [generated, setGenerated] = useState(false)
+  const [catFilter, setCatFilter] = useState('')
 
   const fid = store.getEffectiveFacilityId?.() || store.adminFilterFacility?.id || store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
+  const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
   const facility = store.adminFilterFacility || store.currentFacility
 
   const period = BI_MONTHLY_PERIODS[periodIdx]
@@ -111,6 +113,8 @@ export function CRRF() {
     setLoading(false)
   }
 
+  const shownRows = catFilter ? rows.filter(r => r.category === catFilter) : rows
+
   function exportCSV() {
     if (!rows.length) { toast('Generate data first', 'red'); return }
     const facilityName = facility?.name || 'Facility'
@@ -119,7 +123,7 @@ export function CRRF() {
     csv += `S/No,Drugs,Basic Unit,Beginning Balance (A),Quantity Received (B),Quantity Dispensed (C),Adj Positive (+),Adj Negative (-),Losses (D),Ending Balance / Physical Count (E),Maximum Stock Qty (F=CX2),Quantity to Order (G=F-E),Remarks\r\n`
 
     let currentCat = null
-    rows.forEach(r => {
+    shownRows.forEach(r => {
       if (r.category !== currentCat) {
         currentCat = r.category
         csv += `\r\n"${currentCat}"\r\n`
@@ -144,7 +148,7 @@ export function CRRF() {
 
     let tableRows = ''
     let lastCat = null
-    rows.forEach(r => {
+    shownRows.forEach(r => {
       if (r.category !== lastCat) {
         lastCat = r.category
         tableRows += `<tr class="cat-row"><td colspan="13">${r.category}</td></tr>`
@@ -244,10 +248,10 @@ export function CRRF() {
   const inputCls = "bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
   const years = generateYears()
 
-  // Group rows by category for rendering
+  // Group rows by category for rendering (honouring the category filter)
   const grouped = []
   let lastCat = null
-  rows.forEach(r => {
+  shownRows.forEach(r => {
     if (r.category !== lastCat) { grouped.push({ type: 'cat', label: r.category }); lastCat = r.category }
     grouped.push({ type: 'row', ...r })
   })
@@ -288,6 +292,15 @@ export function CRRF() {
             {loading ? 'Loading…' : 'Generate'}
           </button>
           {generated && rows.length > 0 && (
+            <div>
+              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Category</label>
+              <select value={catFilter} onChange={e => setCatFilter(e.target.value)} className={inputCls}>
+                <option value="">All categories</option>
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
+          {generated && rows.length > 0 && (
             <>
               <button onClick={exportCSV}
                 className="border border-white/10 text-gray-400 hover:text-gray-200 rounded-lg px-4 py-2 text-sm transition-colors">
@@ -310,8 +323,8 @@ export function CRRF() {
           <CardHeader>
             <CardTitle>CRRF — {period.label} {year}</CardTitle>
           </CardHeader>
-          {rows.length === 0 ? (
-            <EmptyState message="No activity recorded for this period." />
+          {shownRows.length === 0 ? (
+            <EmptyState message={rows.length === 0 ? "No activity recorded for this period." : `No ${catFilter} commodities in this period.`} />
           ) : (
             <div className="table-wrap">
               <table className="w-full text-sm">
