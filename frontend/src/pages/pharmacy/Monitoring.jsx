@@ -23,6 +23,8 @@ export function Monitoring() {
   const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
   const [expLga, setExpLga]       = useState('')    // admin LGA narrowing (expiry)
+  const [catFilter, setCatFilter] = useState('')    // commodity category narrowing (consumption)
+  const [expCat, setExpCat]       = useState('')    // commodity category narrowing (expiry)
 
   // Honour the admin's facility/LGA/state scope (same resolution as stock loads)
   // so Consumption and Expiry stay within the viewer's jurisdiction.
@@ -44,9 +46,10 @@ export function Monitoring() {
   const facMeta = {}
   store.allFacilities.forEach(f => { facMeta[f.id] = { name: f.name, lga: f.lga || '—' } })
   const lgaOptions = [...new Set(store.allFacilities.map(f => f.lga).filter(Boolean))].sort()
+  const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
 
-  useEffect(() => { loadConsumption() }, [scopeKey, period, lgaFilter])
-  useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expLga, scopeKey])
+  useEffect(() => { loadConsumption() }, [scopeKey, period, lgaFilter, catFilter])
+  useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expLga, expCat, scopeKey])
 
   async function loadConsumption() {
     setLoading(true)
@@ -74,6 +77,9 @@ export function Monitoring() {
       rows = rows.concat(data)
       if (data.length < PAGE) break
     }
+
+    // Narrow to a single commodity category if one is picked.
+    if (catFilter) rows = rows.filter(r => (r.commodities?.category || 'Other') === catFilter)
 
     const byComm={}, byCat={}, daily={}
     for(let i=period-1;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);daily[d.toISOString().split('T')[0]]=0}
@@ -132,8 +138,10 @@ export function Monitoring() {
     stockRows.forEach(s => addSoh(s.facility_id, s.commodity_id, s.quantity))
     dsdRows.forEach(d => addSoh(d.facility_id, d.commodity_id, d.quantity))
 
+    // Narrow to a single commodity category if one is picked.
+    const allFiltered = expCat ? all.filter(r => (r.commodities?.category || 'Other') === expCat) : all
     // capExpiryBatchesToStockByFacility drops depleted batches and returns soonest-first.
-    setExpiryData(capExpiryBatchesToStockByFacility(all, sohByFacComm))
+    setExpiryData(capExpiryBatchesToStockByFacility(allFiltered, sohByFacComm))
     setLoading(false)
   }
 
@@ -259,6 +267,12 @@ export function Monitoring() {
                 </select>
               </>
             )}
+            <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">Category</span>
+            <select value={catFilter} onChange={e=>setCatFilter(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+              <option value="">All categories</option>
+              {categories.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
         </Card>
       )}
@@ -285,6 +299,12 @@ export function Monitoring() {
                 </select>
               </>
             )}
+            <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">Category</span>
+            <select value={expCat} onChange={e=>setExpCat(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+              <option value="">All categories</option>
+              {categories.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
         </Card>
       )}

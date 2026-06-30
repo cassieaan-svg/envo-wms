@@ -28,6 +28,10 @@ export function Alerts() {
   const [reqView, setReqView]       = useState('active')   // 'active' | 'history'
   const [filterComm, setFilterComm] = useState('')
   const [filterLga, setFilterLga]   = useState('')
+  const [filterCat, setFilterCat]   = useState('')   // request alerts: commodity category
+  const [stockCat, setStockCat]     = useState('')   // expiry / out / low / overstock: category
+  const [drillComm, setDrillComm]   = useState(null) // stock tab: commodity drilled into {id,name,cat,comm}
+  const [drillSites, setDrillSites] = useState({ sdp:{}, dsd:{} }) // per-facility site stock for the drilled commodity
   const [assigningId, setAssigningId]           = useState(null)
   const [assignFacState, setAssignFacState]     = useState('')
   const [assignFacLga, setAssignFacLga]         = useState('')
@@ -233,15 +237,46 @@ export function Alerts() {
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   useEffect(()=>{ if(store.isAdmin() && reqView==='history') loadHistory() },[reqView, histFrom, histTo])
 
+  // Drill-in: load per-facility SDP/DSD site stock for the selected commodity so
+  // the facility breakdown total matches the Dashboard (store + dispensary + site).
+  useEffect(() => {
+    if (!drillComm) { setDrillSites({ sdp:{}, dsd:{} }); return }
+    let active = true
+    const facIds = store.isOverallAdmin() ? undefined : store.allFacilities.map(f => f.id)
+    Promise.all([
+      api.stock.sdp.list({ commodity_id: drillComm.id, facility_ids: facIds, limit: 2000 }).catch(()=>[]),
+      api.stock.dsd.list({ commodity_id: drillComm.id, facility_ids: facIds, limit: 2000 }).catch(()=>[]),
+    ]).then(([sdp,dsd]) => {
+      if (!active) return
+      const sm={}, dm={}
+      ;(sdp||[]).forEach(r=>{ sm[r.facility_id]=(sm[r.facility_id]||0)+r.quantity })
+      ;(dsd||[]).forEach(r=>{ dm[r.facility_id]=(dm[r.facility_id]||0)+r.quantity })
+      setDrillSites({ sdp:sm, dsd:dm })
+    })
+    return () => { active = false }
+  }, [drillComm])
+
+  // Reset any open drill-in when switching tabs or category.
+  useEffect(() => { setDrillComm(null) }, [tab, stockCat])
+
   // ── Admin request filters (commodity + LGA) ───────────────────────────────
   const facLgaById = {}
   store.allFacilities.forEach(f => { facLgaById[f.id] = f.lga || '—' })
   const lgaOptions = [...new Set(store.allFacilities.map(f => f.lga).filter(Boolean))].sort()
+  const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
   const applyReqFilters = list => list.filter(r =>
     (!filterComm || r.commodity_id === filterComm) &&
-    (!filterLga  || facLgaById[r.receiving_facility_id] === filterLga))
+    (!filterLga  || facLgaById[r.receiving_facility_id] === filterLga) &&
+    (!filterCat  || (r.commodities?.category) === filterCat))
   const activeReqs = applyReqFilters(facReqAlerts)
   const histReqs   = applyReqFilters(reqHistory)
+
+  // Category narrowing for the expiry / out / low / overstock tables.
+  const inStockCat = r => !stockCat || (r.commodities?.category) === stockCat
+  const shownExpiry = expiryRows.filter(inStockCat)
+  const shownOut    = stockRows.out.filter(inStockCat)
+  const shownLow    = stockRows.low.filter(inStockCat)
+  const shownOver   = stockRows.over.filter(inStockCat)
 
   const today = new Date()
   const urgency = r => {
@@ -258,7 +293,7 @@ export function Alerts() {
     </button>
   )
 
-  const StockTable = ({rows,emptyMsg,qtyClass}) => rows.length===0 ? <EmptyState message={emptyMsg}/> : (
+  const StockTable = ({rows,emptyMsg,qtyClass,onRowClick}) => rows.length===0 ? <EmptyState message={emptyMsg}/> : (
     <div className="table-wrap"><table className="w-full text-sm">
       <thead><tr className="border-b border-white/8 bg-white/2">
         {['Commodity','Category','Unit','Stock on hand','AMC','MOS'].map(h=>(
@@ -268,8 +303,9 @@ export function Alerts() {
       <tbody>{rows.map(r=>{
         const mosColor = r._mos!==null ? (r._mos<2?'text-red-400':r._mos>4?'text-blue-400':'text-green-400') : 'text-gray-500'
         return (
-          <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-            <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
+          <tr key={r.id} onClick={onRowClick ? ()=>onRowClick(r) : undefined}
+            className={`border-b border-white/5 ${onRowClick?'cursor-pointer hover:bg-white/5':'hover:bg-white/2'}`}>
+            <td className={`px-4 py-3 font-medium ${onRowClick?'text-blue-400 hover:text-blue-300':'text-gray-100'}`}>{r.commodities?.name||'—'}{onRowClick && <span className="text-gray-600 ml-1">›</span>}</td>
             <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
             <td className="px-4 py-3 text-xs text-gray-500">{r.commodities?.unit||'—'}</td>
             <td className={`px-4 py-3 font-mono text-sm font-semibold ${qtyClass}`}>{r.quantity}</td>
@@ -308,6 +344,17 @@ export function Alerts() {
         </button>
       </div>
 
+      {['expiry','out','low','overstock'].includes(tab) && (
+        <div className="mb-4 flex gap-2 items-center flex-wrap">
+          <span className="text-xs text-gray-500 uppercase tracking-widest">Category</span>
+          <select value={stockCat} onChange={e=>setStockCat(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+            <option value="">All categories</option>
+            {categories.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+      )}
+
       {tab==='expiry' && (
         <Card>
           <CardHeader>
@@ -320,14 +367,14 @@ export function Alerts() {
               <option value={365}>Within 12 months</option>
             </select>
           </CardHeader>
-          {loading ? <LoadingState/> : expiryRows.length===0 ? <EmptyState message={`No commodities expiring within ${expiryDays} days ✓`}/> : (
+          {loading ? <LoadingState/> : shownExpiry.length===0 ? <EmptyState message={`No commodities expiring within ${expiryDays} days ✓`}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
                 {['Commodity','Category','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
                   <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                 ))}
               </tr></thead>
-              <tbody>{expiryRows.map(r=>{
+              <tbody>{shownExpiry.map(r=>{
                 const u=urgency(r), dL=Math.round((new Date(r.expiry_date)-today)/86400000)
                 return (
                   <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
@@ -346,9 +393,62 @@ export function Alerts() {
         </Card>
       )}
 
-      {tab==='out'       && <Card><CardHeader><CardTitle>Out of stock — quantity is zero</CardTitle></CardHeader><StockTable rows={stockRows.out}  emptyMsg="No commodities out of stock ✓" qtyClass="text-red-400"/></Card>}
-      {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable rows={stockRows.low}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400"/></Card>}
-      {tab==='overstock' && <Card><CardHeader><CardTitle>Overstock — above 4 months AMC</CardTitle></CardHeader><StockTable rows={stockRows.over} emptyMsg="No commodities overstocked ✓" qtyClass="text-blue-400"/></Card>}
+      {/* Stock-status tabs. Admin can tap a commodity to drill into its facilities. */}
+      {['out','low','overstock'].includes(tab) && drillComm ? (() => {
+        const isLabSel  = isLabCategory(drillComm.cat)
+        const statusFor = tab==='out' ? 'out' : tab==='low' ? 'low' : 'over'
+        // Per-facility store + dispensary from the loaded stock, plus on-demand SDP/DSD site stock.
+        const byFac = {}
+        store.stockData.filter(r => r.commodity_id === drillComm.id).forEach(r => {
+          const f = byFac[r.facility_id] || (byFac[r.facility_id] = { id:r.facility_id, name:r.facilities?.name||'—', state:r.facilities?.state||'—', lga:r.facilities?.lga||'—', store:0, dispensary:0, dsd:0, sdp:0, amc:0, comm:r.commodities })
+          if (r.location_type === 'store') f.store += r.quantity
+          else if (r.location_type === 'dispensary') f.dispensary += r.quantity
+          if ((r.baseline_amc||0) > f.amc) f.amc = r.baseline_amc||0
+        })
+        const ensure = fid => byFac[fid] || (byFac[fid] = (() => { const x=store.allFacilities.find(y=>y.id===fid); return { id:fid, name:x?.name||'—', state:x?.state||'—', lga:x?.lga||'—', store:0, dispensary:0, dsd:0, sdp:0, amc:0, comm:drillComm.comm } })())
+        Object.entries(drillSites.sdp).forEach(([fid,q]) => { ensure(fid).sdp += q })
+        Object.entries(drillSites.dsd).forEach(([fid,q]) => { ensure(fid).dsd += q })
+        Object.values(byFac).forEach(f => { f.total = isLabSel ? (f.store + f.sdp) : (f.store + f.dispensary + f.dsd) })
+        const list = Object.values(byFac).filter(f => getStockStatus(f.total, f.amc) === statusFor).sort((a,b)=>a.total-b.total)
+        const cols = isLabSel ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','MOS'] : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','MOS']
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">{drillComm.name} <CatBadge>{drillComm.cat}</CatBadge> — {statusFor==='out'?'out-of-stock':statusFor==='low'?'low-stock':'overstocked'} facilities</CardTitle>
+              <button onClick={()=>setDrillComm(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Back to commodities</button>
+            </CardHeader>
+            {list.length===0 ? <EmptyState message="No facilities in this status for this commodity."/> : (
+              <div className="table-wrap"><table className="w-full text-sm">
+                <thead><tr className="border-b border-white/8 bg-white/2">
+                  {cols.map(h=><th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>)}
+                </tr></thead>
+                <tbody>{list.map(f=>{
+                  const mos=getMOS(f.total,f.amc)
+                  return (
+                    <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
+                      <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{f.state}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
+                      <td className="px-4 py-3 font-mono text-sm text-gray-200">{f.store}</td>
+                      {isLabSel
+                        ? <td className="px-4 py-3 font-mono text-sm text-blue-300">{f.sdp}</td>
+                        : <><td className="px-4 py-3 font-mono text-sm text-blue-300">{f.dispensary}</td><td className="px-4 py-3 font-mono text-sm text-purple-300">{f.dsd}</td></>}
+                      <td className="px-4 py-3 font-mono text-sm font-semibold text-gray-100">{f.total}</td>
+                      <td className="px-4 py-3 font-mono text-sm text-gray-400">{mos!==null?`${mos}mo`:'—'}</td>
+                    </tr>
+                  )
+                })}</tbody>
+              </table></div>
+            )}
+          </Card>
+        )
+      })() : (
+        <>
+          {tab==='out'       && <Card><CardHeader><CardTitle>Out of stock — quantity is zero</CardTitle></CardHeader><StockTable rows={shownOut}  emptyMsg="No commodities out of stock ✓" qtyClass="text-red-400"   onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
+          {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable rows={shownLow}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400" onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
+          {tab==='overstock' && <Card><CardHeader><CardTitle>Overstock — above 4 months AMC</CardTitle></CardHeader><StockTable rows={shownOver} emptyMsg="No commodities overstocked ✓" qtyClass="text-blue-400"  onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
+        </>
+      )}
 
       {tab==='fac-requests' && (
         <Card>
@@ -379,6 +479,13 @@ export function Alerts() {
                 </select>
               </div>
               <div>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Category</label>
+                <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 min-w-[140px]">
+                  <option value="">All categories</option>
+                  {categories.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">LGA</label>
                 <select value={filterLga} onChange={e=>setFilterLga(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 min-w-[140px]">
                   <option value="">All LGAs</option>
@@ -397,8 +504,8 @@ export function Alerts() {
                   </div>
                 </>
               )}
-              {(filterComm || filterLga) && (
-                <button onClick={()=>{ setFilterComm(''); setFilterLga('') }} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Clear filters</button>
+              {(filterComm || filterLga || filterCat) && (
+                <button onClick={()=>{ setFilterComm(''); setFilterLga(''); setFilterCat('') }} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Clear filters</button>
               )}
             </div>
           )}
