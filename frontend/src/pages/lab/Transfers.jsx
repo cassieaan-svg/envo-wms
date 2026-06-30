@@ -647,16 +647,24 @@ export function Transfers() {
     setDsdApproving(true)
     const storeStk = stockData.find(r => r.commodity_id === record.commodity_id && r.facility_id === fid && r.location_type === 'store')
     if (!storeStk || storeStk.quantity < parsedQty) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setDsdApproving(false); return }
-    // Server decrements the store and marks the request dispatched. The SDP user confirms
-    // receipt (entering "Received by") which credits sdp_stock and finalises the transfer.
+    // Server decrements the store and marks the request dispatched. Single-facility
+    // internal transfer with one login + one SDP: auto-receive right after approval
+    // so the store manager doesn't need a separate receive step (credits sdp_stock).
     try {
       await api.transfers.approveDsd(record.id, { approved_by: dsdApprovedBy, quantity: parsedQty })
     } catch (updateErr) {
       toast(updateErr.status === 409 ? updateErr.message : 'Error updating transfer: ' + updateErr.message, 'red'); setDsdApproving(false); return
     }
+    try {
+      await api.transfers.receive(record.id, { received_by: dsdApprovedBy })
+    } catch (recvErr) {
+      toast('Approved & dispatched, but auto-receipt failed: ' + recvErr.message + ' — confirm receipt manually.', 'amber')
+      setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty('')
+      await loadStock(); loadDsdPendingApprovals(); loadDsdHistory(); loadAllIntHistory(); setDsdApproving(false); return
+    }
     const comm = allCommodities.find(c => c.id === record.commodity_id)
     const sdpPointName = record.notes?.match(/\[(?:SDP|DSD): ([^\]]+)\]/)?.[1] || record.receiving_facility_name || ''
-    toast(`${parsedQty} ${comm?.unit || 'units'} approved & dispatched to ${sdpPointName || 'service delivery point'} — awaiting receipt`, 'green')
+    toast(`${parsedQty} ${comm?.unit || 'units'} approved & received at ${sdpPointName || 'service delivery point'}`, 'green')
     setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty('')
     await loadStock(); loadDsdPendingApprovals(); loadDsdHistory(); loadAllIntHistory(); setDsdApproving(false)
   }
