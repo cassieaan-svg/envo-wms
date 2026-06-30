@@ -40,6 +40,9 @@ jobs:
         shell: powershell
         working-directory: backend
         run: |
+          # The runner's PATH doesn't include the npm global bin where pm2.cmd
+          # lives, so `pm2` isn't recognized. Prepend it (runner runs as eLIMS).
+          $env:Path = "$env:APPDATA\npm;$env:Path"
           pm2 describe backend > $null 2>&1
           if ($LASTEXITCODE -ne 0) {
             pm2 start src/server.js --name backend
