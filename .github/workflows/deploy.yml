@@ -22,6 +22,11 @@ jobs:
       - name: Install & build frontend
         shell: powershell
         working-directory: frontend
+        env:
+          # The runner's checkout has no frontend/.env, so without this the build
+          # falls back to http://localhost:5000 and the live login breaks. Vite
+          # inlines VITE_-prefixed vars from the environment at build time.
+          VITE_API_URL: https://envo.ecews.org
         run: |
           npm install
           npm run build
