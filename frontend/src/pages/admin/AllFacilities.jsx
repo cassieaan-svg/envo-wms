@@ -65,6 +65,8 @@ export function AllFacilities() {
   // so a site with a consumption track record counts as reporting even at 0 stock.
   const [consByComm, setConsByComm] = useState({})
   const [siteFilter, setSiteFilter] = useState('')   // breakdown card filter: '', low, out, over
+  const [facSearch, setFacSearch]   = useState('')   // breakdown table: facility name search
+  const [lgaFilter, setLgaFilter]   = useState('')   // breakdown table: LGA dropdown
 
   const agg = {}
   // Seed from every tracked commodity so zero-stock items and their
@@ -179,8 +181,8 @@ export function AllFacilities() {
     return () => { active = false }
   }, [])
 
-  // Reset the breakdown card filter when switching commodity.
-  useEffect(() => { setSiteFilter('') }, [selected])
+  // Reset the breakdown filters when switching commodity.
+  useEffect(() => { setSiteFilter(''); setFacSearch(''); setLgaFilter('') }, [selected])
 
   // Drill-down: stock rows for the selected commodity, grouped by facility
   const facRows = selected
@@ -231,10 +233,15 @@ export function AllFacilities() {
     out:  facList.filter(f => getStockStatus(f.total, f.amc) === 'out').length,
     over: facList.filter(f => getStockStatus(f.total, f.amc) === 'over').length,
   }
-  // Clicking a status card filters the breakdown table to those sites.
-  const shownFacs = siteFilter
-    ? facList.filter(f => getStockStatus(f.total, f.amc) === siteFilter)
-    : facList
+  // LGA dropdown options, drawn from the reporting sites in this breakdown.
+  const lgaOpts = [...new Set(facList.map(f => f.lga).filter(l => l && l !== '—'))].sort()
+  // Breakdown table filters: status card + LGA dropdown + facility name search.
+  const facQuery = facSearch.trim().toLowerCase()
+  const shownFacs = facList.filter(f =>
+    (!siteFilter || getStockStatus(f.total, f.amc) === siteFilter) &&
+    (!lgaFilter  || f.lga === lgaFilter) &&
+    (!facQuery   || (f.name || '').toLowerCase().includes(facQuery))
+  )
 
   const statusLabels = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No AMC data' }
 
@@ -298,7 +305,16 @@ export function AllFacilities() {
         <Card className="stick-cols">
           <CardHeader>
             <CardTitle>Facility breakdown</CardTitle>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
+              <input value={facSearch} onChange={e=>setFacSearch(e.target.value)} placeholder="Search facility…"
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 w-48"/>
+              {lgaOpts.length > 1 && (
+                <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
+                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                  <option value="">All LGAs</option>
+                  {lgaOpts.map(l=><option key={l} value={l}>{l}</option>)}
+                </select>
+              )}
               <button onClick={downloadFacilityCsv} disabled={shownFacs.length === 0}
                 className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 disabled:opacity-40 disabled:hover:text-gray-400">
                 ↓ CSV
@@ -309,7 +325,7 @@ export function AllFacilities() {
               </button>
             </div>
           </CardHeader>
-          {shownFacs.length === 0 ? <EmptyState message={siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
+          {shownFacs.length === 0 ? <EmptyState message={(facQuery || lgaFilter) ? 'No sites match these filters.' : siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
                 {(isLabSel
