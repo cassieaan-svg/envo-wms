@@ -3,7 +3,7 @@ import { api } from '../../lib/api'
 import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
-import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
+import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
@@ -17,6 +17,7 @@ export function Log() {
   const commoditySection = store.commoditySection
   const [typeFilter, setTypeFilter] = useState('')
   const [catFilter, setCatFilter]   = useState('')
+  const [period, setPeriod]         = useState(0)   // 0 = all time; otherwise days back
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
   const [editRecord, setEditRecord] = useState(null)
@@ -29,49 +30,66 @@ export function Log() {
   const commIds = store.allCommodities.map(c => c.id)
   const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
   const isAdmin = store.isAdmin()
-  // Admins must drill down to a single facility before any activity is shown —
-  // the log is per-facility, not a cross-facility feed, and admins don't edit it.
-  const adminFid = store.adminFilterFacility?.id || null
-  const needsFacility = isAdmin && !adminFid
+  // Admins see a cross-facility feed across their whole jurisdiction by default.
+  // The FacilityPicker narrows it: a single facility pins the log to it; an
+  // LGA/state selection scopes it to that set (facility_ids) without requiring a
+  // facility pick.
+  const adminFid   = store.adminFilterFacility?.id || null
+  const adminLga   = store.adminFilterLGA || null
+  const adminState = store.adminFilterState || null
+  const scopedFacIds = (isAdmin && !adminFid && (adminLga || adminState))
+    ? store.allFacilities.filter(f => (!adminState || f.state === adminState) && (!adminLga || f.lga === adminLga)).map(f => f.id)
+    : null
   // Edits belong to the facility's own store manager. Admins are read-only here.
   const canEdit = canManage && !isAdmin
 
-  useEffect(() => { loadAll() }, [fid, adminFid])
+  useEffect(() => { loadAll() }, [fid, adminFid, adminLga, adminState])
 
   // Reload when commodity section changes to ensure proper filtering
-  useEffect(() => { if(fid) loadAll() }, [store.commoditySection])
+  useEffect(() => { if(fid || isAdmin) loadAll() }, [store.commoditySection])
 
   async function loadAll() {
-    // Don't fetch (or show) anything for an admin until they've picked a facility.
-    if (needsFacility) { setAllRecords([]); setLoading(false); return }
     setLoading(true)
-    // Admins span a single filtered facility and both sections, so don't scope by
+    // Admins span a filtered facility set and both sections, so don't scope by
     // the full commodity list.
     const scopeFid = isAdmin ? adminFid : fid
+    const from = period ? new Date(Date.now() - period*86400000).toISOString() : undefined
+    const rowLimit = period ? 500 : 50
     const logParams = {
       facility_id: scopeFid || undefined,
+      facility_ids: scopedFacIds || undefined,
       commodity_ids: !isAdmin ? commIds : undefined,
       section: commoditySection || undefined,
-      limit: 50,
+      from,
+      limit: rowLimit,
     }
     const [disp, intake, adj, transfers] = await Promise.all([
       (!typeFilter||typeFilter==='dispense')    ? api.dispense.history(logParams).catch(()=>[]) : [],
       (!typeFilter||typeFilter==='intake')      ? api.intake.history(logParams).catch(()=>[]) : [],
       (!typeFilter||typeFilter==='adjustment')  ? api.adjustments.history(logParams).catch(()=>[]) : [],
       // section already scopes transfers; facility_id covers both sending/receiving sides.
-      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, limit: 50 }).catch(()=>[]) : [],
+      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, date_field: from?'initiated_at':undefined, from, limit: rowLimit }).catch(()=>[]) : [],
     ])
-    const merged = [
+    let merged = [
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
       ...intake.map(r=>({...r,_type:'intake',_time:r.received_at})),
       ...adj.map(r=>({...r,_type:'adjustment',_time:r.adjusted_at})),
       ...transfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at})),
-    ].sort((a,b)=>new Date(b._time)-new Date(a._time)).slice(0,100)
+    ].sort((a,b)=>new Date(b._time)-new Date(a._time))
+    // Client-side narrow to the selected LGA/state set (covers transfers, whose
+    // route scopes by jurisdiction rather than the facility_ids view-filter).
+    if (scopedFacIds) {
+      const set = new Set(scopedFacIds)
+      merged = merged.filter(r => r._type==='transfer'
+        ? (set.has(r.sending_facility_id) || set.has(r.receiving_facility_id))
+        : set.has(r.facility_id))
+    }
+    merged = merged.slice(0, period ? 500 : 100)
     setAllRecords(merged)
     setLoading(false)
   }
 
-  useEffect(() => { if(fid || isAdmin) loadAll() }, [typeFilter])
+  useEffect(() => { if(fid || isAdmin) loadAll() }, [typeFilter, period])
 
   // Keep a ref to the latest loader so the realtime subscription always reloads
   // with the current filters/scope without re-subscribing on every change.
@@ -93,7 +111,7 @@ export function Log() {
     <div>
       <div className="mb-6">
         <h1 className="text-xl font-medium text-gray-100">{view === 'reports' ? 'Reports' : 'Activity Log'}</h1>
-        <p className="text-sm text-gray-500 mt-1">{view === 'reports' ? 'Weekly and monthly activity summaries' : isAdmin ? 'Stock, intake, transfer and adjustment events for a selected facility' : 'All stock, intake, transfer and adjustment events at your facility'}</p>
+        <p className="text-sm text-gray-500 mt-1">{view === 'reports' ? 'Weekly and monthly activity summaries' : isAdmin ? 'Stock, intake, transfer and adjustment events across facilities in your scope' : 'All stock, intake, transfer and adjustment events at your facility'}</p>
       </div>
 
       <div className="flex gap-2 mb-4">
@@ -107,17 +125,10 @@ export function Log() {
 
       {view === 'reports' ? <Reports embedded /> : (
       <>
-      {/* Admins drill down to a single facility (State → LGA → Facility) before
-          any activity is shown. The picker is a no-op for facility users. */}
+      {/* Optional admin filter (State → LGA → Facility) that narrows the feed;
+          with nothing selected the whole jurisdiction shows. No-op for facilities. */}
       <FacilityPicker />
 
-      {needsFacility ? (
-        <Card><CardBody className="text-center py-12">
-          <div className="text-4xl mb-3">🏥</div>
-          <div className="font-medium text-gray-100 mb-1">Select a facility</div>
-          <div className="text-sm text-gray-500">Choose a facility above to view its activity log.</div>
-        </CardBody></Card>
-      ) : (
       <>
       {canEdit && editRecord && (
         <EditModal record={editRecord} onClose={()=>setEditRecord(null)} onSave={()=>{setEditRecord(null);loadAll()}}/>
@@ -126,7 +137,15 @@ export function Log() {
       <Card>
         <CardHeader>
           <CardTitle>Recent activity</CardTitle>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <select value={period} onChange={e=>setPeriod(parseInt(e.target.value))}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+              <option value={0}>All time</option>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+              <option value={180}>Last 6 months</option>
+            </select>
             <select value={typeFilter} onChange={e=>{setTypeFilter(e.target.value)}}
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
               <option value="">All activity</option>
@@ -203,7 +222,6 @@ export function Log() {
         )}
       </Card>
       </>
-      )}
       </>
       )}
     </div>

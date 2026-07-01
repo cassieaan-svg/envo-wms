@@ -16,6 +16,7 @@ export function Log() {
   const canManage = store.canManageStock()
   const commoditySection = store.commoditySection
   const [typeFilter, setTypeFilter] = useState('')
+  const [period, setPeriod]         = useState(0)   // 0 = all time; otherwise days back
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
   const [editRecord, setEditRecord] = useState(null)
@@ -38,30 +39,33 @@ export function Log() {
     // Admins span every facility (or the one they've filtered to) and both
     // sections, so don't scope by a single facility or the full commodity list.
     const scopeFid = isAdmin ? (store.adminFilterFacility?.id || null) : fid
+    const from = period ? new Date(Date.now() - period*86400000).toISOString() : undefined
+    const rowLimit = period ? 500 : 50
     const logParams = {
       facility_id: scopeFid || undefined,
       commodity_ids: !isAdmin ? commIds : undefined,
       section: commoditySection || undefined,
-      limit: 50,
+      from,
+      limit: rowLimit,
     }
     const [disp, intake, adj, transfers] = await Promise.all([
       (!typeFilter||typeFilter==='dispense')    ? api.dispense.history(logParams).catch(()=>[]) : [],
       (!typeFilter||typeFilter==='intake')      ? api.intake.history(logParams).catch(()=>[]) : [],
       (!typeFilter||typeFilter==='adjustment')  ? api.adjustments.history(logParams).catch(()=>[]) : [],
       // section already scopes transfers; facility_id covers both sending/receiving sides.
-      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, limit: 50 }).catch(()=>[]) : [],
+      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, date_field: from?'initiated_at':undefined, from, limit: rowLimit }).catch(()=>[]) : [],
     ])
     const merged = [
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
       ...intake.map(r=>({...r,_type:'intake',_time:r.received_at})),
       ...adj.map(r=>({...r,_type:'adjustment',_time:r.adjusted_at})),
       ...transfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at})),
-    ].sort((a,b)=>new Date(b._time)-new Date(a._time)).slice(0,100)
+    ].sort((a,b)=>new Date(b._time)-new Date(a._time)).slice(0, period ? 500 : 100)
     setAllRecords(merged)
     setLoading(false)
   }
 
-  useEffect(() => { if(fid || isAdmin) loadAll() }, [typeFilter])
+  useEffect(() => { if(fid || isAdmin) loadAll() }, [typeFilter, period])
 
   // Keep a ref to the latest loader so the realtime subscription always reloads
   // with the current filters/scope without re-subscribing on every change.
@@ -103,7 +107,15 @@ export function Log() {
       <Card>
         <CardHeader>
           <CardTitle>Recent activity</CardTitle>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <select value={period} onChange={e=>setPeriod(parseInt(e.target.value))}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+              <option value={0}>All time</option>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+              <option value={180}>Last 6 months</option>
+            </select>
             <select value={typeFilter} onChange={e=>{setTypeFilter(e.target.value)}}
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
               <option value="">All activity</option>
