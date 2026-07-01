@@ -154,6 +154,7 @@ export function Transfers() {
   const [dsdLines, setDsdLines] = useState([{ id: Date.now(), commodity_id: '', stock_balance: 0, stock_required: 1, stock_issued: 1 }])
   const [dsdType, setDsdType] = useState('')
   const [dsdSiteName, setDsdSiteName] = useState('')
+  const [dsdSiteOptions, setDsdSiteOptions] = useState([])  // registered DSD sites for this facility
   const [dsdSentBy, setDsdSentBy] = useState('')
   const [dsdNotes, setDsdNotes] = useState('')
   const [dsdSending, setDsdSending] = useState(false)
@@ -201,6 +202,13 @@ export function Transfers() {
   useEffect(() => {
     if (primary === 'internal' && isDSD) setIntSub('dsd')
   }, [primary])
+
+  // Registered DSD sites for this facility — populates the store-manager DSD
+  // dispatch dropdown so a site can only be picked, never mistyped. (DSD users
+  // dispatch under their own fixed site name, so they don't need this.)
+  useEffect(() => {
+    if (fid && !isDSD) api.facilities.dsdSites(fid).then(setDsdSiteOptions).catch(() => setDsdSiteOptions([]))
+  }, [fid])
 
   useEffect(() => {
     loadPending(true); loadMyRequests(); loadRequestHistory(); loadSendHistory()
@@ -1343,8 +1351,14 @@ export function Transfers() {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">DSD site name *</label>
-                          <input type="text" value={dsdSiteName} onChange={e => setDsdSiteName(e.target.value)} required className={inputCls} />
+                          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">DSD site *</label>
+                          <select value={dsdSiteName} onChange={e => setDsdSiteName(e.target.value)} required className={inputCls} disabled={dsdSiteOptions.length === 0}>
+                            <option value="">{dsdSiteOptions.length ? 'Select DSD site…' : 'No DSD sites registered'}</option>
+                            {dsdSiteOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                          {dsdSiteOptions.length === 0 && (
+                            <p className="text-xs text-amber-400 mt-1">No DSD sites registered for this facility — create the DSD account first.</p>
+                          )}
                         </div>
                       </div>
                     )}

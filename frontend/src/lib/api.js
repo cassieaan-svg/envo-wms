@@ -136,7 +136,7 @@ export const api = {
     stockBalance: (params) => get('/reports/stock-balance', params),
   },
 
-  facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`) },
+  facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
   commodities: { list: () => get('/commodities') },
 
   amcSettings: {

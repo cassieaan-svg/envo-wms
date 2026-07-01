@@ -30,4 +30,23 @@ export class FacilityService {
     const { rows } = await query('select * from facilities where id = $1', [id])
     return rows[0] || null
   }
+
+  /**
+   * The registered DSD site names for a facility — sourced from the DSD user
+   * accounts assigned to it (facility_role='dsd'). These are the exact names DSD
+   * users log in under, so dispatching to one of them guarantees the stock is
+   * visible to that account (prevents free-text typos creating orphan stock).
+   */
+  static async getDsdSites(facilityId) {
+    const { rows } = await query(
+      `select distinct raw_user_meta_data->>'dsd_site_name' as site
+         from users
+        where raw_user_meta_data->>'facility_role' = 'dsd'
+          and raw_user_meta_data->>'facility_id' = $1
+          and coalesce(raw_user_meta_data->>'dsd_site_name', '') <> ''
+        order by 1`,
+      [facilityId]
+    )
+    return rows.map(r => r.site)
+  }
 }

@@ -36,6 +36,34 @@ router.get('/', async (req, res) => {
 })
 
 /**
+ * GET /api/facilities/:id/dsd-sites - Registered DSD site names for a facility.
+ * Used to populate the store-manager DSD dispatch dropdown so dispatched stock
+ * always matches a real DSD account (no free-text orphan stock).
+ */
+router.get('/:id/dsd-sites', async (req, res) => {
+  try {
+    const { id } = req.params
+    if (!validators.isUUID(id)) {
+      return sendValidationError(res, 'Invalid facility id format', 'id')
+    }
+    const sites = await FacilityService.getDsdSites(id)
+    res.json({
+      success: true,
+      data: sites,
+      count: sites.length,
+      timestamp: new Date().toISOString()
+    })
+  } catch (err) {
+    console.error('Error fetching DSD sites:', err)
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      code: 'FETCH_ERROR'
+    })
+  }
+})
+
+/**
  * GET /api/facilities/:id - Get a single facility (full row)
  */
 router.get('/:id', async (req, res) => {
