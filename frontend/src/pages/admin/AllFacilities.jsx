@@ -66,7 +66,8 @@ export function AllFacilities() {
   const [consByComm, setConsByComm] = useState({})
   const [siteFilter, setSiteFilter] = useState('')   // breakdown card filter: '', low, out, over
   const [facSearch, setFacSearch]   = useState('')   // breakdown table: facility name search
-  const [lgaFilter, setLgaFilter]   = useState('')   // breakdown table: LGA dropdown
+  const [stateFilter, setStateFilter] = useState('') // breakdown table: State dropdown (overall admin)
+  const [lgaFilter, setLgaFilter]   = useState('')   // breakdown table: LGA dropdown (scoped to state)
 
   const agg = {}
   // Seed from every tracked commodity so zero-stock items and their
@@ -182,7 +183,7 @@ export function AllFacilities() {
   }, [])
 
   // Reset the breakdown filters when switching commodity.
-  useEffect(() => { setSiteFilter(''); setFacSearch(''); setLgaFilter('') }, [selected])
+  useEffect(() => { setSiteFilter(''); setFacSearch(''); setStateFilter(''); setLgaFilter('') }, [selected])
 
   // Drill-down: stock rows for the selected commodity, grouped by facility
   const facRows = selected
@@ -233,12 +234,14 @@ export function AllFacilities() {
     out:  facList.filter(f => getStockStatus(f.total, f.amc) === 'out').length,
     over: facList.filter(f => getStockStatus(f.total, f.amc) === 'over').length,
   }
-  // LGA dropdown options, drawn from the reporting sites in this breakdown.
-  const lgaOpts = [...new Set(facList.map(f => f.lga).filter(l => l && l !== '—'))].sort()
-  // Breakdown table filters: status card + LGA dropdown + facility name search.
+  // State dropdown options (overall admin), and LGA options scoped to the state.
+  const stateOpts = [...new Set(facList.map(f => f.state).filter(s => s && s !== '—'))].sort()
+  const lgaOpts = [...new Set(facList.filter(f => !stateFilter || f.state === stateFilter).map(f => f.lga).filter(l => l && l !== '—'))].sort()
+  // Breakdown table filters: status card + State + LGA dropdown + facility name search.
   const facQuery = facSearch.trim().toLowerCase()
   const shownFacs = facList.filter(f =>
     (!siteFilter || getStockStatus(f.total, f.amc) === siteFilter) &&
+    (!stateFilter || f.state === stateFilter) &&
     (!lgaFilter  || f.lga === lgaFilter) &&
     (!facQuery   || (f.name || '').toLowerCase().includes(facQuery))
   )
@@ -308,6 +311,13 @@ export function AllFacilities() {
             <div className="flex gap-2 flex-wrap">
               <input value={facSearch} onChange={e=>setFacSearch(e.target.value)} placeholder="Search facility…"
                 className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 w-48"/>
+              {store.isOverallAdmin() && stateOpts.length > 1 && (
+                <select value={stateFilter} onChange={e=>{ setStateFilter(e.target.value); setLgaFilter('') }}
+                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                  <option value="">All states</option>
+                  {stateOpts.map(s=><option key={s} value={s}>{s}</option>)}
+                </select>
+              )}
               {lgaOpts.length > 1 && (
                 <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
                   className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
@@ -325,7 +335,7 @@ export function AllFacilities() {
               </button>
             </div>
           </CardHeader>
-          {shownFacs.length === 0 ? <EmptyState message={(facQuery || lgaFilter) ? 'No sites match these filters.' : siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
+          {shownFacs.length === 0 ? <EmptyState message={(facQuery || lgaFilter || stateFilter) ? 'No sites match these filters.' : siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
                 {(isLabSel

@@ -31,9 +31,11 @@ export function AdminNav() {
   }, [])
 
   async function loadPendingCount() {
+    // Overall admin doesn't handle redistribution requests, so its Alerts badge
+    // shouldn't count them.
+    if (store.isOverallAdmin()) { setPendingRequestCount(0); return }
     // Pending requests still awaiting a source assignment (sending_facility_id
-    // null). The server scopes the list to the admin's jurisdiction; overall admin
-    // sees all. sending-null filtering is done client-side (no server predicate).
+    // null). The server scopes the list to the admin's jurisdiction.
     try {
       const rows = await api.transfers.list({ status: 'pending' })
       setPendingRequestCount((rows || []).filter(t => !t.sending_facility_id).length)

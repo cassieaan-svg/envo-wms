@@ -17,12 +17,14 @@ export function Monitoring() {
   const [expiryData, setExpiryData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [lgaFilter, setLgaFilter] = useState('')   // admin LGA narrowing (consumption)
+  const [stateFilter, setStateFilter] = useState('') // admin State narrowing (consumption, overall admin)
   const [catDrill, setCatDrill]   = useState(null)  // category drilled into
   const [commDrill, setCommDrill] = useState(null)  // { id, name, unit } drilled into
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
   const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
   const [expLga, setExpLga]       = useState('')    // admin LGA narrowing (expiry)
+  const [expState, setExpState]   = useState('')    // admin State narrowing (expiry, overall admin)
   const [catFilter, setCatFilter] = useState('')    // commodity category narrowing (consumption)
   const [expCat, setExpCat]       = useState('')    // commodity category narrowing (expiry)
 
@@ -45,17 +47,20 @@ export function Monitoring() {
   // Facility metadata for LGA / facility drill-downs
   const facMeta = {}
   store.allFacilities.forEach(f => { facMeta[f.id] = { name: f.name, lga: f.lga || '—' } })
-  const lgaOptions = [...new Set(store.allFacilities.map(f => f.lga).filter(Boolean))].sort()
+  const stateOptions = [...new Set(store.allFacilities.map(f => f.state).filter(Boolean))].sort()
+  const lgasForState = st => [...new Set(store.allFacilities.filter(f => !st || f.state === st).map(f => f.lga).filter(Boolean))].sort()
   const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
 
-  useEffect(() => { loadConsumption() }, [scopeKey, period, lgaFilter, catFilter])
-  useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expLga, expCat, scopeKey])
+  useEffect(() => { loadConsumption() }, [scopeKey, period, stateFilter, lgaFilter, catFilter])
+  useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expState, expLga, expCat, scopeKey])
 
   async function loadConsumption() {
     setLoading(true)
     setCatDrill(null); setCommDrill(null); setMetricDrill(null)
     const start = new Date(); start.setDate(start.getDate()-period)
-    const lgaIds = lgaFilter ? store.allFacilities.filter(f => f.lga === lgaFilter).map(f => f.id) : null
+    const lgaIds = (stateFilter || lgaFilter)
+      ? store.allFacilities.filter(f => (!stateFilter || f.state === stateFilter) && (!lgaFilter || f.lga === lgaFilter)).map(f => f.id)
+      : null
     const facility_ids = facilityFilter(lgaIds)
 
     // Paginate — an admin over a long period easily exceeds the 1000-row cap,
@@ -101,7 +106,9 @@ export function Monitoring() {
     setExpDrill(null)
     const now=new Date()
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
-    const lgaIds = expLga ? store.allFacilities.filter(f => f.lga === expLga).map(f => f.id) : null
+    const lgaIds = (expState || expLga)
+      ? store.allFacilities.filter(f => (!expState || f.state === expState) && (!expLga || f.lga === expLga)).map(f => f.id)
+      : null
     const facility_ids = facilityFilter(lgaIds)
 
     // Paginate — large jurisdictions over a long window exceed the 1000-row cap.
@@ -259,11 +266,21 @@ export function Monitoring() {
             </select>
             {isAdm && (
               <>
+                {store.isOverallAdmin() && (
+                  <>
+                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">State</span>
+                    <select value={stateFilter} onChange={e=>{ setStateFilter(e.target.value); setLgaFilter('') }}
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                      <option value="">All states</option>
+                      {stateOptions.map(s=><option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </>
+                )}
                 <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
                 <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
                   className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
                   <option value="">All LGAs</option>
-                  {lgaOptions.map(l=><option key={l} value={l}>{l}</option>)}
+                  {lgasForState(stateFilter).map(l=><option key={l} value={l}>{l}</option>)}
                 </select>
               </>
             )}
@@ -291,11 +308,21 @@ export function Monitoring() {
             </select>
             {isAdm && (
               <>
+                {store.isOverallAdmin() && (
+                  <>
+                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">State</span>
+                    <select value={expState} onChange={e=>{ setExpState(e.target.value); setExpLga('') }}
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                      <option value="">All states</option>
+                      {stateOptions.map(s=><option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </>
+                )}
                 <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
                 <select value={expLga} onChange={e=>setExpLga(e.target.value)}
                   className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
                   <option value="">All LGAs</option>
-                  {lgaOptions.map(l=><option key={l} value={l}>{l}</option>)}
+                  {lgasForState(expState).map(l=><option key={l} value={l}>{l}</option>)}
                 </select>
               </>
             )}
