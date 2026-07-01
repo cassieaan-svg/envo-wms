@@ -41,6 +41,23 @@ jobs:
         working-directory: backend
         run: npm install
 
+      - name: Write backend .env from secret
+        shell: powershell
+        working-directory: backend
+        env:
+          BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
+        run: |
+          # backend/.env is gitignored, so a fresh runner checkout has no DB creds
+          # and the backend can't authenticate to Postgres (SASL: "client password
+          # must be a string"). Regenerate it every deploy from the BACKEND_ENV repo
+          # secret (must contain PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD/JWT_SECRET/
+          # JWT_EXPIRES_IN). Written as ASCII so no UTF-8 BOM corrupts the first line.
+          $env:BACKEND_ENV | Set-Content -Path .env -Encoding ascii
+          if (-not (Test-Path .env) -or ((Get-Item .env).Length -eq 0)) {
+            Write-Error 'backend/.env is empty - set the BACKEND_ENV repo secret (Settings > Secrets and variables > Actions).'
+            exit 1
+          }
+
       - name: Start or restart backend with pm2
         shell: powershell
         working-directory: backend
