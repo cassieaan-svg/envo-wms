@@ -176,6 +176,28 @@ html:not(.dark) [class*="text-gray-600"] {
   color: #4b5563 !important;
 }
 
+/* Accent text — the -300/-400 shades are tuned for the dark UI and wash out on
+   the light background (especially when projected). Darken to ~700 shades for
+   readable contrast. Kept above the bg-blue rule below so solid-blue badges keep
+   their white text. */
+html:not(.dark) [class*="text-green-400"],
+html:not(.dark) [class*="text-green-300"]  { color: #15803d !important; }
+html:not(.dark) [class*="text-red-400"],
+html:not(.dark) [class*="text-red-300"]    { color: #b91c1c !important; }
+html:not(.dark) [class*="text-amber-400"],
+html:not(.dark) [class*="text-amber-300"]  { color: #b45309 !important; }
+html:not(.dark) [class*="text-blue-400"],
+html:not(.dark) [class*="text-blue-300"]   { color: #1d4ed8 !important; }
+html:not(.dark) [class*="text-purple-400"],
+html:not(.dark) [class*="text-purple-300"] { color: #7e22ce !important; }
+
+/* Faint status-pill backgrounds (bg-*-500/10) → light tints so the pills read
+   clearly with the darkened text above. Blue pills are handled by the solid
+   bg-blue rule further down. */
+html:not(.dark) [class*="bg-amber-500/10"] { background-color: #fef3c7 !important; }
+html:not(.dark) [class*="bg-green-500/10"] { background-color: #dcfce7 !important; }
+html:not(.dark) [class*="bg-red-500/10"]   { background-color: #fee2e2 !important; }
+
 /* Border Colors */
 html:not(.dark) [class*="border-white/"] {
   border-color: #e5e7eb !important;
