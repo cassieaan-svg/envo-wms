@@ -55,11 +55,18 @@ export function Log() {
       // section already scopes transfers; facility_id covers both sending/receiving sides.
       (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, date_field: from?'initiated_at':undefined, from, limit: rowLimit }).catch(()=>[]) : [],
     ])
+    // Admins get a cross-facility feed; hide internal movements — store→dispensary
+    // (same facility) and store→SDP/DSD site dispatches (e.g. "Main Lab", no distinct
+    // receiving facility) — so the feed isn't bulky. External redistributions have
+    // two different facilities and are kept.
+    const extTransfers = isAdmin
+      ? transfers.filter(t => t.sending_facility_id && t.receiving_facility_id && t.sending_facility_id !== t.receiving_facility_id)
+      : transfers
     const merged = [
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
       ...intake.map(r=>({...r,_type:'intake',_time:r.received_at})),
       ...adj.map(r=>({...r,_type:'adjustment',_time:r.adjusted_at})),
-      ...transfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at})),
+      ...extTransfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at})),
     ].sort((a,b)=>new Date(b._time)-new Date(a._time)).slice(0, period ? 500 : 100)
     setAllRecords(merged)
     setLoading(false)

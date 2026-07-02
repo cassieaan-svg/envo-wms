@@ -22,6 +22,7 @@ export function Monitoring() {
   const [commDrill, setCommDrill] = useState(null)  // { id, name, unit } drilled into
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
   const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
+  const [expBatchComm, setExpBatchComm] = useState(null)  // Expiring-batches table: commodity drilled into {id,name,cat}
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
   const [expLga, setExpLga]       = useState('')    // admin LGA narrowing (expiry)
   const [expState, setExpState]   = useState('')    // admin State narrowing (expiry, overall admin)
@@ -97,7 +98,7 @@ export function Monitoring() {
 
   async function loadExpiry() {
     setLoading(true)
-    setExpDrill(null)
+    setExpDrill(null); setExpBatchComm(null)
     const now=new Date()
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
     const lgaIds = (expState || expLga)
@@ -268,12 +269,16 @@ export function Monitoring() {
                     </select>
                   </>
                 )}
-                <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
-                <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
-                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                  <option value="">All LGAs</option>
-                  {lgasForState(stateFilter).map(l=><option key={l} value={l}>{l}</option>)}
-                </select>
+                {!store.isOverallAdmin() && (
+                  <>
+                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
+                    <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                      <option value="">All LGAs</option>
+                      {lgasForState(stateFilter).map(l=><option key={l} value={l}>{l}</option>)}
+                    </select>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -304,12 +309,16 @@ export function Monitoring() {
                     </select>
                   </>
                 )}
-                <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
-                <select value={expLga} onChange={e=>setExpLga(e.target.value)}
-                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                  <option value="">All LGAs</option>
-                  {lgasForState(expState).map(l=><option key={l} value={l}>{l}</option>)}
-                </select>
+                {!store.isOverallAdmin() && (
+                  <>
+                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
+                    <select value={expLga} onChange={e=>setExpLga(e.target.value)}
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                      <option value="">All LGAs</option>
+                      {lgasForState(expState).map(l=><option key={l} value={l}>{l}</option>)}
+                    </select>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -444,38 +453,76 @@ export function Monitoring() {
           </div>
 
           <Card>
-            <CardHeader><CardTitle>Top commodities</CardTitle>{isAdm && consData.byComm.length>0 && <span className="text-xs text-gray-500">click a commodity for facilities</span>}</CardHeader>
-            {consData.byComm.length===0 ? <EmptyState message="No dispensing in this period."/> : (
-              <div className="table-wrap"><table className="w-full text-sm">
-                <thead><tr className="border-b border-white/8 bg-white/2">
-                  {['#','Commodity','Category','Units Utilized','Transactions','Share'].map(h=>(
-                    <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>{consData.byComm.slice(0,15).map((c,i)=>{
-                  const pct=Math.round((c.qty/consData.total)*100)||0
-                  const color=catColor(c.cat,i)
-                  const active=commDrill?.id===c.commodity_id
-                  return (
-                    <tr key={i} onClick={()=>isAdm && setCommDrill(active?null:{id:c.commodity_id,name:c.name,unit:c.unit})}
-                      className={`border-b border-white/5 ${isAdm?'cursor-pointer':''} ${active?'bg-white/8':'hover:bg-white/2'}`}>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
-                      <td className="px-4 py-3 font-medium text-gray-100">{c.name}{isAdm && <span className="text-gray-600 ml-1">›</span>}</td>
-                      <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
-                      <td className="px-4 py-3 font-mono text-sm text-green-400">{c.qty.toLocaleString()} {c.unit}</td>
-                      <td className="px-4 py-3 text-gray-400">{c.txn}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-14 h-1.5 bg-white/5 rounded-full">
-                            <div style={{width:`${Math.min(100,(c.qty/consData.byComm[0].qty)*100)}%`,height:'100%',background:color,borderRadius:'9999px'}}/>
-                          </div>
-                          <span className="text-xs text-gray-500">{pct}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}</tbody>
-              </table></div>
+            {isAdm && commDrill ? (() => {
+              /* In-place drill: the Top-commodities table swaps to this commodity's
+                 facility breakdown; Back restores the table. Rest of the page stays. */
+              const commRows = consData.rows.filter(r=>r.commodity_id===commDrill.id)
+              const cTotal = commRows.reduce((s,r)=>s+r.quantity,0)||1
+              const byFac = aggRows(commRows, r=>r.facility_id).map(([id,qty])=>({id,qty,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
+              return (
+                <>
+                  <CardHeader>
+                    <CardTitle>{commDrill.name} — facilities utilizing this commodity</CardTitle>
+                    <button onClick={()=>setCommDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
+                  </CardHeader>
+                  {byFac.length===0 ? <EmptyState message="No facility-level data."/> : (
+                    <div className="table-wrap"><table className="w-full text-sm">
+                      <thead><tr className="border-b border-white/8 bg-white/2">
+                        {['#','Facility','LGA','Units Utilized','Share'].map(h=>(
+                          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>{byFac.map((f,i)=>{
+                        const pct=Math.round((f.qty/cTotal)*100)||0
+                        return (
+                          <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
+                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                            <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
+                            <td className="px-4 py-3 font-mono text-sm text-green-400">{f.qty.toLocaleString()} {commDrill.unit||''}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
+                          </tr>
+                        )
+                      })}</tbody>
+                    </table></div>
+                  )}
+                </>
+              )
+            })() : (
+              <>
+                <CardHeader><CardTitle>Top commodities</CardTitle>{isAdm && consData.byComm.length>0 && <span className="text-xs text-gray-500">click a commodity for facilities</span>}</CardHeader>
+                {consData.byComm.length===0 ? <EmptyState message="No dispensing in this period."/> : (
+                  <div className="table-wrap"><table className="w-full text-sm">
+                    <thead><tr className="border-b border-white/8 bg-white/2">
+                      {['#','Commodity','Category','Units Utilized','Transactions','Share'].map(h=>(
+                        <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{consData.byComm.slice(0,15).map((c,i)=>{
+                      const pct=Math.round((c.qty/consData.total)*100)||0
+                      const color=catColor(c.cat,i)
+                      return (
+                        <tr key={i} onClick={()=>isAdm && setCommDrill({id:c.commodity_id,name:c.name,unit:c.unit})}
+                          className={`border-b border-white/5 ${isAdm?'cursor-pointer':''} hover:bg-white/2`}>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                          <td className="px-4 py-3 font-medium text-gray-100">{c.name}{isAdm && <span className="text-gray-600 ml-1">›</span>}</td>
+                          <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
+                          <td className="px-4 py-3 font-mono text-sm text-green-400">{c.qty.toLocaleString()} {c.unit}</td>
+                          <td className="px-4 py-3 text-gray-400">{c.txn}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-14 h-1.5 bg-white/5 rounded-full">
+                                <div style={{width:`${Math.min(100,(c.qty/consData.byComm[0].qty)*100)}%`,height:'100%',background:color,borderRadius:'9999px'}}/>
+                              </div>
+                              <span className="text-xs text-gray-500">{pct}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}</tbody>
+                  </table></div>
+                )}
+              </>
             )}
           </Card>
 
@@ -527,40 +574,6 @@ export function Monitoring() {
             )
           })()}
 
-          {isAdm && commDrill && (() => {
-            const commRows = consData.rows.filter(r=>r.commodity_id===commDrill.id)
-            const cTotal = commRows.reduce((s,r)=>s+r.quantity,0)||1
-            const byFac = aggRows(commRows, r=>r.facility_id).map(([id,qty])=>({id,qty,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
-            return (
-              <Card>
-                <CardHeader>
-                  <CardTitle>{commDrill.name} — facilities utilizing this commodity</CardTitle>
-                  <button onClick={()=>setCommDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
-                </CardHeader>
-                {byFac.length===0 ? <EmptyState message="No facility-level data."/> : (
-                  <div className="table-wrap"><table className="w-full text-sm">
-                    <thead><tr className="border-b border-white/8 bg-white/2">
-                      {['#','Facility','LGA','Units Utilized','Share'].map(h=>(
-                        <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                      ))}
-                    </tr></thead>
-                    <tbody>{byFac.map((f,i)=>{
-                      const pct=Math.round((f.qty/cTotal)*100)||0
-                      return (
-                        <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
-                          <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
-                          <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
-                          <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
-                          <td className="px-4 py-3 font-mono text-sm text-green-400">{f.qty.toLocaleString()} {commDrill.unit||''}</td>
-                          <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
-                        </tr>
-                      )
-                    })}</tbody>
-                  </table></div>
-                )}
-              </Card>
-            )
-          })()}
         </>
       )}
 
@@ -656,32 +669,100 @@ export function Monitoring() {
               })()}
 
               <Card>
-                <CardHeader><CardTitle>Expiring batches</CardTitle></CardHeader>
-                {expiryData.length===0 ? <EmptyState message="No expiring batches in this period ✓"/> : (
-                  <div className="table-wrap"><table className="w-full text-sm">
-                    <thead><tr className="border-b border-white/8 bg-white/2">
-                      {['Commodity',...(isAdm?['Facility','LGA']:[]),'Expiry date','Days left','Qty','Batch','Urgency'].map(h=>(
-                        <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                      ))}
-                    </tr></thead>
-                    <tbody>{expiryData.map(r=>{
-                      const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
-                      const u=dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
-                      return (
-                        <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-                          <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
-                          {isAdm && <td className="px-4 py-3 text-xs text-gray-400">{facMeta[r.facility_id]?.name||'—'}</td>}
-                          {isAdm && <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>}
-                          <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
-                          <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL}d</td>
-                          <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
-                          <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
-                        </tr>
-                      )
-                    })}</tbody>
-                  </table></div>
-                )}
+                <CardHeader><CardTitle>Expiring batches</CardTitle>{isAdm && expiryData.length>0 && !expBatchComm && <span className="text-xs text-gray-500">click a commodity for facilities</span>}</CardHeader>
+                {expiryData.length===0 ? <EmptyState message="No expiring batches in this period ✓"/> :
+                  !isAdm ? (
+                    /* Facility view: flat batch list (their own batches). */
+                    <div className="table-wrap"><table className="w-full text-sm">
+                      <thead><tr className="border-b border-white/8 bg-white/2">
+                        {['Commodity','Expiry date','Days left','Qty','Batch','Urgency'].map(h=>(
+                          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>{expiryData.map(r=>{
+                        const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
+                        const u=dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+                        return (
+                          <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                            <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
+                            <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL}d</td>
+                            <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
+                            <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
+                          </tr>
+                        )
+                      })}</tbody>
+                    </table></div>
+                  ) : expBatchComm ? (() => {
+                    /* Admin drill: expiring batches for the selected commodity, by facility. */
+                    const batches = expiryData.filter(r => r.commodity_id === expBatchComm.id).sort((a,b)=>new Date(a.expiry_date)-new Date(b.expiry_date))
+                    return (
+                      <>
+                        <div className="px-5 py-3 border-b border-white/8 flex items-center justify-between flex-wrap gap-2">
+                          <span className="text-sm text-gray-300 flex items-center gap-2">{expBatchComm.name} <CatBadge>{expBatchComm.cat}</CatBadge> — expiring batches by facility</span>
+                          <button onClick={()=>setExpBatchComm(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Back to commodities</button>
+                        </div>
+                        <div className="table-wrap"><table className="w-full text-sm">
+                          <thead><tr className="border-b border-white/8 bg-white/2">
+                            {['Facility','LGA','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
+                              <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                            ))}
+                          </tr></thead>
+                          <tbody>{batches.map(r=>{
+                            const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
+                            const u=dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+                            return (
+                              <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                                <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}</td>
+                                <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
+                                <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
+                                <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
+                                <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL}d</td>
+                                <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
+                                <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
+                              </tr>
+                            )
+                          })}</tbody>
+                        </table></div>
+                      </>
+                    )
+                  })() : (() => {
+                    /* Admin top view: one row per commodity (tap to drill into facilities). */
+                    const byComm={}
+                    expiryData.forEach(r=>{
+                      const g=byComm[r.commodity_id]||(byComm[r.commodity_id]={id:r.commodity_id,name:r.commodities?.name||'—',cat:r.commodities?.category||'—',unit:r.commodities?.unit||'',batches:0,qty:0,soonest:null,facs:new Set()})
+                      g.batches++; g.qty+=r.quantity; g.facs.add(r.facility_id)
+                      const d=new Date(r.expiry_date); if(!g.soonest||d<g.soonest) g.soonest=d
+                    })
+                    const list=Object.values(byComm).sort((a,b)=>a.soonest-b.soonest)
+                    return (
+                      <div className="table-wrap"><table className="w-full text-sm">
+                        <thead><tr className="border-b border-white/8 bg-white/2">
+                          {['Commodity','Category','Facilities','Batches','Total qty','Soonest expiry','Days left','Urgency'].map(h=>(
+                            <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                          ))}
+                        </tr></thead>
+                        <tbody>{list.map(g=>{
+                          const dL=Math.round((g.soonest-today)/86400000)
+                          const u=dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+                          return (
+                            <tr key={g.id} onClick={()=>setExpBatchComm({id:g.id,name:g.name,cat:g.cat})} className="border-b border-white/5 cursor-pointer hover:bg-white/5">
+                              <td className="px-4 py-3 font-medium text-blue-400 hover:text-blue-300">{g.name}<span className="text-gray-600 ml-1">›</span></td>
+                              <td className="px-4 py-3"><CatBadge>{g.cat}</CatBadge></td>
+                              <td className="px-4 py-3 text-gray-400">{g.facs.size}</td>
+                              <td className="px-4 py-3 text-gray-400">{g.batches}</td>
+                              <td className="px-4 py-3 font-mono text-sm text-gray-300">{g.qty} {g.unit}</td>
+                              <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(g.soonest.toISOString().slice(0,10))}</td>
+                              <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL}d</td>
+                              <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
+                            </tr>
+                          )
+                        })}</tbody>
+                      </table></div>
+                    )
+                  })()
+                }
               </Card>
             </>
           )}

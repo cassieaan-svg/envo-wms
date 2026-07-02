@@ -318,7 +318,7 @@ export function AllFacilities() {
                   {stateOpts.map(s=><option key={s} value={s}>{s}</option>)}
                 </select>
               )}
-              {lgaOpts.length > 1 && (
+              {!store.isOverallAdmin() && lgaOpts.length > 1 && (
                 <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
                   className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
                   <option value="">All LGAs</option>
