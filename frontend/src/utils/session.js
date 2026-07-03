@@ -14,7 +14,9 @@ export async function hydrateSession(user) {
   if (meta.access_level) accessLevel = meta.access_level
   else if (meta.is_admin === true || meta.is_admin === 'true') accessLevel = 'overall_admin'
 
-  const commoditySection = ['overall_admin','state_admin'].includes(accessLevel)
+  // Whole-remit tiers see both pharmacy + lab (section = null). cluster_admin and
+  // lga_admin are per-component, so they keep their token's commodity_section.
+  const commoditySection = ['overall_admin','state_admin','state_viewer'].includes(accessLevel)
     ? null
     : meta.commodity_section || null
 
@@ -23,7 +25,8 @@ export async function hydrateSession(user) {
   // Load facilities (scoped for state/lga admins — the server also enforces this,
   // but we pass the filter so the dropdown matches the admin's remit).
   const facParams = {}
-  if (accessLevel === 'state_admin' && meta.admin_state) facParams.state = meta.admin_state
+  if ((accessLevel === 'state_admin' || accessLevel === 'state_viewer') && meta.admin_state) facParams.state = meta.admin_state
+  if (accessLevel === 'cluster_admin' && meta.admin_cluster) facParams.cluster = meta.admin_cluster
   if (accessLevel === 'lga_admin'   && meta.admin_lga)   facParams.lga   = meta.admin_lga
 
   const [facs, comms, amcRows] = await Promise.all([
@@ -63,6 +66,7 @@ export async function hydrateSession(user) {
   store.setCommoditySection(commoditySection)
   store.setAdminState(meta.admin_state || null)
   store.setAdminLGA(meta.admin_lga || null)
+  store.setAdminCluster(meta.admin_cluster || null)
   store.setAllFacilities(facs || [])
   store.setAllCommodities(allCommodities)
   store.setCurrentFacility(currentFacility)

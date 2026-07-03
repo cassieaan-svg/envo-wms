@@ -19,7 +19,7 @@ export class StockService {
    * facility/commodity details, ordered by commodity name.
    */
   static async getStock(facilityId, options = {}) {
-    const { commodityId, locationType, limit = 1000, offset = 0 } = options
+    const { commodityId, locationType, categories = null, limit = 1000, offset = 0 } = options
 
     const params = [facilityId]
     let sql = `
@@ -33,6 +33,8 @@ export class StockService {
 
     if (commodityId) { params.push(commodityId); sql += ` and s.commodity_id = $${params.length}` }
     if (locationType) { params.push(locationType); sql += ` and s.location_type = $${params.length}` }
+    // Section enforcement: restrict to the caller's commodity categories.
+    if (Array.isArray(categories) && categories.length) { params.push(categories); sql += ` and c.category = any($${params.length})` }
 
     params.push(limit, offset)
     sql += ` order by c.name nulls last limit $${params.length - 1} offset $${params.length}`
@@ -48,13 +50,14 @@ export class StockService {
    * `commodityIds` narrows to a commodity-section subset. Paginated via limit/offset.
    * Same row shape as getStock (nested facilities/commodities).
    */
-  static async getScopedStock({ facilityIds = null, commodityIds = null, limit = 1000, offset = 0 } = {}) {
+  static async getScopedStock({ facilityIds = null, commodityIds = null, categories = null, limit = 1000, offset = 0 } = {}) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
     if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`s.facility_id = any($${params.length})`) }
     if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`s.commodity_id = any($${params.length})`) }
+    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
 
     let sql = `
       select s.id, s.facility_id, s.commodity_id, s.quantity, s.tablet_buffer,
@@ -78,7 +81,7 @@ export class StockService {
    * commodity and facility objects (SiteBreakdownModal reads facilities.name).
    */
   static async getDsdStock(facilityId, options = {}) {
-    const { dsdSiteName, commodityId, facilityIds, limit = 1000, offset = 0 } = options
+    const { dsdSiteName, commodityId, facilityIds, categories = null, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
@@ -87,6 +90,7 @@ export class StockService {
     else if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`d.facility_id = any($${params.length})`) }
     if (dsdSiteName) { params.push(dsdSiteName); conds.push(`d.dsd_site_name = $${params.length}`) }
     if (commodityId) { params.push(commodityId); conds.push(`d.commodity_id = $${params.length}`) }
+    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
 
     let sql = `
       select d.id, d.facility_id, d.dsd_site_name, d.commodity_id, d.quantity, d.updated_at,
@@ -108,7 +112,7 @@ export class StockService {
    * optionally a single site or commodity. Embeds commodity + facility objects.
    */
   static async getSdpStock(facilityId, options = {}) {
-    const { sdpName, commodityId, facilityIds, limit = 1000, offset = 0 } = options
+    const { sdpName, commodityId, facilityIds, categories = null, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
@@ -117,6 +121,7 @@ export class StockService {
     else if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`sp.facility_id = any($${params.length})`) }
     if (sdpName) { params.push(sdpName); conds.push(`sp.sdp_name = $${params.length}`) }
     if (commodityId) { params.push(commodityId); conds.push(`sp.commodity_id = $${params.length}`) }
+    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
 
     let sql = `
       select sp.id, sp.facility_id, sp.sdp_name, sp.commodity_id, sp.quantity, sp.updated_at,

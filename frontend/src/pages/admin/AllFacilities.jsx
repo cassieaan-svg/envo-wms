@@ -6,6 +6,8 @@ import { Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
+import { useStock } from '../../hooks/useStock'
 import { fmtStockQty, getCommodityDispenseUnit, isLabCategory, getStockStatus, getMOS } from '../../utils/helpers'
 
 // Build a CSV from a header row + data rows and trigger a download. Fields with
@@ -66,8 +68,14 @@ export function AllFacilities() {
   const [consByComm, setConsByComm] = useState({})
   const [siteFilter, setSiteFilter] = useState('')   // breakdown card filter: '', low, out, over
   const [facSearch, setFacSearch]   = useState('')   // breakdown table: facility name search
-  const [stateFilter, setStateFilter] = useState('') // breakdown table: State dropdown (overall admin)
-  const [lgaFilter, setLgaFilter]   = useState('')   // breakdown table: LGA dropdown (scoped to state)
+  const [refreshKey, setRefreshKey] = useState(0)    // bumps to re-fetch site/consumption data
+  const { loadStock } = useStock()
+
+  // Admin location scope (State → LGA → Facility via the shared FacilityPicker,
+  // which sets the global admin filter that getAdminStockScope resolves).
+  const { fid: scopeFid, scopeIds: scopeIdList } = store.getAdminStockScope()
+  const scopeSet = scopeFid ? new Set([scopeFid]) : (scopeIdList ? new Set(scopeIdList) : null)
+  const inScope  = fId => !scopeSet || scopeSet.has(fId)
 
   const agg = {}
   // Seed from every tracked commodity so zero-stock items and their
@@ -78,6 +86,7 @@ export function AllFacilities() {
   // Group by facility (summing location rows) and carry the facility's AMC so
   // status is MOS-based — matching the Dashboard — instead of a flat threshold.
   store.stockData.forEach(r => {
+    if (!inScope(r.facility_id)) return
     const k = r.commodity_id
     if (!agg[k]) agg[k] = { id:k, name:r.commodities?.name, cat:r.commodities?.category, comm:r.commodities, facMap:{} }
     const fid = r.facility_id
@@ -91,6 +100,7 @@ export function AllFacilities() {
     const siteMap = isLabCategory(c.cat) ? siteByComm.sdp[c.id] : siteByComm.dsd[c.id]
     if (!siteMap) return
     Object.entries(siteMap).forEach(([fid, qty]) => {
+      if (!inScope(fid)) return
       if (!c.facMap[fid]) c.facMap[fid] = { total:0, amc:0 }
       c.facMap[fid].total += qty
     })
@@ -99,7 +109,7 @@ export function AllFacilities() {
   // reporting site even with no current stock row.
   Object.values(agg).forEach(c => {
     const consSet = consByComm[c.id]
-    if (consSet) consSet.forEach(fid => { if (!c.facMap[fid]) c.facMap[fid] = { total:0, amc:0 } })
+    if (consSet) consSet.forEach(fid => { if (inScope(fid) && !c.facMap[fid]) c.facMap[fid] = { total:0, amc:0 } })
   })
   // Reporting sites = facilities that either currently hold stock (total > 0) or
   // have consumed the commodity in the last 12 months. Provisioned-but-idle
@@ -180,15 +190,15 @@ export function AllFacilities() {
       if (active) { setSiteByComm({ sdp, dsd }); setConsByComm(cons) }
     })
     return () => { active = false }
-  }, [])
+  }, [refreshKey])
 
   // Reset the breakdown filters when switching commodity.
-  useEffect(() => { setSiteFilter(''); setFacSearch(''); setStateFilter(''); setLgaFilter('') }, [selected])
+  useEffect(() => { setSiteFilter(''); setFacSearch('') }, [selected])
 
   // Drill-down: stock rows for the selected commodity, grouped by facility
   const facRows = selected
     ? store.stockData
-        .filter(r => r.commodity_id === selected)
+        .filter(r => r.commodity_id === selected && inScope(r.facility_id))
         .reduce((acc, r) => {
           const fid = r.facility_id
           if (!acc[fid]) acc[fid] = { id: fid, name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: r.commodities }
@@ -210,13 +220,14 @@ export function AllFacilities() {
     }
     const siteMap = isLabSel ? (siteByComm.sdp[selected] || {}) : (siteByComm.dsd[selected] || {})
     Object.entries(siteMap).forEach(([fid, qty]) => {
+      if (!inScope(fid)) return
       const f = ensure(fid)
       if (isLabSel) f.sdp += qty
       else          f.dsd += qty
     })
     // Include facilities that consumed this commodity in the last 12 months even
     // with no stock row, so they appear as out-of-stock reporting sites.
-    if (consByComm[selected]) consByComm[selected].forEach(fid => ensure(fid))
+    if (consByComm[selected]) consByComm[selected].forEach(fid => { if (inScope(fid)) ensure(fid) })
   }
 
   // Totals: lab = store + SDP; pharmacy = store + dispensary + DSD
@@ -234,15 +245,11 @@ export function AllFacilities() {
     out:  facList.filter(f => getStockStatus(f.total, f.amc) === 'out').length,
     over: facList.filter(f => getStockStatus(f.total, f.amc) === 'over').length,
   }
-  // State dropdown options (overall admin), and LGA options scoped to the state.
-  const stateOpts = [...new Set(facList.map(f => f.state).filter(s => s && s !== '—'))].sort()
-  const lgaOpts = [...new Set(facList.filter(f => !stateFilter || f.state === stateFilter).map(f => f.lga).filter(l => l && l !== '—'))].sort()
-  // Breakdown table filters: status card + State + LGA dropdown + facility name search.
+  // Breakdown table filters: status card + facility name search. Location narrowing
+  // (State/LGA/Facility) comes from the page's FacilityPicker via inScope, applied above.
   const facQuery = facSearch.trim().toLowerCase()
   const shownFacs = facList.filter(f =>
     (!siteFilter || getStockStatus(f.total, f.amc) === siteFilter) &&
-    (!stateFilter || f.state === stateFilter) &&
-    (!lgaFilter  || f.lga === lgaFilter) &&
     (!facQuery   || (f.name || '').toLowerCase().includes(facQuery))
   )
 
@@ -294,6 +301,8 @@ export function AllFacilities() {
           <p className="text-sm text-gray-500 mt-1">Stock by facility — {facList.length} reporting sites</p>
         </div>
 
+        <FacilityPicker />
+
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
           <Metric label="Total stock" value={fmtStockQty(drillTotal, selectedComm?.comm)} />
           <Metric label="Reporting sites" value={facList.length} color="blue" />
@@ -311,20 +320,6 @@ export function AllFacilities() {
             <div className="flex gap-2 flex-wrap">
               <input value={facSearch} onChange={e=>setFacSearch(e.target.value)} placeholder="Search facility…"
                 className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 w-48"/>
-              {store.isOverallAdmin() && stateOpts.length > 1 && (
-                <select value={stateFilter} onChange={e=>{ setStateFilter(e.target.value); setLgaFilter('') }}
-                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                  <option value="">All states</option>
-                  {stateOpts.map(s=><option key={s} value={s}>{s}</option>)}
-                </select>
-              )}
-              {!store.isOverallAdmin() && lgaOpts.length > 1 && (
-                <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
-                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                  <option value="">All LGAs</option>
-                  {lgaOpts.map(l=><option key={l} value={l}>{l}</option>)}
-                </select>
-              )}
               <button onClick={downloadFacilityCsv} disabled={shownFacs.length === 0}
                 className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 disabled:opacity-40 disabled:hover:text-gray-400">
                 ↓ CSV
@@ -335,7 +330,7 @@ export function AllFacilities() {
               </button>
             </div>
           </CardHeader>
-          {shownFacs.length === 0 ? <EmptyState message={(facQuery || lgaFilter || stateFilter) ? 'No sites match these filters.' : siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
+          {shownFacs.length === 0 ? <EmptyState message={facQuery ? 'No sites match these filters.' : siteFilter ? `No ${siteFilter === 'out' ? 'out-of-stock' : siteFilter === 'over' ? 'overstocked' : 'low-stock'} sites.` : 'No stock data.'}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
                 {(isLabSel
@@ -385,12 +380,15 @@ export function AllFacilities() {
         <p className="text-sm text-gray-500 mt-1">Tap a commodity to see stock by facility</p>
       </div>
 
+      <FacilityPicker />
+
       <Card className="stick-cols">
         <CardHeader>
           <CardTitle>Stock by commodity — all facilities</CardTitle>
           <div className="flex gap-2 flex-wrap">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search commodity…"
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 w-48"/>
+            <button onClick={()=>{ loadStock(); setRefreshKey(k=>k+1) }} className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 inline-flex items-center gap-1.5">↻ Refresh</button>
             <select value={commFilter} onChange={e=>setCommFilter(e.target.value)}
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
               <option value="">All categories</option>

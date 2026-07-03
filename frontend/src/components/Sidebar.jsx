@@ -10,7 +10,7 @@ import { SdpNav }      from '../pages/sdp/Nav'
 export function Sidebar() {
   const store      = useAppStore()
   const [showChangePw, setShowChangePw] = useState(false)
-  const sectionIcon = store.commoditySection === 'lab' ? '🧪' : store.commoditySection === 'pharmacy' ? '💊' : '⬡'
+  const sectionIcon = '⬡'
   const sectionName = store.commoditySection === 'lab' ? 'Laboratory' : store.commoditySection === 'pharmacy' ? 'Pharmacy' : 'EnVo'
 
   const NavComponent = store.isAdmin()

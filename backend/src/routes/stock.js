@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds } from '../middleware/scope.js'
+import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection } from '../middleware/scope.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
@@ -37,7 +37,8 @@ router.get('/', async (req, res) => {
       }
       const commodityIds = csv(commodity_ids)
       const stock = await StockService.getScopedStock({
-        facilityIds, commodityIds, limit: parseInt(limit), offset: parseInt(offset)
+        facilityIds, commodityIds, categories: req.scope.sectionCategories,
+        limit: parseInt(limit), offset: parseInt(offset)
       })
       return res.json({ success: true, data: stock, count: stock.length, timestamp: new Date().toISOString() })
     }
@@ -63,6 +64,7 @@ router.get('/', async (req, res) => {
     const stock = await StockService.getStock(facility_id, {
       commodityId: commodity_id,
       locationType: location_type,
+      categories: req.scope.sectionCategories,
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
@@ -102,6 +104,7 @@ router.get('/dsd', async (req, res) => {
       dsdSiteName: dsd_site_name,
       commodityId: commodity_id,
       facilityIds,
+      categories: req.scope.sectionCategories,
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
@@ -140,6 +143,7 @@ router.get('/sdp', async (req, res) => {
       sdpName: sdp_name,
       commodityId: commodity_id,
       facilityIds,
+      categories: req.scope.sectionCategories,
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
@@ -184,6 +188,7 @@ router.put('/upsert', async (req, res) => {
       return sendValidationError(res, 'Quantity must be a non-negative number', 'quantity')
     }
     if (!(await enforceFacilityWrite(req, res, facility_id, 'stock'))) return
+    if (!(await enforceCommoditySection(req, res, commodity_id))) return
 
     const stock = await StockService.upsertStock({ facility_id, commodity_id, location_type, quantity })
     res.json({ success: true, data: stock, timestamp: new Date().toISOString() })
@@ -212,6 +217,7 @@ router.put('/dsd/upsert', async (req, res) => {
       return sendValidationError(res, 'Quantity must be a non-negative number', 'quantity')
     }
     if (!(await enforceFacilityWrite(req, res, facility_id, 'dsd_stock'))) return
+    if (!(await enforceCommoditySection(req, res, commodity_id))) return
 
     const stock = await StockService.upsertDsdStock({ facility_id, dsd_site_name, commodity_id, quantity })
     res.json({ success: true, data: stock, timestamp: new Date().toISOString() })
@@ -240,6 +246,7 @@ router.put('/sdp/upsert', async (req, res) => {
       return sendValidationError(res, 'Quantity must be a non-negative number', 'quantity')
     }
     if (!(await enforceFacilityWrite(req, res, facility_id, 'sdp_stock'))) return
+    if (!(await enforceCommoditySection(req, res, commodity_id))) return
 
     const stock = await StockService.upsertSdpStock({ facility_id, sdp_name, commodity_id, quantity })
     res.json({ success: true, data: stock, timestamp: new Date().toISOString() })
@@ -270,6 +277,7 @@ router.patch('/dsd/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'DSD stock record not found', code: 'STOCK_NOT_FOUND' })
     }
     if (!(await enforceFacilityWrite(req, res, existing.facility_id, 'dsd_stock'))) return
+    if (!(await enforceCommoditySection(req, res, existing.commodity_id))) return
 
     const updated = await StockService.updateDsdStock(id, quantity)
     if (!updated) {
@@ -303,6 +311,7 @@ router.patch('/sdp/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'SDP stock record not found', code: 'STOCK_NOT_FOUND' })
     }
     if (!(await enforceFacilityWrite(req, res, existing.facility_id, 'sdp_stock'))) return
+    if (!(await enforceCommoditySection(req, res, existing.commodity_id))) return
 
     const updated = await StockService.updateSdpStock(id, quantity)
     if (!updated) {
@@ -344,6 +353,7 @@ router.post('/', async (req, res) => {
 
     // Enforce facility scoping (stock write policy)
     if (!(await enforceFacilityWrite(req, res, facility_id, 'stock'))) return
+    if (!(await enforceCommoditySection(req, res, commodity_id))) return
 
     // Validate facility exists
     const facilityExists = await StockService.facilityExists(facility_id)
@@ -420,6 +430,7 @@ router.patch('/:id', async (req, res) => {
       })
     }
     if (!(await enforceFacilityWrite(req, res, stock.facility_id, 'stock'))) return
+    if (!(await enforceCommoditySection(req, res, stock.commodity_id, stock.commodities?.category))) return
 
     const updated = await StockService.updateStock(id, { quantity })
 
@@ -454,6 +465,7 @@ router.get('/:id', async (req, res) => {
       })
     }
     if (!(await enforceFacilityRead(req, res, stock.facility_id, 'stock'))) return
+    if (!(await enforceCommoditySection(req, res, stock.commodity_id, stock.commodities?.category))) return
 
     res.json({
       success: true,

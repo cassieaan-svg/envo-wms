@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds } from '../middleware/scope.js'
+import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection } from '../middleware/scope.js'
 import { LogService } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 
@@ -40,6 +40,7 @@ router.post('/', async (req, res) => {
 
     // Enforce facility scoping (dispense_log write policy)
     if (!(await enforceFacilityWrite(req, res, facility_id, 'dispense_log'))) return
+    if (!(await enforceCommoditySection(req, res, commodity_id))) return
 
     // Validate facility exists
     const facilityExists = await StockService.facilityExists(facility_id)
@@ -114,7 +115,7 @@ router.get('/', async (req, res) => {
       return sendValidationError(res, 'date must be in YYYY-MM-DD format', 'date')
     }
     const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
-    const base = { dsdSiteName: dsd_site_name, sdpName: sdp_name, date, from, to, commodityIds, section, limit: parseInt(limit), offset: parseInt(offset) }
+    const base = { dsdSiteName: dsd_site_name, sdpName: sdp_name, date, from, to, commodityIds, categories: req.scope.sectionCategories, section, limit: parseInt(limit), offset: parseInt(offset) }
 
     let history
     if (facility_id) {
@@ -153,6 +154,7 @@ router.patch('/:id', async (req, res) => {
     const row = await LogService.getLogRow('dispense', req.params.id)
     if (!row) return res.status(404).json({ success: false, error: 'Dispense record not found', code: 'NOT_FOUND' })
     if (!(await enforceFacilityWrite(req, res, row.facility_id, 'dispense_log'))) return
+    if (!(await enforceCommoditySection(req, res, row.commodity_id))) return
 
     const updated = await LogService.updateLog('dispense', req.params.id, req.body || {})
     res.json({ success: true, data: updated, timestamp: new Date().toISOString() })

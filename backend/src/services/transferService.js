@@ -35,7 +35,7 @@ export class TransferService {
    */
   static async listTransfers(options = {}) {
     const {
-      facilityId, facilityIds, direction = 'any', status, statuses, section,
+      facilityId, facilityIds, direction = 'any', status, statuses, section, categories,
       dateField, from, to, notesIncludes, limit = 1000, offset = 0
     } = options
 
@@ -63,6 +63,8 @@ export class TransferService {
     }
 
     if (section) { params.push(section); conds.push(`t.section = $${params.length}`) }
+    // Section enforcement: restrict to the caller's commodity categories (joined c).
+    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
 
     if (notesIncludes) { params.push(`%${notesIncludes}%`); conds.push(`t.notes like $${params.length}`) }
 

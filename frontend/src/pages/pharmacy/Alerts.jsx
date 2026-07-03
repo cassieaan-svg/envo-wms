@@ -5,7 +5,8 @@ import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
-import { LoadingState, EmptyState } from '../../components/ui/Loading'
+import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, isLabCategory, capExpiryBatchesToStock } from '../../utils/helpers'
@@ -30,7 +31,6 @@ export function Alerts() {
   const [filterLga, setFilterLga]   = useState('')
   const [filterCat, setFilterCat]   = useState('')   // request alerts: commodity category
   const [stockCat, setStockCat]     = useState('')   // expiry / out / low / overstock: category
-  const [stockState, setStockState] = useState('')   // expiry / out / low / overstock: State (overall admin)
   const [drillComm, setDrillComm]   = useState(null) // stock tab: commodity drilled into {id,name,cat,comm}
   const [drillSites, setDrillSites] = useState({ sdp:{}, dsd:{} }) // per-facility site stock for the drilled commodity
   const [expDrillComm, setExpDrillComm] = useState(null) // expiry tab: commodity drilled into {id,name,cat}
@@ -51,13 +51,19 @@ export function Alerts() {
   const [histTo, setHistTo]     = useState(() => new Date().toISOString().slice(0, 10))
 
   const fid     = store.currentFacility?.id
+  // Admin location scope (State → LGA → Facility via the shared FacilityPicker,
+  // which sets the global admin filter that getAdminStockScope resolves).
+  const { fid: scopeFid, scopeIds: scopeIdList } = store.getAdminStockScope()
+  const scopeSet = scopeFid ? new Set([scopeFid]) : (scopeIdList ? new Set(scopeIdList) : null)
+  const inScope  = fId => !scopeSet || scopeSet.has(fId)
+  const scopeKey = scopeFid || (scopeIdList && scopeIdList.length ? scopeIdList.join(',') : 'all')
   const commIds = store.allCommodities.map(c => c.id)
 
   useEffect(() => {
     loadAll()
     // Overall admin doesn't handle redistribution requests — skip loading them.
     if (!store.isOverallAdmin()) loadFacReqAlerts()
-    if (store.isAdmin() && !store.isOverallAdmin()) api.facilities.list({}).then(setAssignFacPool).catch(() => setAssignFacPool([]))
+    if (store.isStateAdmin()) api.facilities.list({}).then(setAssignFacPool).catch(() => setAssignFacPool([]))
     return subscribeRealtime(['stock_transfer_log'], (payload) => {
       if (store.isOverallAdmin()) return
       if (store.isAdmin()) { loadFacReqAlerts(); return }
@@ -215,8 +221,7 @@ export function Alerts() {
 
     // Overall admin can narrow the aggregate to one state (from the stock-tab
     // State filter); everyone else sees their whole scope.
-    const facStateById = {}; store.allFacilities.forEach(f => { facStateById[f.id] = f.state })
-    const scopedStock = stockState ? store.stockData.filter(r => facStateById[r.facility_id] === stockState) : store.stockData
+    const scopedStock = scopeSet ? store.stockData.filter(r => scopeSet.has(r.facility_id)) : store.stockData
     const grouped = groupStockByComm(scopedStock)
     const gMap = {}
     grouped.forEach(g=>{ gMap[g.commodity_id]=g })
@@ -244,7 +249,7 @@ export function Alerts() {
 
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   // Recompute the out/low/over aggregates when the overall admin picks a state.
-  useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[stockState])
+  useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
   useEffect(()=>{ if(store.isAdmin() && reqView==='history') loadHistory() },[reqView, histFrom, histTo])
 
   // Drill-in: load per-facility SDP/DSD site stock for the selected commodity so
@@ -267,14 +272,13 @@ export function Alerts() {
   }, [drillComm])
 
   // Reset any open drill-in when switching tabs or category.
-  useEffect(() => { setDrillComm(null); setExpDrillComm(null) }, [tab, stockCat, stockState])
+  useEffect(() => { setDrillComm(null); setExpDrillComm(null) }, [tab, stockCat, scopeKey])
 
   // ── Admin request filters (commodity + LGA) ───────────────────────────────
   const facLgaById = {}
   const facMeta = {}
   store.allFacilities.forEach(f => { facLgaById[f.id] = f.lga || '—'; facMeta[f.id] = { name: f.name, lga: f.lga || '—', state: f.state || '—' } })
   const lgaOptions = [...new Set(store.allFacilities.map(f => f.lga).filter(Boolean))].sort()
-  const stateOptions = [...new Set(store.allFacilities.map(f => f.state).filter(Boolean))].sort()
   const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
   const applyReqFilters = list => list.filter(r =>
     (!filterComm || r.commodity_id === filterComm) &&
@@ -288,7 +292,7 @@ export function Alerts() {
   // in loadStockAlerts, so they only need the category filter here; expiry rows
   // carry a facility_id, so State is applied client-side.
   const inStockCat = r => !stockCat || (r.commodities?.category) === stockCat
-  const shownExpiry = expiryRows.filter(r => inStockCat(r) && (!stockState || facMeta[r.facility_id]?.state === stockState))
+  const shownExpiry = expiryRows.filter(r => inStockCat(r) && inScope(r.facility_id))
   const shownOut    = stockRows.out.filter(inStockCat)
   const shownLow    = stockRows.low.filter(inStockCat)
   const shownOver   = stockRows.over.filter(inStockCat)
@@ -339,6 +343,9 @@ export function Alerts() {
         <p className="text-sm text-gray-500 mt-1">Expiry, low stock, overstock and out of stock</p>
       </div>
 
+      {/* Admin location filter — State → LGA → Facility (self-hides for facility users) */}
+      <FacilityPicker />
+
       <MetricGrid>
         {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" onClick={()=>setTab('fac-requests')} active={tab==='fac-requests'}/>}
         <Metric label="Out of stock"   value={stockRows.out.length}   color="red"   onClick={()=>setTab('out')}       active={tab==='out'}/>
@@ -363,22 +370,15 @@ export function Alerts() {
 
       {['expiry','out','low','overstock'].includes(tab) && (
         <div className="mb-4 flex gap-2 items-center flex-wrap">
-          {store.isOverallAdmin() && (
-            <>
-              <span className="text-xs text-gray-500 uppercase tracking-widest">State</span>
-              <select value={stockState} onChange={e=>setStockState(e.target.value)}
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                <option value="">All states</option>
-                {stateOptions.map(s=><option key={s} value={s}>{s}</option>)}
-              </select>
-            </>
-          )}
           <span className="text-xs text-gray-500 uppercase tracking-widest">Category</span>
           <select value={stockCat} onChange={e=>setStockCat(e.target.value)}
             className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
             <option value="">All categories</option>
             {categories.map(c=><option key={c} value={c}>{c}</option>)}
           </select>
+          <button onClick={loadAll} disabled={loading} className="ml-auto text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
+            {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
       )}
 
@@ -498,15 +498,15 @@ export function Alerts() {
         const statusFor = tab==='out' ? 'out' : tab==='low' ? 'low' : 'over'
         // Per-facility store + dispensary from the loaded stock, plus on-demand SDP/DSD site stock.
         const byFac = {}
-        store.stockData.filter(r => r.commodity_id === drillComm.id && (!stockState || facMeta[r.facility_id]?.state === stockState)).forEach(r => {
+        store.stockData.filter(r => r.commodity_id === drillComm.id && inScope(r.facility_id)).forEach(r => {
           const f = byFac[r.facility_id] || (byFac[r.facility_id] = { id:r.facility_id, name:r.facilities?.name||'—', state:r.facilities?.state||'—', lga:r.facilities?.lga||'—', store:0, dispensary:0, dsd:0, sdp:0, amc:0, comm:r.commodities })
           if (r.location_type === 'store') f.store += r.quantity
           else if (r.location_type === 'dispensary') f.dispensary += r.quantity
           if ((r.baseline_amc||0) > f.amc) f.amc = r.baseline_amc||0
         })
         const ensure = fid => byFac[fid] || (byFac[fid] = (() => { const x=store.allFacilities.find(y=>y.id===fid); return { id:fid, name:x?.name||'—', state:x?.state||'—', lga:x?.lga||'—', store:0, dispensary:0, dsd:0, sdp:0, amc:0, comm:drillComm.comm } })())
-        Object.entries(drillSites.sdp).forEach(([fid,q]) => { if (!stockState || facMeta[fid]?.state === stockState) ensure(fid).sdp += q })
-        Object.entries(drillSites.dsd).forEach(([fid,q]) => { if (!stockState || facMeta[fid]?.state === stockState) ensure(fid).dsd += q })
+        Object.entries(drillSites.sdp).forEach(([fid,q]) => { if (inScope(fid)) ensure(fid).sdp += q })
+        Object.entries(drillSites.dsd).forEach(([fid,q]) => { if (inScope(fid)) ensure(fid).dsd += q })
         Object.values(byFac).forEach(f => { f.total = isLabSel ? (f.store + f.sdp) : (f.store + f.dispensary + f.dsd) })
         const list = Object.values(byFac).filter(f => getStockStatus(f.total, f.amc) === statusFor).sort((a,b)=>a.total-b.total)
         const cols = isLabSel ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','MOS'] : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','MOS']
@@ -653,9 +653,11 @@ export function Alerts() {
                       <div className="text-xs text-gray-600 mt-1">Submitted {fmtDateTime(req.initiated_at)} by {req.initiated_by||'—'}</div>
                       {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
                     </div>
-                    <Button variant="primary" size="sm" onClick={()=>{ const open = assigningId===req.id; setAssigningId(open?null:req.id); setAssignFacState(''); setAssignFacLga(''); setAssignFacId(''); setAssignReviewedBy(''); setAssignQty(req.qty_requested ?? req.quantity ?? 1) }}>{assigningId===req.id ? 'Close' : 'Review & arrange'}</Button>
+                    {store.isStateAdmin() && (
+                      <Button variant="primary" size="sm" onClick={()=>{ const open = assigningId===req.id; setAssigningId(open?null:req.id); setAssignFacState(''); setAssignFacLga(''); setAssignFacId(''); setAssignReviewedBy(''); setAssignQty(req.qty_requested ?? req.quantity ?? 1) }}>{assigningId===req.id ? 'Close' : 'Review & arrange'}</Button>
+                    )}
                   </div>
-                  {assigningId === req.id && (
+                  {store.isStateAdmin() && assigningId === req.id && (
                     <div className="mt-3 p-3 bg-purple-500/5 border border-purple-500/20 rounded-lg space-y-3">
                       <div className="text-xs text-gray-400 font-medium">Select facility to fulfil this request</div>
                       <div className="space-y-2">

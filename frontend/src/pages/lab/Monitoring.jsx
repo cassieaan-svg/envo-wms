@@ -4,7 +4,8 @@ import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { CatBadge } from '../../components/ui/Badge'
-import { LoadingState, EmptyState } from '../../components/ui/Loading'
+import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { fmtDate, capExpiryBatchesToStockByFacility } from '../../utils/helpers'
 
 export function Monitoring() {
@@ -16,16 +17,12 @@ export function Monitoring() {
   const [consData, setCons] = useState(null)
   const [expiryData, setExpiryData] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [lgaFilter, setLgaFilter] = useState('')   // admin LGA narrowing (utilization)
-  const [stateFilter, setStateFilter] = useState('') // admin State narrowing (utilization, overall admin)
   const [catDrill, setCatDrill]   = useState(null)  // category drilled into
   const [commDrill, setCommDrill] = useState(null)  // { id, name, unit } drilled into
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
   const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
   const [expBatchComm, setExpBatchComm] = useState(null)  // Expiring-batches table: commodity drilled into {id,name,cat}
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
-  const [expLga, setExpLga]       = useState('')    // admin LGA narrowing (expiry)
-  const [expState, setExpState]   = useState('')    // admin State narrowing (expiry, overall admin)
 
   // Honour the admin's facility/LGA/state scope (same resolution as stock loads)
   // so Utilization and Expiry stay within the viewer's jurisdiction.
@@ -46,20 +43,15 @@ export function Monitoring() {
   // Facility metadata for LGA / facility drill-downs
   const facMeta = {}
   store.allFacilities.forEach(f => { facMeta[f.id] = { name: f.name, lga: f.lga || '—' } })
-  const stateOptions = [...new Set(store.allFacilities.map(f => f.state).filter(Boolean))].sort()
-  const lgasForState = st => [...new Set(store.allFacilities.filter(f => !st || f.state === st).map(f => f.lga).filter(Boolean))].sort()
 
-  useEffect(() => { loadUtilization() }, [scopeKey, period, stateFilter, lgaFilter])
-  useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expState, expLga, scopeKey])
+  useEffect(() => { loadUtilization() }, [scopeKey, period])
+  useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, scopeKey])
 
   async function loadUtilization() {
     setLoading(true)
     setCatDrill(null); setCommDrill(null); setMetricDrill(null)
     const start = new Date(); start.setDate(start.getDate()-period)
-    const lgaIds = (stateFilter || lgaFilter)
-      ? store.allFacilities.filter(f => (!stateFilter || f.state === stateFilter) && (!lgaFilter || f.lga === lgaFilter)).map(f => f.id)
-      : null
-    const facility_ids = facilityFilter(lgaIds)
+    const facility_ids = facilityFilter()
 
     // Paginate — an admin over a long period easily exceeds the 1000-row cap,
     // which would otherwise silently understate totals and drill-downs.
@@ -101,10 +93,7 @@ export function Monitoring() {
     setExpDrill(null); setExpBatchComm(null)
     const now=new Date()
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
-    const lgaIds = (expState || expLga)
-      ? store.allFacilities.filter(f => (!expState || f.state === expState) && (!expLga || f.lga === expLga)).map(f => f.id)
-      : null
-    const facility_ids = facilityFilter(lgaIds)
+    const facility_ids = facilityFilter()
 
     // Paginate — large jurisdictions over a long window exceed the 1000-row cap.
     const PAGE = 1000
@@ -242,6 +231,9 @@ export function Monitoring() {
         <TabBtn id="expiry"      label="⏳ Expiry"/>
       </div>
 
+      {/* Admin location filter — State → LGA → Facility (self-hides for facility users) */}
+      <FacilityPicker />
+
       {/* Period selector — always shown for utilization */}
       {tab==='utilization' && (
         <Card>
@@ -257,35 +249,14 @@ export function Monitoring() {
               <option value={180}>Last 6 months</option>
               <option value={365}>Last 12 months</option>
             </select>
-            {isAdm && (
-              <>
-                {store.isOverallAdmin() && (
-                  <>
-                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">State</span>
-                    <select value={stateFilter} onChange={e=>{ setStateFilter(e.target.value); setLgaFilter('') }}
-                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                      <option value="">All states</option>
-                      {stateOptions.map(s=><option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </>
-                )}
-                {!store.isOverallAdmin() && (
-                  <>
-                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
-                    <select value={lgaFilter} onChange={e=>setLgaFilter(e.target.value)}
-                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                      <option value="">All LGAs</option>
-                      {lgasForState(stateFilter).map(l=><option key={l} value={l}>{l}</option>)}
-                    </select>
-                  </>
-                )}
-              </>
-            )}
+            <button onClick={loadUtilization} disabled={loading} className="ml-auto text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
+              {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
+            </button>
           </div>
         </Card>
       )}
 
-      {/* Period + LGA filters — shown for expiry */}
+      {/* Period filter — shown for expiry */}
       {tab==='expiry' && (
         <Card>
           <div className="px-4 py-3 flex gap-3 items-center flex-wrap">
@@ -297,30 +268,9 @@ export function Monitoring() {
               <option value={180}>Next 6 months</option>
               <option value={365}>Next 12 months</option>
             </select>
-            {isAdm && (
-              <>
-                {store.isOverallAdmin() && (
-                  <>
-                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">State</span>
-                    <select value={expState} onChange={e=>{ setExpState(e.target.value); setExpLga('') }}
-                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                      <option value="">All states</option>
-                      {stateOptions.map(s=><option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </>
-                )}
-                {!store.isOverallAdmin() && (
-                  <>
-                    <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">LGA</span>
-                    <select value={expLga} onChange={e=>setExpLga(e.target.value)}
-                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-                      <option value="">All LGAs</option>
-                      {lgasForState(expState).map(l=><option key={l} value={l}>{l}</option>)}
-                    </select>
-                  </>
-                )}
-              </>
-            )}
+            <button onClick={loadExpiry} disabled={loading} className="ml-auto text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
+              {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
+            </button>
           </div>
         </Card>
       )}

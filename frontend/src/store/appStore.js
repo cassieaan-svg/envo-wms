@@ -3,13 +3,17 @@ import { create } from 'zustand'
 export const useAppStore = create((set, get) => ({
   // Auth
   user:             null,
-  accessLevel:      null,   // 'overall_admin' | 'state_admin' | 'lga_admin' | 'facility'
+  // 'overall_admin' | 'state_admin' | 'state_viewer' | 'cluster_admin' | 'lga_admin' | 'facility'
+  // Writers: state_admin + facility. Read-only oversight: overall_admin, state_viewer,
+  // cluster_admin, lga_admin (the server enforces this; the UI just hides write actions).
+  accessLevel:      null,
   facilityRole:     null,   // 'dispenser' | 'store_manager' | 'sdp' | 'dsd'
   sdpName:          null,
   dsdSiteName:      null,
   commoditySection: null,   // 'pharmacy' | 'lab' | null
   adminState:       null,
   adminLGA:         null,
+  adminCluster:     null,
   currentFacility:  null,
 
   // Admin filters
@@ -40,6 +44,7 @@ export const useAppStore = create((set, get) => ({
   setCommoditySection: (commoditySection) => set({ commoditySection }),
   setAdminState:       (adminState)       => set({ adminState }),
   setAdminLGA:         (adminLGA)         => set({ adminLGA }),
+  setAdminCluster:     (adminCluster)     => set({ adminCluster }),
   setCurrentFacility:  (currentFacility)  => set({ currentFacility }),
   setAllFacilities:    (allFacilities)    => set({ allFacilities }),
   setAllCommodities:   (allCommodities)   => set({ allCommodities }),
@@ -67,19 +72,28 @@ export const useAppStore = create((set, get) => ({
   setAdminFilterState:    (s) => set({ adminFilterState: s }),
   setAdminFilterLGA:      (l) => set({ adminFilterLGA: l }),
 
-  // Access helpers
-  isAdmin:        () => ['overall_admin','state_admin','lga_admin'].includes(get().accessLevel),
+  // Access helpers.
+  // isAdmin = "sees the multi-facility oversight views" — all tiers above facility,
+  // including the read-only viewers. It does NOT imply write access; gate write
+  // actions on canManageStock()/isReadOnly() instead.
+  isAdmin:        () => ['overall_admin','state_admin','state_viewer','cluster_admin','lga_admin'].includes(get().accessLevel),
   isOverallAdmin: () => get().accessLevel === 'overall_admin',
   isStateAdmin:   () => get().accessLevel === 'state_admin',
+  isStateViewer:  () => get().accessLevel === 'state_viewer',
+  isClusterAdmin: () => get().accessLevel === 'cluster_admin',
   isLGAAdmin:     () => get().accessLevel === 'lga_admin',
   isFacility:     () => get().accessLevel === 'facility',
   isStoreManager: () => get().accessLevel === 'facility' && get().facilityRole === 'store_manager',
   isDispenser:    () => get().accessLevel === 'facility' && get().facilityRole === 'dispenser',
   isSDP:          () => get().accessLevel === 'facility' && get().facilityRole === 'sdp',
   isDSD:          () => get().accessLevel === 'facility' && get().facilityRole === 'dsd',
+  // Read-only oversight accounts: can view across their scope but never write.
+  isReadOnly:     () => ['overall_admin','state_viewer','cluster_admin','lga_admin'].includes(get().accessLevel),
   canManageStock: () => {
     const s = get()
-    return ['overall_admin','state_admin','lga_admin'].includes(s.accessLevel) ||
+    // Among the admin tiers, only state_admin writes; facility store managers write
+    // their own facility. Read-only viewers (overall/state_viewer/cluster/lga) cannot.
+    return s.accessLevel === 'state_admin' ||
            (s.accessLevel === 'facility' && s.facilityRole === 'store_manager')
   },
 
@@ -113,7 +127,15 @@ export const useAppStore = create((set, get) => ({
     const s = get()
     if (s.accessLevel === 'overall_admin') return 'Overall Admin'
     if (s.accessLevel === 'state_admin')   return `${s.adminState} State Admin`
-    if (s.accessLevel === 'lga_admin')     return `${s.adminLGA} LGA Admin`
+    if (s.accessLevel === 'state_viewer')  return `${s.adminState} State`
+    if (s.accessLevel === 'cluster_admin') {
+      const sec = s.commoditySection === 'pharmacy' ? 'Pharmacy' : s.commoditySection === 'lab' ? 'Lab' : ''
+      return [`${s.adminCluster} Cluster`, sec].filter(Boolean).join(' ')
+    }
+    if (s.accessLevel === 'lga_admin') {
+      const sec = s.commoditySection === 'pharmacy' ? 'Pharmacy' : s.commoditySection === 'lab' ? 'Lab' : ''
+      return [`${s.adminLGA} LGA`, sec].filter(Boolean).join(' ')
+    }
     if (s.accessLevel === 'facility') {
       const section = s.commoditySection === 'pharmacy' ? 'Pharmacy'
                     : s.commoditySection === 'lab'      ? 'Lab' : ''
@@ -128,7 +150,7 @@ export const useAppStore = create((set, get) => ({
 
   reset: () => set({
     user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, commoditySection:null,
-    adminState:null, adminLGA:null, currentFacility:null,
+    adminState:null, adminLGA:null, adminCluster:null, currentFacility:null,
     adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
     allFacilities:[], allCommodities:[], stockData:[], dsdFacilities:[], amcWindows:{},
     currentPage:'dashboard', currentReportCategory:'all', pendingReportsTab:false

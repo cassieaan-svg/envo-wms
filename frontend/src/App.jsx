@@ -57,12 +57,17 @@ const pharmMap = {
   intake: PharmIntake, adjustment: PharmAdjustment, transfers: PharmTransfers,
   log: PharmLog, crrf: PharmCRRF,
   alerts: PharmAlerts, monitoring: PharmMonitoring,
+  // Reachable by the section-routed oversight viewers (cluster/lga/state) whose
+  // AdminNav links here; AllFacilities adapts per-commodity, so one component fits
+  // both sections. Facility users never link to it.
+  'all-facilities': AllFacilities,
 }
 const labMap = {
   dashboard: LabDashboard, stock: LabStock, dispense: LabDispense,
   intake: LabIntake, adjustment: LabAdjustment, transfers: LabTransfers,
   log: LabLog, crrf: LabCRRF,
   alerts: LabAlerts, monitoring: LabMonitoring,
+  'all-facilities': AllFacilities,
 }
 // Admins get Overview + Reports only — no operations (dispense / intake /
 // adjustment / transfers), so those pages are deliberately omitted here.
@@ -102,7 +107,7 @@ function MobileTopbar() {
         </svg>
       </button>
       <span className="text-sm font-semibold text-gray-100">
-        {section === 'lab' ? '🧪 Laboratory' : section === 'pharmacy' ? '💊 Pharmacy' : 'EnVo'}
+        {section === 'lab' ? 'Laboratory' : section === 'pharmacy' ? 'Pharmacy' : 'EnVo'}
       </span>
       <div className="w-8" />
     </div>

@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceTransferAccess, ownFacilityId, narrowedAdminFacilityIds, resolveListFacilityIds } from '../middleware/scope.js'
+import { enforceTransferAccess, enforceTransferWrite, mayWriteTransferFacility, enforceCommoditySection, ownFacilityId, resolveListFacilityIds } from '../middleware/scope.js'
 import { TransferService } from '../services/transferService.js'
 
 const router = express.Router()
@@ -18,7 +18,8 @@ async function runTransition(req, res, fn, notFoundMsg = 'Transfer not found or 
   if (!transfer) {
     return res.status(404).json({ success: false, error: 'Transfer not found', code: 'TRANSFER_NOT_FOUND' })
   }
-  if (!(await enforceTransferAccess(req, res, transfer))) return
+  // Transitions are writes — only a party or state_admin may act (read-only tiers barred).
+  if (!(await enforceTransferWrite(req, res, transfer))) return
   const result = await fn()
   if (!result) {
     return res.status(404).json({ success: false, error: notFoundMsg, code: 'TRANSFER_NOT_FOUND' })
@@ -77,6 +78,7 @@ router.get('/', async (req, res) => {
       from,
       to,
       notesIncludes: notes_includes,
+      categories: req.scope.sectionCategories,
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
@@ -119,10 +121,10 @@ router.post('/', async (req, res) => {
     if (!lines.length || !lines[0]) {
       return res.status(400).json({ success: false, error: 'At least one transfer line is required', code: 'MISSING_FIELDS' })
     }
-    // Facility users may only create transfers they're a party to (sending or
-    // receiving). Admins are unrestricted. (RLS insert was open; this is a light
-    // guard matching how the frontend always sets the caller's own facility.)
-    const own = ownFacilityId(req)
+    // Only a party (facility user on either endpoint) or state_admin (endpoint in
+    // their state) may create a transfer line. The read-only tiers (overall_admin,
+    // state_viewer, cluster_admin, lga_admin) are barred. The line's commodity must
+    // also be in the caller's section.
     for (const l of lines) {
       if (!l.commodity_id || l.quantity === undefined) {
         return res.status(400).json({ success: false, error: 'Each line requires commodity_id and quantity', code: 'INVALID_LINE_ITEM' })
@@ -130,9 +132,12 @@ router.post('/', async (req, res) => {
       if (!validators.isPositiveNumber(l.quantity)) {
         return sendValidationError(res, 'Line quantity must be a positive number', 'quantity')
       }
-      if (own && l.sending_facility_id !== own && l.receiving_facility_id !== own) {
+      const okSend = l.sending_facility_id && await mayWriteTransferFacility(req, l.sending_facility_id)
+      const okRecv = l.receiving_facility_id && await mayWriteTransferFacility(req, l.receiving_facility_id)
+      if (!okSend && !okRecv) {
         return res.status(403).json({ success: false, error: 'Not authorized to create a transfer for another facility', code: 'FORBIDDEN' })
       }
+      if (!(await enforceCommoditySection(req, res, l.commodity_id))) return
     }
 
     const created = await TransferService.createTransfers(lines)
@@ -277,7 +282,7 @@ router.delete('/:id', async (req, res) => {
     if (!transfer) {
       return res.status(404).json({ success: false, error: 'Transfer not found', code: 'TRANSFER_NOT_FOUND' })
     }
-    if (!(await enforceTransferAccess(req, res, transfer))) return
+    if (!(await enforceTransferWrite(req, res, transfer))) return
 
     const deleted = await TransferService.deleteTransfer(req.params.id)
     if (!deleted) {

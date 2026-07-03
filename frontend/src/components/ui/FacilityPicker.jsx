@@ -13,23 +13,28 @@ function Select({ value, onChange, children }) {
 }
 
 // Admin facility filter. Hierarchy follows the admin's level:
-//   overall admin → State → LGA → Facility
-//   state admin   → LGA → Facility
-//   LGA admin     → Facility
+//   overall admin              → State → LGA → Facility
+//   state admin / state viewer → LGA → Facility  (state fixed)
+//   cluster admin              → LGA → Facility  (cluster fixed; LGAs = the cluster's)
+//   LGA admin                  → Facility
+// The mid-tiers all have allFacilities pre-scoped to their remit at login, so the
+// LGA list is derived from that scoped set (cluster admin → only its cluster's LGAs).
 export function FacilityPicker() {
   const store = useAppStore()
   if (!store.isAdmin()) return null
 
   const allFacs   = store.allFacilities
   const isOverall = store.isOverallAdmin()
-  const isState   = store.isStateAdmin()
+  // Tiers that pick LGA → Facility (allFacs already scoped to their state/cluster).
+  const isMidTier = store.isStateAdmin() || store.isStateViewer() || store.isClusterAdmin()
+  const isLGA     = store.isLGAAdmin()
   const stState   = store.adminFilterState
   const stLGA     = store.adminFilterLGA
   const stFac     = store.adminFilterFacility
 
   const states = [...new Set(allFacs.map(f => f.state).filter(Boolean))].sort()
-  // LGAs available given the current state choice (state/LGA admins already
-  // have allFacs scoped to their area at login).
+  // LGAs available given the current state choice (mid-tiers already have allFacs
+  // scoped to their area at login, so their full set is their LGA pool).
   const lgaPool = isOverall ? (stState ? allFacs.filter(f => f.state === stState) : []) : allFacs
   const lgas    = [...new Set(lgaPool.map(f => f.lga).filter(Boolean))].sort()
   // Facilities available given the current LGA (or state) choice.
@@ -43,8 +48,8 @@ export function FacilityPicker() {
   const setFac   = v => { store.setAdminFilterFacility(v ? allFacs.find(f => f.id === v) || null : null) }
   const clear    = () => { store.setAdminFilterState(null); store.setAdminFilterLGA(null); store.setAdminFilterFacility(null) }
 
-  const showLGA = (isOverall && stState) || isState
-  const showFac = stLGA || (!isOverall && !isState)   // LGA admin has no LGA level
+  const showLGA = (isOverall && stState) || isMidTier
+  const showFac = stLGA || isLGA   // LGA admin has no LGA level; mid-tiers reveal facilities after picking an LGA
 
   return (
     <div className="mb-4 bg-white/3 border border-white/8 rounded-xl px-4 py-3 flex flex-wrap gap-3 items-center">

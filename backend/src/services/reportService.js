@@ -27,13 +27,16 @@ export class ReportService {
    * Get daily activity report
    */
   static async getDailyReport(facilityId, date, options = {}) {
-    const { category = 'all' } = options
+    const { category = 'all', categories = null } = options
 
     if (!date) {
       throw new Error('date is required in YYYY-MM-DD format')
     }
 
     const [startOfDay, endOfDay] = dayBounds(date)
+    // Section enforcement: optional 4th param filtering by commodity category.
+    const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
+    const catP = Array.isArray(categories) && categories.length ? [categories] : []
 
     try {
       const report = {
@@ -58,9 +61,9 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from intake_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3${catCond}
            order by l.received_at`,
-          [facilityId, startOfDay, endOfDay]
+          [facilityId, startOfDay, endOfDay, ...catP]
         )
         report.intake = rows
         report.summary.total_intake = report.intake.reduce((sum, item) => sum + item.quantity, 0)
@@ -72,9 +75,9 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from dispense_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3${catCond}
            order by l.dispensed_at`,
-          [facilityId, startOfDay, endOfDay]
+          [facilityId, startOfDay, endOfDay, ...catP]
         )
         report.dispense = rows
         report.summary.total_dispense = report.dispense.reduce((sum, item) => sum + item.quantity, 0)
@@ -86,9 +89,9 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from stock_adjustment_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3${catCond}
            order by l.adjusted_at`,
-          [facilityId, startOfDay, endOfDay]
+          [facilityId, startOfDay, endOfDay, ...catP]
         )
         report.adjustments = rows
         report.summary.total_adjustments = report.adjustments.length
@@ -101,9 +104,9 @@ export class ReportService {
            from stock_transfer_log l
            left join commodities c on c.id = l.commodity_id
            where (l.sending_facility_id = $1 or l.receiving_facility_id = $1)
-             and l.initiated_at >= $2 and l.initiated_at <= $3
+             and l.initiated_at >= $2 and l.initiated_at <= $3${catCond}
            order by l.initiated_at`,
-          [facilityId, startOfDay, endOfDay]
+          [facilityId, startOfDay, endOfDay, ...catP]
         )
         report.transfers = rows
         report.summary.total_transfers = report.transfers.length
@@ -120,7 +123,7 @@ export class ReportService {
    * Get weekly activity report (aggregated)
    */
   static async getWeeklyReport(facilityId, fromDate, toDate, options = {}) {
-    const { category = 'all' } = options
+    const { category = 'all', categories = null } = options
 
     if (!fromDate || !toDate) {
       throw new Error('fromDate and toDate are required in YYYY-MM-DD format')
@@ -129,6 +132,8 @@ export class ReportService {
     try {
       const startDate = `${fromDate}T00:00:00`
       const endDate = `${toDate}T23:59:59`
+      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
+      const catP = Array.isArray(categories) && categories.length ? [categories] : []
 
       const report = {
         from_date: fromDate,
@@ -157,8 +162,8 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from intake_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3`,
-          [facilityId, startDate, endDate]
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allIntake = rows
         report.summary.total_intake = allIntake.reduce((sum, item) => sum + item.quantity, 0)
@@ -169,8 +174,8 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from dispense_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3`,
-          [facilityId, startDate, endDate]
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allDispense = rows
         report.summary.total_dispense = allDispense.reduce((sum, item) => sum + item.quantity, 0)
@@ -181,8 +186,8 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from stock_adjustment_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3`,
-          [facilityId, startDate, endDate]
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allAdjustments = rows
         report.summary.total_adjustments = allAdjustments.length
@@ -194,8 +199,8 @@ export class ReportService {
            from stock_transfer_log l
            left join commodities c on c.id = l.commodity_id
            where (l.sending_facility_id = $1 or l.receiving_facility_id = $1)
-             and l.initiated_at >= $2 and l.initiated_at <= $3`,
-          [facilityId, startDate, endDate]
+             and l.initiated_at >= $2 and l.initiated_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allTransfers = rows
         report.summary.total_transfers = allTransfers.length
@@ -232,7 +237,7 @@ export class ReportService {
    * Get monthly activity report (aggregated)
    */
   static async getMonthlyReport(facilityId, month, options = {}) {
-    const { category = 'all' } = options
+    const { category = 'all', categories = null } = options
 
     if (!month || !month.match(/^\d{4}-\d{2}$/)) {
       throw new Error('month is required in YYYY-MM format')
@@ -244,6 +249,8 @@ export class ReportService {
       // Get last day of month
       const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate()
       const endDate = `${year}-${monthNum}-${lastDay}T23:59:59`
+      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
+      const catP = Array.isArray(categories) && categories.length ? [categories] : []
 
       const report = {
         month,
@@ -270,8 +277,8 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from intake_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3`,
-          [facilityId, startDate, endDate]
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allIntake = rows
         report.summary.total_intake = allIntake.reduce((sum, item) => sum + item.quantity, 0)
@@ -282,8 +289,8 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from dispense_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3`,
-          [facilityId, startDate, endDate]
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allDispense = rows
         report.summary.total_dispense = allDispense.reduce((sum, item) => sum + item.quantity, 0)
@@ -294,8 +301,8 @@ export class ReportService {
           `select l.*, ${COMM4_OBJ}
            from stock_adjustment_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3`,
-          [facilityId, startDate, endDate]
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allAdjustments = rows
         report.summary.total_adjustments = allAdjustments.length
@@ -307,8 +314,8 @@ export class ReportService {
            from stock_transfer_log l
            left join commodities c on c.id = l.commodity_id
            where (l.sending_facility_id = $1 or l.receiving_facility_id = $1)
-             and l.initiated_at >= $2 and l.initiated_at <= $3`,
-          [facilityId, startDate, endDate]
+             and l.initiated_at >= $2 and l.initiated_at <= $3${catCond}`,
+          [facilityId, startDate, endDate, ...catP]
         )
         allTransfers = rows
         report.summary.total_transfers = allTransfers.length
@@ -344,8 +351,11 @@ export class ReportService {
   /**
    * Get stock balance (for reports)
    */
-  static async getStockBalance(facilityId, asOfDate = null) {
+  static async getStockBalance(facilityId, asOfDate = null, options = {}) {
+    const { categories = null } = options
     try {
+      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($2)' : ''
+      const catP = Array.isArray(categories) && categories.length ? [categories] : []
       const { rows } = await query(
         `select s.*,
                 json_build_object('id', c.id, 'name', c.name, 'category', c.category, 'unit', c.unit) as commodities,
@@ -353,8 +363,8 @@ export class ReportService {
          from stock s
          left join commodities c on c.id = s.commodity_id
          left join facilities f on f.id = s.facility_id
-         where s.facility_id = $1`,
-        [facilityId]
+         where s.facility_id = $1${catCond}`,
+        [facilityId, ...catP]
       )
 
       // Calculate balance accounting for all transactions up to asOfDate if provided
@@ -380,10 +390,13 @@ export class ReportService {
   /**
    * Export data as CSV format
    */
-  static async exportCSV(facilityId, fromDate, toDate, category = 'all') {
+  static async exportCSV(facilityId, fromDate, toDate, category = 'all', options = {}) {
+    const { categories = null } = options
     try {
       const startDate = `${fromDate}T00:00:00`
       const endDate = `${toDate}T23:59:59`
+      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
+      const catP = Array.isArray(categories) && categories.length ? [categories] : []
 
       let csvData = 'Date,Type,Commodity,Quantity,Reference,Notes\n'
 
@@ -392,9 +405,9 @@ export class ReportService {
           `select l.*, ${COMM2_OBJ}
            from intake_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3
+           where l.facility_id = $1 and l.received_at >= $2 and l.received_at <= $3${catCond}
            order by l.received_at`,
-          [facilityId, startDate, endDate]
+          [facilityId, startDate, endDate, ...catP]
         )
         rows.forEach(item => {
           csvData += `${dateOnly(item.received_at)},INTAKE,"${item.commodities?.name}",${item.quantity},"${item.delivery_note_ref || ''}","${item.notes || ''}"\n`
@@ -406,9 +419,9 @@ export class ReportService {
           `select l.*, ${COMM2_OBJ}
            from dispense_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3
+           where l.facility_id = $1 and l.dispensed_at >= $2 and l.dispensed_at <= $3${catCond}
            order by l.dispensed_at`,
-          [facilityId, startDate, endDate]
+          [facilityId, startDate, endDate, ...catP]
         )
         rows.forEach(item => {
           csvData += `${dateOnly(item.dispensed_at)},DISPENSE,"${item.commodities?.name}",${item.quantity},"${item.dispensed_by || ''}","${item.notes || ''}"\n`
@@ -420,9 +433,9 @@ export class ReportService {
           `select l.*, ${COMM2_OBJ}
            from stock_adjustment_log l
            left join commodities c on c.id = l.commodity_id
-           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3
+           where l.facility_id = $1 and l.adjusted_at >= $2 and l.adjusted_at <= $3${catCond}
            order by l.adjusted_at`,
-          [facilityId, startDate, endDate]
+          [facilityId, startDate, endDate, ...catP]
         )
         rows.forEach(item => {
           csvData += `${dateOnly(item.adjusted_at)},${item.adjustment_type},"${item.commodities?.name}",${item.quantity},"${item.reason}","${item.notes || ''}"\n`

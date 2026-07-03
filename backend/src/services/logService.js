@@ -22,11 +22,14 @@ function dayBounds(date) {
 //   facilityId  — single facility (when the route pinned one)
 //   facilityIds — array of facilities (scoped/admin multi-facility); [] = none
 //   commodityIds, section, date (single day), from/to (range on dateField)
-function applyLogFilters({ conds, params, dateField, facilityId, facilityIds, commodityIds, date, from, to, section }) {
+function applyLogFilters({ conds, params, dateField, facilityId, facilityIds, commodityIds, categories, date, from, to, section }) {
   if (facilityId) { params.push(facilityId); conds.push(`l.facility_id = $${params.length}`) }
   else if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`l.facility_id = any($${params.length})`) }
 
   if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`l.commodity_id = any($${params.length})`) }
+  // Section enforcement (server-side): restrict to the caller's commodity categories,
+  // joined via commodities c. Robust even where the denormalized l.section is null.
+  if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
   if (section) { params.push(section); conds.push(`l.section = $${params.length}`) }
 
   if (date) {
@@ -139,12 +142,12 @@ export class LogService {
    * since dispense_log has no site column.
    */
   static async getDispenseHistory(facilityId, options = {}) {
-    const { dsdSiteName, sdpName, date, from, to, facilityIds, commodityIds, section, limit = 1000, offset = 0 } = options
+    const { dsdSiteName, sdpName, date, from, to, facilityIds, commodityIds, categories, section, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
-    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, date, from, to, section })
+    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, date, from, to, section })
 
     if (dsdSiteName) { params.push(`%[DSD: ${dsdSiteName}]%`); conds.push(`l.notes like $${params.length}`) }
     else if (sdpName) { params.push(`%[SDP: ${sdpName}]%`); conds.push(`l.notes like $${params.length}`) }
@@ -209,14 +212,14 @@ export class LogService {
    */
   static async getIntakeHistory(facilityId, options = {}) {
     const {
-      date, from, to, supplier_source, facilityIds, commodityIds, section,
+      date, from, to, supplier_source, facilityIds, commodityIds, categories, section,
       expiryFrom, expiryTo, hasQuantity, limit = 1000, offset = 0
     } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
-    applyLogFilters({ conds, params, dateField: 'received_at', facilityId, facilityIds, commodityIds, date, from, to, section })
+    applyLogFilters({ conds, params, dateField: 'received_at', facilityId, facilityIds, commodityIds, categories, date, from, to, section })
 
     if (supplier_source) { params.push(supplier_source); conds.push(`l.supplier_source = $${params.length}`) }
     // Expiry-tracking filters (Monitoring expiry tab): a non-null expiry_date in
@@ -287,12 +290,12 @@ export class LogService {
    * Adjustment history for a facility, newest first, with nested commodity.
    */
   static async getAdjustmentHistory(facilityId, options = {}) {
-    const { date, from, to, adjustment_type, reason, facilityIds, commodityIds, section, limit = 1000, offset = 0 } = options
+    const { date, from, to, adjustment_type, reason, facilityIds, commodityIds, categories, section, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
-    applyLogFilters({ conds, params, dateField: 'adjusted_at', facilityId, facilityIds, commodityIds, date, from, to, section })
+    applyLogFilters({ conds, params, dateField: 'adjusted_at', facilityId, facilityIds, commodityIds, categories, date, from, to, section })
 
     if (adjustment_type) { params.push(adjustment_type); conds.push(`l.adjustment_type = $${params.length}`) }
     if (reason) { params.push(reason); conds.push(`l.reason = $${params.length}`) }

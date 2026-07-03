@@ -15,9 +15,9 @@ const router = express.Router()
  */
 router.get('/', async (req, res) => {
   try {
-    const { state, lga, name } = req.query
+    const { state, lga, cluster, name } = req.query
 
-    const facilities = await FacilityService.getFacilities({ state, lga, name })
+    const facilities = await FacilityService.getFacilities({ state, lga, cluster, name })
 
     res.json({
       success: true,
