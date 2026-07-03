@@ -53,7 +53,7 @@ async function main() {
   const accounts = []
   for (const state of states) {
     accounts.push({
-      email: `${slug(state)}.stateviewer@envo.ng`,
+      email: `${slug(state)}.state@envo.ng`,
       meta: { access_level: 'state_viewer', admin_state: state, email_verified: true },
       role: 'state_viewer', section: 'both', scope: state,
     })
