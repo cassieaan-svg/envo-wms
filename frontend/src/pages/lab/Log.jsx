@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { Reports } from './Reports'
 import { fmtDateTime, fmtDate, fmtDispenseQty, fmtStockQty, getCommodityPackSize } from '../../utils/helpers'
 
@@ -28,8 +29,17 @@ export function Log() {
   const fid    = store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
   const isAdmin = store.isAdmin()
+  // Admins see a cross-facility feed across their whole jurisdiction by default.
+  // The FacilityPicker narrows it: a single facility pins the log to it; an
+  // LGA/state selection scopes it to that set (facility_ids) without a facility pick.
+  const adminFid   = store.adminFilterFacility?.id || null
+  const adminLga   = store.adminFilterLGA || null
+  const adminState = store.adminFilterState || null
+  const scopedFacIds = (isAdmin && !adminFid && (adminLga || adminState))
+    ? store.allFacilities.filter(f => (!adminState || f.state === adminState) && (!adminLga || f.lga === adminLga)).map(f => f.id)
+    : null
 
-  useEffect(() => { loadAll() }, [fid, store.adminFilterFacility?.id])
+  useEffect(() => { loadAll() }, [fid, adminFid, adminLga, adminState])
 
   // Reload when commodity section changes to ensure proper filtering
   useEffect(() => { if(fid) loadAll() }, [store.commoditySection])
@@ -38,11 +48,12 @@ export function Log() {
     setLoading(true)
     // Admins span every facility (or the one they've filtered to) and both
     // sections, so don't scope by a single facility or the full commodity list.
-    const scopeFid = isAdmin ? (store.adminFilterFacility?.id || null) : fid
+    const scopeFid = isAdmin ? adminFid : fid
     const from = period ? new Date(Date.now() - period*86400000).toISOString() : undefined
     const rowLimit = period ? 500 : 50
     const logParams = {
       facility_id: scopeFid || undefined,
+      facility_ids: scopedFacIds || undefined,
       commodity_ids: !isAdmin ? commIds : undefined,
       section: commoditySection || undefined,
       from,
@@ -62,12 +73,21 @@ export function Log() {
     const extTransfers = isAdmin
       ? transfers.filter(t => t.sending_facility_id && t.receiving_facility_id && t.sending_facility_id !== t.receiving_facility_id)
       : transfers
-    const merged = [
+    let merged = [
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
       ...intake.map(r=>({...r,_type:'intake',_time:r.received_at})),
       ...adj.map(r=>({...r,_type:'adjustment',_time:r.adjusted_at})),
       ...extTransfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at})),
-    ].sort((a,b)=>new Date(b._time)-new Date(a._time)).slice(0, period ? 500 : 100)
+    ].sort((a,b)=>new Date(b._time)-new Date(a._time))
+    // Client-side narrow to the selected LGA/state set (covers transfers, whose
+    // route scopes by jurisdiction rather than the facility_ids view-filter).
+    if (scopedFacIds) {
+      const set = new Set(scopedFacIds)
+      merged = merged.filter(r => r._type==='transfer'
+        ? (set.has(r.sending_facility_id) || set.has(r.receiving_facility_id))
+        : set.has(r.facility_id))
+    }
+    merged = merged.slice(0, period ? 500 : 100)
     setAllRecords(merged)
     setLoading(false)
   }
@@ -107,6 +127,10 @@ export function Log() {
 
       {view === 'reports' ? <Reports embedded /> : (
       <>
+      {/* Optional admin filter (State → LGA → Facility) that narrows the feed;
+          with nothing selected the whole jurisdiction shows. No-op for facilities. */}
+      <FacilityPicker />
+
       {editRecord && (
         <EditModal record={editRecord} onClose={()=>setEditRecord(null)} onSave={()=>{setEditRecord(null);loadAll()}}/>
       )}

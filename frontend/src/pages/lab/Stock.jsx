@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { BatchBreakdownModal } from '../../components/BatchBreakdownModal'
@@ -31,7 +32,7 @@ export function Stock() {
   const isSDP = accessLevel === 'facility' && facilityRole === 'sdp'
   const isDSD = accessLevel === 'facility' && facilityRole === 'dsd'
 
-  useEffect(() => { loadData() }, [fid])
+  useEffect(() => { loadData() }, [fid, store.adminFilterState, store.adminFilterLGA])
 
   async function loadData() {
     setLoading(true)
@@ -180,6 +181,8 @@ export function Stock() {
         <h1 className="text-xl font-medium text-gray-100">Stock Levels</h1>
         <p className="text-sm text-gray-500 mt-1">Current stock on hand with months of stock</p>
       </div>
+
+      <FacilityPicker />
 
       {store.canManageStock() && (
         fid

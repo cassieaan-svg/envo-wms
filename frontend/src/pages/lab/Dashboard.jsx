@@ -7,6 +7,7 @@ import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
 
 export function Dashboard() {
@@ -25,7 +26,7 @@ export function Dashboard() {
 
   useEffect(() => {
     loadData()
-  }, [fid])
+  }, [fid, store.adminFilterState, store.adminFilterLGA])
 
   async function loadData() {
     setLoading(true)
@@ -114,6 +115,8 @@ export function Dashboard() {
         </h1>
         <p className="text-sm text-gray-500 mt-1">Real-time stock overview for your facility</p>
       </div>
+
+      <FacilityPicker />
 
       <MetricGrid>
         <Metric label="Commodities tracked" value={groupedAll.length} color="blue" onClick={()=>setSts('')} active={stsFilter===''} />

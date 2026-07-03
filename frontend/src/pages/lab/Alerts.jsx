@@ -8,6 +8,7 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
+import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, capExpiryBatchesToStock } from '../../utils/helpers'
 
 export function Alerts() {
@@ -25,6 +26,12 @@ export function Alerts() {
   const [acceptLoading, setAcceptLoading]         = useState(false)
 
   const fid     = store.currentFacility?.id
+  // Admin location scope (State → LGA → Facility via the shared FacilityPicker,
+  // which sets the global admin filter that getAdminStockScope resolves).
+  const { fid: scopeFid, scopeIds: scopeIdList } = store.getAdminStockScope()
+  const scopeSet = scopeFid ? new Set([scopeFid]) : (scopeIdList ? new Set(scopeIdList) : null)
+  const inScope  = fId => !scopeSet || scopeSet.has(fId)
+  const scopeKey = scopeFid || (scopeIdList && scopeIdList.length ? scopeIdList.join(',') : 'all')
   const commIds = store.allCommodities.map(c => c.id)
 
   useEffect(() => {
@@ -135,7 +142,9 @@ export function Alerts() {
       ;(sdpData||[]).forEach(d=>{ sdpMap[d.commodity_id]=(sdpMap[d.commodity_id]||0)+d.quantity })
     }
 
-    const grouped = groupStockByComm(store.stockData)
+    // Admins see their whole scope; the FacilityPicker narrows it to an LGA/facility.
+    const scopedStock = scopeSet ? store.stockData.filter(r => scopeSet.has(r.facility_id)) : store.stockData
+    const grouped = groupStockByComm(scopedStock)
     const gMap = {}
     grouped.forEach(g=>{ gMap[g.commodity_id]=g })
 
@@ -159,6 +168,11 @@ export function Alerts() {
   }
 
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
+  // Recompute the out/low/over aggregates when an admin narrows the location scope.
+  useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
+
+  // Admin scope narrows the expiry batch list client-side (rows carry facility_id).
+  const shownExpiry = expiryRows.filter(r => inScope(r.facility_id))
 
   const today = new Date()
   const urgency = r => {
@@ -205,11 +219,14 @@ export function Alerts() {
         <p className="text-sm text-gray-500 mt-1">Expiry, low stock, overstock and out of stock</p>
       </div>
 
+      {/* Admin location filter — State → LGA → Facility (self-hides for facility users) */}
+      <FacilityPicker />
+
       <MetricGrid>
         <Metric label="Out of stock"   value={stockRows.out.length}   color="red"/>
         <Metric label="Low stock"      value={stockRows.low.length}   color="amber"/>
         <Metric label="Overstock"      value={stockRows.over.length}  color="blue"/>
-        <Metric label="Expiry alerts"  value={expiryRows.filter(r=>(new Date(r.expiry_date)-today)/86400000<=30).length} color="red"/>
+        <Metric label="Expiry alerts"  value={shownExpiry.filter(r=>(new Date(r.expiry_date)-today)/86400000<=30).length} color="red"/>
       </MetricGrid>
 
       <div className="flex gap-2 mb-4 flex-wrap">
@@ -238,14 +255,14 @@ export function Alerts() {
               <option value={365}>Within 12 months</option>
             </select>
           </CardHeader>
-          {loading ? <LoadingState/> : expiryRows.length===0 ? <EmptyState message={`No commodities expiring within ${expiryDays} days ✓`}/> : (
+          {loading ? <LoadingState/> : shownExpiry.length===0 ? <EmptyState message={`No commodities expiring within ${expiryDays} days ✓`}/> : (
             <div className="table-wrap"><table className="w-full text-sm">
               <thead><tr className="border-b border-white/8 bg-white/2">
                 {['Commodity','Category','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
                   <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                 ))}
               </tr></thead>
-              <tbody>{expiryRows.map(r=>{
+              <tbody>{shownExpiry.map(r=>{
                 const u=urgency(r), dL=Math.round((new Date(r.expiry_date)-today)/86400000)
                 return (
                   <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
