@@ -36,10 +36,14 @@ export function Alerts() {
 
   useEffect(() => {
     loadAll()
-    if (!store.isAdmin() && fid) loadFacReqAlerts()
+    // Admins (except overall) see pending facility requests in their jurisdiction;
+    // facilities see their own incoming / to-dispatch requests.
+    if (!store.isOverallAdmin() && (store.isAdmin() || fid)) loadFacReqAlerts()
     return subscribeRealtime(['stock_transfer_log'], (payload) => {
+      if (store.isOverallAdmin()) return
+      if (store.isAdmin()) { loadFacReqAlerts(); return }
       const row = payload.new?.receiving_facility_id ? payload.new : (payload.old || {})
-      if ((row.receiving_facility_id === fid || row.sending_facility_id === fid) && !store.isAdmin() && fid) loadFacReqAlerts()
+      if ((row.receiving_facility_id === fid || row.sending_facility_id === fid) && fid) loadFacReqAlerts()
     })
   }, [fid])
 
@@ -50,6 +54,13 @@ export function Alerts() {
   }
 
   async function loadFacReqAlerts() {
+    if (store.isAdmin()) {
+      // Pending facility→admin requests awaiting fulfilment (sending null),
+      // scoped to the admin's jurisdiction server-side. Read-only for viewers.
+      const data = await api.transfers.list({ status: 'pending', section: commoditySection || undefined }).catch(() => [])
+      setFacReqAlerts((data || []).filter(t => !t.sending_facility_id))
+      return
+    }
     // Incoming = this facility's own requests it's tracking / receiving.
     // To-dispatch = requests the admin assigned this facility to fulfil as the
     // source (sending = us, still pending) — possibly from another state.
@@ -223,6 +234,7 @@ export function Alerts() {
       <FacilityPicker />
 
       <MetricGrid>
+        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber"/>}
         <Metric label="Out of stock"   value={stockRows.out.length}   color="red"/>
         <Metric label="Low stock"      value={stockRows.low.length}   color="amber"/>
         <Metric label="Overstock"      value={stockRows.over.length}  color="blue"/>
@@ -234,7 +246,7 @@ export function Alerts() {
         <TabBtn id="out"       label={`Out of stock (${stockRows.out.length})`}/>
         <TabBtn id="low"       label={`Low stock (${stockRows.low.length})`}/>
         <TabBtn id="overstock" label={`Overstock (${stockRows.over.length})`}/>
-        {!store.isAdmin() && (
+        {!store.isOverallAdmin() && (
           <button onClick={()=>setTab('fac-requests')}
             className={`px-4 py-2 text-sm rounded-lg border transition-colors flex items-center gap-2 ${tab==='fac-requests'?'bg-white/8 border-white/15 text-gray-100 font-medium':'border-white/10 text-gray-400 hover:text-gray-200'}`}>
             Request alerts
@@ -284,6 +296,36 @@ export function Alerts() {
       {tab==='out'       && <Card><CardHeader><CardTitle>Out of stock — quantity is zero</CardTitle></CardHeader><StockTable rows={stockRows.out}  emptyMsg="No commodities out of stock ✓" qtyClass="text-red-400"/></Card>}
       {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable rows={stockRows.low}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400"/></Card>}
       {tab==='overstock' && <Card><CardHeader><CardTitle>Overstock — above 4 months AMC</CardTitle></CardHeader><StockTable rows={stockRows.over} emptyMsg="No commodities overstocked ✓" qtyClass="text-blue-400"/></Card>}
+
+      {tab==='fac-requests' && store.isAdmin() && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Facility redistribution requests</CardTitle>
+            <button onClick={loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
+          </CardHeader>
+          {facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
+            <div className="table-wrap"><table className="w-full text-sm">
+              <thead><tr className="border-b border-white/8 bg-white/2">
+                {['Date','Commodity','Qty requested','Requesting facility','LGA'].map(h=>(
+                  <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>{facReqAlerts.map(req => {
+                const rf = store.allFacilities.find(f => f.id === req.receiving_facility_id)
+                return (
+                  <tr key={req.id} className="border-b border-white/5 hover:bg-white/2">
+                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(req.initiated_at)}</td>
+                    <td className="px-4 py-3 font-medium text-gray-100">{req.commodity_name||'—'}</td>
+                    <td className="px-4 py-3 font-mono text-sm text-gray-300">{req.qty_requested ?? req.quantity}</td>
+                    <td className="px-4 py-3 text-xs text-gray-400">{req.receiving_facility_name||'—'}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{rf?.lga||'—'}</td>
+                  </tr>
+                )
+              })}</tbody>
+            </table></div>
+          )}
+        </Card>
+      )}
 
       {tab==='fac-requests' && !store.isAdmin() && (
         <Card>

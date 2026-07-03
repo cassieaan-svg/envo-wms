@@ -278,7 +278,9 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
     if (!agg[key]) agg[key] = { commodity: row.commodity, category: row.category, unit: row.unit, received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0 }
     if (row.activity === 'Intake')      agg[key].received  += row.quantity
     if (row.activity === 'Consumption') agg[key].dispensed += row.quantity
-    if (row.activity === 'Adjustment') {
+    // Physical count corrections reconcile to a physical count, not a real stock
+    // flow, so they're excluded from the CRRF.
+    if (row.activity === 'Adjustment' && row.reason !== 'Physical count correction') {
       if (row.quantity > 0)                       agg[key].adjPos += row.quantity
       else if (LOSS_REASONS.includes(row.reason)) agg[key].losses += Math.abs(row.quantity)
       else                                        agg[key].adjNeg += Math.abs(row.quantity)
@@ -339,7 +341,9 @@ export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {
     if (!a) return
     if (row.activity === 'Intake')           a.received  += row.quantity
     else if (row.activity === 'Consumption') a.dispensed += row.quantity
-    else if (row.activity === 'Adjustment') {
+    // Physical count corrections reconcile to a physical count, not a real stock
+    // flow, so they're excluded from the CRRF.
+    else if (row.activity === 'Adjustment' && row.reason !== 'Physical count correction') {
       if (row.quantity > 0)                       a.adjPos += row.quantity
       else if (LOSS_REASONS.includes(row.reason)) a.losses += Math.abs(row.quantity)
       else                                        a.adjNeg += Math.abs(row.quantity)

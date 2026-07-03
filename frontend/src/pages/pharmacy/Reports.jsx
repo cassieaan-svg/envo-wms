@@ -82,6 +82,10 @@ export function Reports({ embedded = false } = {}) {
     Transfer: 'transfer',
   }
   const rowMatchesFilter = row => selectedActivityTypes.has(activityLabelToKey[row.activity])
+  // Admins get a cross-facility view; internal moves (Store→Dispensary and
+  // SDP/DSD site dispatches, which aren't external redistributions) would just
+  // crowd it, so drop them. CRRF already counts external transfers only.
+  const notInternalForAdmin = row => !(isAdmin && row.activity === 'Transfer' && !row.external)
 
   async function loadWeekly() {
     setLoading(true)
@@ -111,7 +115,7 @@ export function Reports({ embedded = false } = {}) {
 
   async function exportCSV() {
     if (!summary?.rows) { toast('Load data first','red'); return }
-    const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r))
+    const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r) && notInternalForAdmin(r))
     const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report — ${summary.label}`
     const commLookup = {}
     store.allCommodities.forEach(c => { commLookup[c.id] = c.name })
@@ -176,7 +180,7 @@ export function Reports({ embedded = false } = {}) {
   }
 
   const categoryLabel = getReportCategoryLabel(category)
-  const filteredRows = (summary?.rows || []).filter(r => rowMatchesFilter(r) && matchesCategory(r))
+  const filteredRows = (summary?.rows || []).filter(r => rowMatchesFilter(r) && matchesCategory(r) && notInternalForAdmin(r))
   const metrics = getSummaryMetrics(filteredRows, category)
 
   const TabBtn = ({id,label}) => (

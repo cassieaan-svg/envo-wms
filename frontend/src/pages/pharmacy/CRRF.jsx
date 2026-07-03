@@ -80,6 +80,9 @@ export function CRRF() {
     ;(dispRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
     ;(adjRes || []).forEach(r => {
       if (!agg[r.commodity_id]) return
+      // Physical count corrections reconcile the system to a physical count; they
+      // aren't a real stock flow, so they're excluded from the CRRF.
+      if (r.reason === 'Physical count correction') return
       if (r.adjustment_type === 'Increase')          agg[r.commodity_id].adjPos  += r.quantity
       else if (LOSS_REASONS.includes(r.reason))      agg[r.commodity_id].losses  += r.quantity
       else                                           agg[r.commodity_id].adjNeg  += r.quantity
