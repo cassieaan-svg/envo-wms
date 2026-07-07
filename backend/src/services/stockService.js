@@ -88,7 +88,9 @@ export class StockService {
     const conds = []
     if (facilityId) { params.push(facilityId); conds.push(`d.facility_id = $${params.length}`) }
     else if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`d.facility_id = any($${params.length})`) }
-    if (dsdSiteName) { params.push(dsdSiteName); conds.push(`d.dsd_site_name = $${params.length}`) }
+    // Site names can drift in case/whitespace between the store dispatch and the
+    // DSD account (e.g. "VINZORB Pharmacy" vs "Vinzorb Pharmacy"), so match loosely.
+    if (dsdSiteName) { params.push(dsdSiteName); conds.push(`lower(btrim(d.dsd_site_name)) = lower(btrim($${params.length}))`) }
     if (commodityId) { params.push(commodityId); conds.push(`d.commodity_id = $${params.length}`) }
     if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
 
@@ -119,7 +121,8 @@ export class StockService {
     const conds = []
     if (facilityId) { params.push(facilityId); conds.push(`sp.facility_id = $${params.length}`) }
     else if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`sp.facility_id = any($${params.length})`) }
-    if (sdpName) { params.push(sdpName); conds.push(`sp.sdp_name = $${params.length}`) }
+    // Match loosely on case/whitespace so a differently-cased site name still resolves.
+    if (sdpName) { params.push(sdpName); conds.push(`lower(btrim(sp.sdp_name)) = lower(btrim($${params.length}))`) }
     if (commodityId) { params.push(commodityId); conds.push(`sp.commodity_id = $${params.length}`) }
     if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
 
@@ -201,6 +204,10 @@ export class StockService {
     if (!facility_id || !dsd_site_name || !commodity_id || quantity === undefined) {
       throw new Error('Missing required fields: facility_id, dsd_site_name, commodity_id, quantity')
     }
+    // Update an existing row for this site even if its casing/whitespace differs,
+    // so a re-cased dispatch doesn't fork the site into a duplicate partition.
+    const existing = await StockService.getDsdStockByFacilitySiteCommodity(facility_id, dsd_site_name, commodity_id, exec)
+    if (existing) return await StockService.updateDsdStock(existing.id, quantity, exec)
     const { rows } = await exec(
       `insert into dsd_stock (facility_id, dsd_site_name, commodity_id, quantity, updated_at)
        values ($1, $2, $3, $4, now())
@@ -220,6 +227,10 @@ export class StockService {
     if (!facility_id || !sdp_name || !commodity_id || quantity === undefined) {
       throw new Error('Missing required fields: facility_id, sdp_name, commodity_id, quantity')
     }
+    // Update an existing row for this site even if its casing/whitespace differs,
+    // so a re-cased dispatch doesn't fork the site into a duplicate partition.
+    const existing = await StockService.getSdpStockByFacilitySiteCommodity(facility_id, sdp_name, commodity_id, exec)
+    if (existing) return await StockService.updateSdpStock(existing.id, quantity, exec)
     const { rows } = await exec(
       `insert into sdp_stock (facility_id, sdp_name, commodity_id, quantity, updated_at)
        values ($1, $2, $3, $4, now())
@@ -293,7 +304,7 @@ export class StockService {
   static async getDsdStockByFacilitySiteCommodity(facilityId, dsdSiteName, commodityId, exec = query) {
     const { rows } = await exec(
       `select * from dsd_stock
-       where facility_id = $1 and dsd_site_name = $2 and commodity_id = $3
+       where facility_id = $1 and lower(btrim(dsd_site_name)) = lower(btrim($2)) and commodity_id = $3
        limit 1`,
       [facilityId, dsdSiteName, commodityId]
     )
@@ -306,7 +317,7 @@ export class StockService {
   static async getSdpStockByFacilitySiteCommodity(facilityId, sdpName, commodityId, exec = query) {
     const { rows } = await exec(
       `select * from sdp_stock
-       where facility_id = $1 and sdp_name = $2 and commodity_id = $3
+       where facility_id = $1 and lower(btrim(sdp_name)) = lower(btrim($2)) and commodity_id = $3
        limit 1`,
       [facilityId, sdpName, commodityId]
     )
