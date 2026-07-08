@@ -111,7 +111,9 @@ export function Intake() {
         batch_number: batch || null, expiry_date: expiry || null,
         delivery_note_ref: deliveryRef || null, condition_on_arrival: condition,
         received_by: receivedBy || null,
-        received_at: receivedDate ? new Date(receivedDate).toISOString() : new Date().toISOString(),
+        // Anchor a date-only entry at local noon (not bare midnight, which JS
+        // parses as UTC and would drift a day for viewers west of UTC).
+        received_at: receivedDate ? new Date(receivedDate + 'T12:00:00').toISOString() : new Date().toISOString(),
         notes: notes || null,
         section: commoditySection,
       })
