@@ -123,6 +123,20 @@ export const useAppStore = create((set, get) => ({
     return { fid: null, scopeIds: null }
   },
 
+  // Compact query params for the current scope, for endpoints that resolve
+  // state/lga server-side. Avoids enumerating (hundreds of) facility ids in the
+  // URL, which overflows proxy request-URI limits on large states. Shapes:
+  //   { facility_id } | { state[, lga] } | {}  ({} = backend uses the token scope)
+  getAdminScopeParams: () => {
+    const s = get()
+    if (s.accessLevel === 'facility') return { facility_id: s.currentFacility?.id || undefined }
+    if (s.adminFilterFacility) return { facility_id: s.adminFilterFacility.id }
+    const p = {}
+    if (s.adminFilterState) p.state = s.adminFilterState
+    if (s.adminFilterLGA)   p.lga   = s.adminFilterLGA
+    return p
+  },
+
   getSectionLabel: () => {
     const s = get()
     if (s.accessLevel === 'overall_admin') return 'Overall Admin'

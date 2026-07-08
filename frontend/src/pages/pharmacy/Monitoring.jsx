@@ -30,17 +30,9 @@ export function Monitoring() {
   // so Consumption and Expiry stay within the viewer's jurisdiction.
   const { fid, scopeIds } = store.getAdminStockScope()
   const scopeKey = fid || (scopeIds && scopeIds.length ? scopeIds.join(',') : 'all')
-  const commIds  = store.allCommodities.map(c => c.id)
-  // Resolve the facility_ids view-filter for the log queries: the admin's scope
-  // (single facility or LGA/state set) optionally narrowed by a picked LGA. Returns
-  // an array for facility_ids, or undefined to span the whole token scope. An empty
-  // result becomes a sentinel id so the server returns nothing (not everything).
-  const facilityFilter = (lgaIds) => {
-    let base = fid ? [fid] : (scopeIds && scopeIds.length ? scopeIds : null)
-    if (lgaIds) base = base ? base.filter(id => lgaIds.includes(id)) : lgaIds
-    if (base == null) return undefined
-    return base.length ? base : ['00000000-0000-0000-0000-000000000000']
-  }
+  // Compact scope params ({ facility_id } | { state[, lga] } | {}) that the server
+  // resolves — instead of enumerating hundreds of facility ids in the URL, which
+  // overflows proxy request-URI limits on large states and silently 404s.
 
   // Facility metadata for LGA / facility drill-downs
   const facMeta = {}
@@ -54,7 +46,7 @@ export function Monitoring() {
     setLoading(true)
     setCatDrill(null); setCommDrill(null); setMetricDrill(null)
     const start = new Date(); start.setDate(start.getDate()-period)
-    const facility_ids = facilityFilter()
+    const scopeParams = store.getAdminScopeParams()
 
     // Paginate — an admin over a long period easily exceeds the 1000-row cap,
     // which would otherwise silently understate totals and drill-downs.
@@ -64,8 +56,9 @@ export function Monitoring() {
       let data
       try {
         data = await api.dispense.history({
-          facility_ids,
-          commodity_ids: commIds,
+          ...scopeParams,
+          // commodity scope is applied server-side via the section/category scope;
+          // enumerating every commodity id here would bloat the URL past proxy limits.
           from: start.toISOString(),
           section: commoditySection || undefined,
           limit: PAGE, offset,
@@ -99,7 +92,7 @@ export function Monitoring() {
     setExpDrill(null); setExpBatchComm(null)
     const now=new Date()
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
-    const facility_ids = facilityFilter()
+    const scopeParams = store.getAdminScopeParams()
 
     // Paginate — large jurisdictions over a long window exceed the 1000-row cap.
     const PAGE = 1000
@@ -116,7 +109,7 @@ export function Monitoring() {
     }
 
     const all = await fetchAllPages(api.intake.history, {
-      facility_ids, commodity_ids: commIds,
+      ...scopeParams,
       expiry_from: now.toISOString().split('T')[0], expiry_to: cutoff,
       has_quantity: true, section: commoditySection || undefined,
     })
@@ -127,8 +120,8 @@ export function Monitoring() {
     // keyed per (facility, commodity) — not a single per-commodity total. Pharmacy
     // SOH = store + dispensary (both from /api/stock) + DSD.
     const [stockRows, dsdRows] = await Promise.all([
-      fetchAllPages(api.stock.list, { facility_ids, commodity_ids: commIds }),
-      fetchAllPages(api.stock.dsd.list, { facility_ids }),
+      fetchAllPages(api.stock.list, { ...scopeParams }),
+      fetchAllPages(api.stock.dsd.list, { ...scopeParams }),
     ])
     const sohByFacComm = {}
     const addSoh = (fId, cId, q) => { const k = `${fId}|${cId}`; sohByFacComm[k] = (sohByFacComm[k] || 0) + (q || 0) }

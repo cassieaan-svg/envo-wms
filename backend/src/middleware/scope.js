@@ -161,12 +161,31 @@ export async function scopedReadFacilityIds(req, table) {
 // admin therefore can't widen access by passing ids outside their scope. Returns
 // null=all, []=none, [...]=these.
 export async function resolveListFacilityIds(req, table, clientFacilityIdsCsv) {
-  const client = clientFacilityIdsCsv
+  let client = clientFacilityIdsCsv
     ? String(clientFacilityIdsCsv).split(',').map(s => s.trim()).filter(Boolean)
     : null
+  // Compact state/LGA view-filter: lets an admin narrow to a whole state/LGA
+  // without enumerating (potentially hundreds of) facility ids in the URL, which
+  // otherwise blows past proxy request-URI limits. Resolve it here and treat it as
+  // the client filter (intersected with any explicit facility_ids).
+  const loc = await locationFacilityIds(req)
+  if (loc) client = client ? client.filter(id => loc.includes(id)) : loc
   let ids = await scopedReadFacilityIds(req, table)
   if (client) ids = ids === null ? client : ids.filter(id => client.includes(id))
   return ids
+}
+
+// Resolve the optional `state` / `lga` query params to the facility ids they
+// cover. Returns null when neither is present (no location narrowing). An admin
+// still can't widen access: callers intersect this with their token scope.
+export async function locationFacilityIds(req) {
+  const state = req.query?.state, lga = req.query?.lga
+  if (!state && !lga) return null
+  const conds = [], params = []
+  if (state) { params.push(state); conds.push(`state = $${params.length}`) }
+  if (lga)   { params.push(lga);   conds.push(`lga = $${params.length}`) }
+  const { rows } = await query(`select id from facilities where ${conds.join(' and ')}`, params)
+  return rows.map(r => r.id)
 }
 
 // Guard a read that targets a single facility_id. Returns true if allowed; on

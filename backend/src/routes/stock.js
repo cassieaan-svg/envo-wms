@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection } from '../middleware/scope.js'
+import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection, locationFacilityIds } from '../middleware/scope.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
@@ -31,7 +31,10 @@ router.get('/', async (req, res) => {
     if (!facility_id) {
       const csv = v => v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null
       let facilityIds = await scopedReadFacilityIds(req, 'stock') // null=all, []=none, [...]
-      const clientFids = csv(facility_ids)
+      let clientFids = csv(facility_ids)
+      // Compact state/LGA view-filter (avoids enumerating ids in the URL).
+      const loc = await locationFacilityIds(req)
+      if (loc) clientFids = clientFids ? clientFids.filter(id => loc.includes(id)) : loc
       if (clientFids) {
         facilityIds = facilityIds === null ? clientFids : facilityIds.filter(id => clientFids.includes(id))
       }
@@ -96,9 +99,11 @@ router.get('/dsd', async (req, res) => {
     if (facility_id && !validators.isUUID(facility_id)) {
       return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     }
-    // dsd_stock read is public (RLS USING true); a facility_ids view-filter just
-    // narrows the result set. No per-facility authz needed here.
-    const facilityIds = facility_ids ? String(facility_ids).split(',').map(s => s.trim()).filter(Boolean) : undefined
+    // dsd_stock read is public (RLS USING true); a facility_ids / state / lga
+    // view-filter just narrows the result set. No per-facility authz needed here.
+    let facilityIds = facility_ids ? String(facility_ids).split(',').map(s => s.trim()).filter(Boolean) : undefined
+    const loc = await locationFacilityIds(req)
+    if (loc) facilityIds = facilityIds ? facilityIds.filter(id => loc.includes(id)) : loc
 
     const stock = await StockService.getDsdStock(facility_id || null, {
       dsdSiteName: dsd_site_name,
@@ -136,8 +141,10 @@ router.get('/sdp', async (req, res) => {
     if (facility_id && !validators.isUUID(facility_id)) {
       return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     }
-    // sdp_stock read is public (RLS USING true); facility_ids just narrows results.
-    const facilityIds = facility_ids ? String(facility_ids).split(',').map(s => s.trim()).filter(Boolean) : undefined
+    // sdp_stock read is public (RLS USING true); facility_ids / state / lga narrows.
+    let facilityIds = facility_ids ? String(facility_ids).split(',').map(s => s.trim()).filter(Boolean) : undefined
+    const loc = await locationFacilityIds(req)
+    if (loc) facilityIds = facilityIds ? facilityIds.filter(id => loc.includes(id)) : loc
 
     const stock = await StockService.getSdpStock(facility_id || null, {
       sdpName: sdp_name,
