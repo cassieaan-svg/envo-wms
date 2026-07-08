@@ -64,7 +64,7 @@ export function Dashboard() {
     // AMC (and the status counts in the cards above) matches the summed stock.
     const amcWin = resolveAmcWindow(fid ? store.amcWindows[fid] : null)
     const commIds = store.allCommodities.map(c => c.id)
-    const amc = await loadConsumptionAmcMap({ commIds, fid, scopeIds, amcWin, section: commoditySection })
+    const amc = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
     setAmcMap(amc)
     setLoading(false)
   }

@@ -52,7 +52,7 @@ export function Stock() {
     // in scope, so the AMC matches the summed stock below.
     const amcWin = resolveAmcWindow(fid ? store.amcWindows[fid] : null)
     const commIds = store.stockData.map(r => r.commodity_id)
-    const amcMap = await loadConsumptionAmcMap({ commIds, fid, scopeIds, amcWin, section: commoditySection })
+    const amcMap = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
 
     // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility
     // scoped, use it; for an admin viewing all facilities, aggregate across the

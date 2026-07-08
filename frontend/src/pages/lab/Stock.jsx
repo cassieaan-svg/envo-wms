@@ -60,7 +60,7 @@ export function Stock() {
     const { fid: amcFid, scopeIds } = store.getAdminStockScope()
     const amcWin = resolveAmcWindow(amcFid ? store.amcWindows[amcFid] : null)
     const commIds = store.stockData.map(r => r.commodity_id)
-    const amcMap = await loadConsumptionAmcMap({ commIds, fid: amcFid, scopeIds, amcWin, section: commoditySection })
+    const amcMap = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
 
     // Fetch SDP stock data and aggregate by commodity
     let sdpMap = {}

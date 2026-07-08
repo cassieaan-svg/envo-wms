@@ -49,7 +49,7 @@ export function Dashboard() {
     const { fid: amcFid, scopeIds } = store.getAdminStockScope()
     const amcWin = resolveAmcWindow(amcFid ? store.amcWindows[amcFid] : null)
     const commIds = store.allCommodities.map(c => c.id)
-    const amc = await loadConsumptionAmcMap({ commIds, fid: amcFid, scopeIds, amcWin, section: commoditySection })
+    const amc = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
     setAmcMap(amc)
     setLoading(false)
   }

@@ -167,6 +167,36 @@ export class LogService {
   }
 
   /**
+   * Consumption summed by commodity + UTC month over a facility set and date
+   * window — the AMC aggregate. Returns [{ commodity_id, ym, qty }] (a few dozen
+   * rows) instead of every dispense row, so admin dashboards don't ship (and the
+   * browser doesn't crunch) tens of thousands of rows. Same filters/rows as
+   * getDispenseHistory, just pre-aggregated server-side.
+   */
+  static async getDispenseSummary(facilityId, options = {}) {
+    const { from, to, facilityIds, commodityIds, categories, section } = options
+    if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+    const params = []
+    const conds = []
+    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, from, to, section })
+
+    // Only join commodities when a category (section) filter needs it.
+    const needCommJoin = Array.isArray(categories) && categories.length
+    let sql = `
+      select l.commodity_id,
+             to_char(l.dispensed_at at time zone 'UTC', 'YYYY-MM') as ym,
+             sum(l.quantity)::int as qty
+      from dispense_log l
+      ${needCommJoin ? 'left join commodities c on c.id = l.commodity_id' : ''}`
+    if (conds.length) sql += ` where ${conds.join(' and ')}`
+    sql += ` group by l.commodity_id, ym`
+
+    const { rows } = await query(sql, params)
+    return rows
+  }
+
+  /**
    * Record an intake and add to the facility store stock (create if absent).
    */
   static async recordIntake(intakeData) {

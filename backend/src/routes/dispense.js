@@ -146,6 +146,33 @@ router.get('/', async (req, res) => {
 })
 
 /**
+ * GET /api/dispense/summary - consumption summed by commodity + UTC month.
+ * The AMC aggregate for dashboards: a few dozen rows instead of every dispense
+ * row. Query params mirror the history route (facility_id | facility_ids |
+ * state / lga, from, to, commodity_ids, section).
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, from, to, commodity_ids, section } = req.query
+    const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+    const base = { from, to, commodityIds, categories: req.scope.sectionCategories, section }
+    let rows
+    if (facility_id) {
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
+      rows = await LogService.getDispenseSummary(facility_id, base)
+    } else {
+      const facilityIds = await resolveListFacilityIds(req, 'dispense_log', facility_ids)
+      rows = await LogService.getDispenseSummary(null, { ...base, facilityIds: facilityIds === null ? undefined : facilityIds })
+    }
+    res.json({ success: true, data: rows, count: rows.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching dispense summary:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
+  }
+})
+
+/**
  * PATCH /api/dispense/:id - Edit a dispense record (metadata only; the client
  * reconciles stock separately). Scoped to the row's facility (own facility or admin).
  */

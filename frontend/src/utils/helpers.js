@@ -249,26 +249,30 @@ export function capExpiryBatchesToStockByFacility(batches, sohByFacComm) {
 // null — every facility in the caller's token scope. Aggregates dispenses across
 // the whole scope and paginates past the 1000-row cap, so an admin's aggregate AMC
 // matches the summed stock. `section` adds the pharmacy/lab filter server-side.
-export async function loadConsumptionAmcMap({ commIds, fid, scopeIds, amcWin, section }) {
+export async function loadConsumptionAmcMap({ commIds, scopeParams, amcWin, section }) {
   const ids = [...new Set((commIds || []).filter(Boolean))]
   if (!ids.length) return {}
-  const rows = []
-  for (let offset = 0; ; offset += 1000) {
-    let data
-    try {
-      data = await api.dispense.history({
-        facility_id: fid || undefined,
-        facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-        commodity_ids: ids,
-        from: amcWin.start.toISOString(),
-        to: amcWin.end.toISOString(),
-        section: section || undefined,
-        limit: 1000, offset,
-      })
-    } catch { break }
-    if (!data || !data.length) break
-    rows.push(...data)
-    if (data.length < 1000) break
-  }
-  return amcMapFromRows(rows, amcWin)
+  // The server sums consumption by commodity + month, so we fetch a few dozen
+  // rows instead of every dispense record across the scope. `scopeParams` is the
+  // compact { facility_id } | { state[, lga] } | {} shape (no giant id lists).
+  let monthly
+  try {
+    monthly = await api.dispense.summary({
+      ...(scopeParams || {}),
+      commodity_ids: ids,
+      from: amcWin.start.toISOString(),
+      to: amcWin.end.toISOString(),
+      section: section || undefined,
+    })
+  } catch { return {} }
+  // Same reduction as amcMapFromRows: sum by commodity (honouring a custom month
+  // set), then divide by the window's month count.
+  const sums = {}
+  ;(monthly || []).forEach(r => {
+    if (amcWin.monthSet && !amcWin.monthSet.has(r.ym)) return
+    sums[r.commodity_id] = (sums[r.commodity_id] || 0) + (r.qty || 0)
+  })
+  const out = {}
+  Object.entries(sums).forEach(([id, total]) => { out[id] = calcAMCFromTotal(total, amcWin.months) })
+  return out
 }
