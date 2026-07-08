@@ -127,22 +127,25 @@ export function Reports({ embedded = false } = {}) {
       const lgaByName = {}
       store.allFacilities.forEach(f => { lgaByName[f.name] = f.lga || '' })
       const PAGE = 1000
-      for (let offset = 0; ; offset += PAGE) {
-        let data
-        try {
-          data = await api.stock.list({
-            facility_ids: (scopeIds && scopeIds.length) ? scopeIds : undefined,
-            limit: PAGE, offset,
-          })
-        } catch { break }
-        if (!data || !data.length) break
-        data.forEach(r => {
-          const fname = r.facilities?.name, cname = commLookup[r.commodity_id]
-          if (!fname || !cname) return
-          if (!facStock[fname]) facStock[fname] = {}
-          facStock[fname][cname] = (facStock[fname][cname] || 0) + r.quantity
-        })
-        if (data.length < PAGE) break
+      const addFac = (r) => {
+        const fname = r.facilities?.name, cname = commLookup[r.commodity_id]
+        if (!fname || !cname) return
+        if (!facStock[fname]) facStock[fname] = {}
+        facStock[fname][cname] = (facStock[fname][cname] || 0) + r.quantity
+      }
+      // CRRF ending balance = total SOH: store + dispensary (/api/stock) plus the
+      // facility's DSD + SDP site stock. Consumption keeps store + dispensary only.
+      const facFns = category === 'all'
+        ? [api.stock.list, api.stock.dsd.list, api.stock.sdp.list]
+        : [api.stock.list]
+      for (const listFn of facFns) {
+        for (let offset = 0; ; offset += PAGE) {
+          let data
+          try { data = await listFn({ facility_ids: (scopeIds && scopeIds.length) ? scopeIds : undefined, limit: PAGE, offset }) } catch { break }
+          if (!data || !data.length) break
+          data.forEach(addFac)
+          if (data.length < PAGE) break
+        }
       }
       const csv = category === 'dispense'
         ? buildConsumptionByFacilityCsv(rows, title, facStock, lgaByName)
@@ -152,24 +155,23 @@ export function Reports({ embedded = false } = {}) {
     }
 
     // Single facility (or per-transaction activity): commodity total + balance.
+    // CRRF ending balance = total SOH (store + dispensary + DSD + SDP); other
+    // activity reports keep store + dispensary only.
     const stockMap = {}
     if (fid || isAdmin) {
       const PAGE = 1000
-      for (let offset = 0; ; offset += PAGE) {
-        let data
-        try {
-          data = await api.stock.list({
-            facility_id: fid || undefined,
-            facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-            limit: PAGE, offset,
-          })
-        } catch { break }
-        if (!data || !data.length) break
-        data.forEach(r => {
-          const name = commLookup[r.commodity_id]
-          if (name) stockMap[name] = (stockMap[name] || 0) + r.quantity
-        })
-        if (data.length < PAGE) break
+      const stParams = { facility_id: fid || undefined, facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined }
+      const stFns = category === 'all'
+        ? [api.stock.list, api.stock.dsd.list, api.stock.sdp.list]
+        : [api.stock.list]
+      for (const listFn of stFns) {
+        for (let offset = 0; ; offset += PAGE) {
+          let data
+          try { data = await listFn({ ...stParams, limit: PAGE, offset }) } catch { break }
+          if (!data || !data.length) break
+          data.forEach(r => { const name = commLookup[r.commodity_id]; if (name) stockMap[name] = (stockMap[name] || 0) + r.quantity })
+          if (data.length < PAGE) break
+        }
       }
     }
 

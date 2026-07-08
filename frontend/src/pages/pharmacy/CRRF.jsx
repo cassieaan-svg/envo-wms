@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
+import { NON_CRRF_ADJ_REASONS } from '../../utils/reports'
 
 const BI_MONTHLY_PERIODS = [
   { label: 'Jan – Feb', start: '01-01', end: '02', months: [0, 1] },
@@ -61,11 +62,15 @@ export function CRRF() {
 
     const sec2 = commoditySection || undefined
     const range = { from: from + 'T00:00:00', to: to + 'T23:59:59' }
-    const [intakeRes, dispRes, adjRes, stockRes, transferRes] = await Promise.all([
+    const [intakeRes, dispRes, adjRes, stockRes, dsdRes, sdpRes, transferRes] = await Promise.all([
       api.intake.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
       api.dispense.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
       api.adjustments.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
+      // Ending balance = TOTAL SOH: store + dispensary (/api/stock) plus the
+      // facility's DSD and SDP site stock, so internal store↔site moves net out.
       api.stock.list({ facility_ids: [fid], commodity_ids: commIds }).catch(() => []),
+      api.stock.dsd.list({ facility_id: fid }).catch(() => []),
+      api.stock.sdp.list({ facility_id: fid }).catch(() => []),
       // section already scopes transfers; date_field/resolved_at uses plain dates.
       api.transfers.list({ facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to, section: sec2 }).catch(() => []),
     ])
@@ -80,14 +85,16 @@ export function CRRF() {
     ;(dispRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
     ;(adjRes || []).forEach(r => {
       if (!agg[r.commodity_id]) return
-      // Physical count corrections reconcile the system to a physical count; they
-      // aren't a real stock flow, so they're excluded from the CRRF.
-      if (r.reason === 'Physical count correction') return
+      // Reasons that aren't a real inflow/outflow of the facility's inventory
+      // (count reconciliations and internal store↔site redistributions) are excluded.
+      if (NON_CRRF_ADJ_REASONS.includes(r.reason)) return
       if (r.adjustment_type === 'Increase')          agg[r.commodity_id].adjPos  += r.quantity
       else if (LOSS_REASONS.includes(r.reason))      agg[r.commodity_id].losses  += r.quantity
       else                                           agg[r.commodity_id].adjNeg  += r.quantity
     })
     ;(stockRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
+    ;(dsdRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
+    ;(sdpRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
     ;(transferRes || []).forEach(r => {
       if (!agg[r.commodity_id]) return
       // Only EXTERNAL redistribution (facility → another facility) affects the

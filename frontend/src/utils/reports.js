@@ -1,5 +1,18 @@
 import { api } from '../lib/api'
 
+// Adjustment reasons that must NOT feed the CRRF's Adj +/−/Losses columns.
+// They aren't a real inflow/outflow of the facility's inventory:
+//   - Physical count correction  → reconciles the system to a physical count
+//   - Returned from Dispensary/DSD/SDP → internal store↔site redistribution
+//     (the outbound store→site dispatch is likewise excluded), so both legs net
+//     out and neither should register as a CRRF adjustment.
+export const NON_CRRF_ADJ_REASONS = [
+  'Physical count correction',
+  'Returned from Dispensary',
+  'Returned from DSD',
+  'Returned from SDP',
+]
+
 export const REPORT_CATEGORIES = [
   { key: 'all', label: 'All' },
   { key: 'dispense', label: 'Consumption' },
@@ -278,9 +291,9 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
     if (!agg[key]) agg[key] = { commodity: row.commodity, category: row.category, unit: row.unit, received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0 }
     if (row.activity === 'Intake')      agg[key].received  += row.quantity
     if (row.activity === 'Consumption') agg[key].dispensed += row.quantity
-    // Physical count corrections reconcile to a physical count, not a real stock
-    // flow, so they're excluded from the CRRF.
-    if (row.activity === 'Adjustment' && row.reason !== 'Physical count correction') {
+    // Excluded from CRRF: physical count corrections (reconcile to a count) and
+    // dispensary returns (internal store↔dispensary move, total SOH unchanged).
+    if (row.activity === 'Adjustment' && !NON_CRRF_ADJ_REASONS.includes(row.reason)) {
       if (row.quantity > 0)                       agg[key].adjPos += row.quantity
       else if (LOSS_REASONS.includes(row.reason)) agg[key].losses += Math.abs(row.quantity)
       else                                        agg[key].adjNeg += Math.abs(row.quantity)
@@ -341,9 +354,9 @@ export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {
     if (!a) return
     if (row.activity === 'Intake')           a.received  += row.quantity
     else if (row.activity === 'Consumption') a.dispensed += row.quantity
-    // Physical count corrections reconcile to a physical count, not a real stock
-    // flow, so they're excluded from the CRRF.
-    else if (row.activity === 'Adjustment' && row.reason !== 'Physical count correction') {
+    // Excluded from CRRF: physical count corrections (reconcile to a count) and
+    // dispensary returns (internal store↔dispensary move, total SOH unchanged).
+    else if (row.activity === 'Adjustment' && !NON_CRRF_ADJ_REASONS.includes(row.reason)) {
       if (row.quantity > 0)                       a.adjPos += row.quantity
       else if (LOSS_REASONS.includes(row.reason)) a.losses += Math.abs(row.quantity)
       else                                        a.adjNeg += Math.abs(row.quantity)

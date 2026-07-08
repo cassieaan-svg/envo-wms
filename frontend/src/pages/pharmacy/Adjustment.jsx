@@ -15,6 +15,9 @@ import { fmtDate, fmtStockQty, todayLagos } from '../../utils/helpers'
 // store, negative adjustment to the selected site's stock.
 const RETURN_REASON = 'Returned from DSD'
 const SITE_CFG = { table: 'dsd_stock', col: 'dsd_site_name', label: 'DSD site' }
+// Internal move: dispensary → store. Credits the store, debits the dispensary
+// (both are the facility's own on-hand), so it is excluded from CRRF adjustments.
+const DISP_RETURN_REASON = 'Returned from Dispensary'
 
 const RULES = {
   'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock' },
@@ -22,6 +25,7 @@ const RULES = {
   'Lost / Stolen':             { type:'Decrease', lock:true,  label:'Negative — cannot increase lost/stolen stock' },
   'Physical count correction': { type:null,       lock:false, label:'Can be positive or negative' },
   'Returned to store':         { type:'Increase', lock:true,  label:'Positive — stock is being returned' },
+  [DISP_RETURN_REASON]:        { type:'Increase', lock:true,  label:'Positive to store — deducts from the dispensary' },
   [RETURN_REASON]:             { type:'Increase', lock:true,  label:'Positive to store — deducts from the selected DSD site' },
   'State Office':              { type:'Increase', lock:true,  label:'Positive — stock adjustment from state office' },
   'Other':                     { type:null,       lock:false, label:'Specify type manually' },
@@ -56,6 +60,7 @@ export function Adjustment() {
 
   const fid = store.currentFacility?.id
   const isReturn = reason === RETURN_REASON
+  const isDispReturn = reason === DISP_RETURN_REASON
 
   useEffect(() => { loadRecent() }, [fid])
   useEffect(() => { if(fid) loadRecent() }, [historyDate])
@@ -162,6 +167,40 @@ export function Adjustment() {
       toast('Return recorded','green')
       setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from ${returnSite} to store. Store stock: ${fmtStockQty(newStoreQty, selectedComm)}`})
       setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setReturnSite(''); setSiteOptions([])
+      await loadStock(); loadRecent(); setSaving(false)
+      return
+    }
+
+    // ── Returned from the Dispensary ──────────────────────────────────────
+    // Internal move: credits the store and debits the dispensary. Both are the
+    // facility's own on-hand, so total SOH is unchanged (and this reason is
+    // excluded from CRRF adjustments). Validate the dispensary holds enough first.
+    if (isDispReturn) {
+      const dispRow = store.stockData.find(r => r.commodity_id === commId && r.location_type === 'dispensary' && r.facility_id === fid)
+      const dispQty = dispRow?.quantity || 0
+      if (!dispRow || dispQty < qtyN) {
+        setMsg({type:'error',text:`Dispensary only has ${fmtStockQty(dispQty, selectedComm)} — cannot return ${qtyN}.`}); return
+      }
+      setSaving(true)
+      const returnNote = `Returned from Dispensary${adjNotes ? ' — ' + adjNotes : ''}`
+      // Records the adjustment AND credits the store stock (transactional, server-side).
+      try {
+        await api.adjustments.record({
+          facility_id:fid, commodity_id:commId, quantity:qtyN,
+          adjustment_type:'Increase', reason, adjusted_by:adjBy||null,
+          reference_number:adjRef||null, notes:returnNote, adjusted_at:new Date().toISOString(),
+          expiry_date:adjExpiry||null, batch_number:adjBatch||null,
+          section:commoditySection,
+        })
+      } catch (logErr) { setMsg({type:'error',text:'Error: '+logErr.message}); setSaving(false); return }
+
+      // Debit the dispensary (the server already credited the store).
+      await api.stock.update(dispRow.id, Math.max(0, dispQty - qtyN))
+
+      const prevStore = store.stockData.find(r => r.commodity_id === commId && r.facility_id === fid && r.location_type === 'store')?.quantity || 0
+      toast('Return recorded','green')
+      setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from dispensary to store. Store stock: ${fmtStockQty(prevStore + qtyN, selectedComm)}`})
+      setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch('')
       await loadStock(); loadRecent(); setSaving(false)
       return
     }
