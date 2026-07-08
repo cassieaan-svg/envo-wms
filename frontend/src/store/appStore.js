@@ -141,7 +141,10 @@ export const useAppStore = create((set, get) => ({
     const s = get()
     if (s.accessLevel === 'overall_admin') return 'Overall Admin'
     if (s.accessLevel === 'state_admin')   return `${s.adminState} State Admin`
-    if (s.accessLevel === 'state_viewer')  return `${s.adminState} State`
+    if (s.accessLevel === 'state_viewer') {
+      const sec = s.commoditySection === 'pharmacy' ? 'Pharmacy' : s.commoditySection === 'lab' ? 'Lab' : ''
+      return [`${s.adminState} State`, sec].filter(Boolean).join(' ')
+    }
     if (s.accessLevel === 'cluster_admin') {
       const sec = s.commoditySection === 'pharmacy' ? 'Pharmacy' : s.commoditySection === 'lab' ? 'Lab' : ''
       return [`${s.adminCluster} Cluster`, sec].filter(Boolean).join(' ')

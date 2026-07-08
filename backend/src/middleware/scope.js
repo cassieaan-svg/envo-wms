@@ -66,10 +66,11 @@ export function attachScope(req, res, next) {
   if (meta.access_level) accessLevel = meta.access_level
   else if (isAdminFlag) accessLevel = 'overall_admin'
 
-  // Section (pharmacy/lab) is null — "sees both" — for the whole-remit tiers.
-  // Everyone else is pinned to their token's commodity_section.
+  // Section (pharmacy/lab) is null — "sees both" — for overall_admin / state_admin.
+  // Everyone else (cluster_admin, lga_admin, section-scoped state_viewers) is pinned
+  // to their token's commodity_section; a state_viewer with none set still sees both.
   const bothSections = isAdminFlag ||
-    ['overall_admin', 'state_admin', 'state_viewer'].includes(accessLevel)
+    ['overall_admin', 'state_admin'].includes(accessLevel)
   const section = bothSections ? null : (meta.commodity_section || null)
 
   req.scope = {

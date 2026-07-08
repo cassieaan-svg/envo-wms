@@ -14,9 +14,10 @@ export async function hydrateSession(user) {
   if (meta.access_level) accessLevel = meta.access_level
   else if (meta.is_admin === true || meta.is_admin === 'true') accessLevel = 'overall_admin'
 
-  // Whole-remit tiers see both pharmacy + lab (section = null). cluster_admin and
-  // lga_admin are per-component, so they keep their token's commodity_section.
-  const commoditySection = ['overall_admin','state_admin','state_viewer'].includes(accessLevel)
+  // overall_admin / state_admin see both pharmacy + lab (section = null). Everyone
+  // else — cluster_admin, lga_admin, and now section-scoped state_viewers — keeps
+  // their token's commodity_section (a state_viewer with none set still sees both).
+  const commoditySection = ['overall_admin','state_admin'].includes(accessLevel)
     ? null
     : meta.commodity_section || null
 
