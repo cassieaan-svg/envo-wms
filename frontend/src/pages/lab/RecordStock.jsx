@@ -88,6 +88,7 @@ export function RecordStock() {
     const parsedQty = parseInt(qtyRef.current?.value || 0)
     if (parsedQty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
     if (!by)    { setMsg({ type:'error', text:'Recorded by is required.' }); return }
+    if (date && date > todayLagos()) { setMsg({ type:'error', text:'Date cannot be in the future.' }); return }
 
     if (isSDP) {
       // Validate against sdp_stock
@@ -284,7 +285,7 @@ export function RecordStock() {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Date</label>
-                <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                <input type="date" value={date} max={todayLagos()} onChange={e => setDate(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
               </div>
             </div>
