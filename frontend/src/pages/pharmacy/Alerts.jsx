@@ -114,6 +114,17 @@ export function Alerts() {
     loadFacReqAlerts()
   }
 
+  // State admin dismisses a facility request that shouldn't be fulfilled. Same
+  // transition the requester's cancel uses — no stock moves.
+  async function rejectFacRequest(req) {
+    if (!window.confirm(`Reject the request for ${req.commodity_name || 'this commodity'} from ${req.receiving_facility_name || 'the facility'}? No transfer will be made.`)) return
+    try {
+      await api.transfers.cancel(req.id, { cancelled_by: store.user?.email || '' })
+    } catch { toast('Error rejecting request','red'); return }
+    toast('Request rejected','green')
+    loadFacReqAlerts()
+  }
+
   // Admin reviews a facility request and assigns a source facility to fulfil it.
   // Setting sending_facility_id hands the request off to that facility to dispatch.
   async function confirmAssignFacility(req) {
@@ -654,7 +665,10 @@ export function Alerts() {
                       {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
                     </div>
                     {store.isStateAdmin() && (
-                      <Button variant="primary" size="sm" onClick={()=>{ const open = assigningId===req.id; setAssigningId(open?null:req.id); setAssignFacState(''); setAssignFacLga(''); setAssignFacId(''); setAssignReviewedBy(''); setAssignQty(req.qty_requested ?? req.quantity ?? 1) }}>{assigningId===req.id ? 'Close' : 'Review & arrange'}</Button>
+                      <div className="flex gap-2">
+                        <Button variant="primary" size="sm" onClick={()=>{ const open = assigningId===req.id; setAssigningId(open?null:req.id); setAssignFacState(''); setAssignFacLga(''); setAssignFacId(''); setAssignReviewedBy(''); setAssignQty(req.qty_requested ?? req.quantity ?? 1) }}>{assigningId===req.id ? 'Close' : 'Review & arrange'}</Button>
+                        <Button variant="danger" size="sm" onClick={()=>rejectFacRequest(req)}>Reject</Button>
+                      </div>
                     )}
                   </div>
                   {store.isStateAdmin() && assigningId === req.id && (
