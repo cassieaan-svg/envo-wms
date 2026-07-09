@@ -52,6 +52,10 @@ export function Stock() {
     }
 
     await loadStock()
+    // Read the just-loaded stock FRESH from the store, not the render-time
+    // snapshot captured in `store` (still empty if the page rendered before the
+    // slow stock fetch resolved, which would build the whole list at 0).
+    const stockData = useAppStore.getState().stockData
 
     // Scope the AMC the same way the stock was loaded (single facility, LGA/state,
     // or all): single facility → its custom window; multi-facility/admin scope →
@@ -59,7 +63,7 @@ export function Stock() {
     // AMC matches the summed stock below.
     const { fid: amcFid, scopeIds } = store.getAdminStockScope()
     const amcWin = resolveAmcWindow(amcFid ? store.amcWindows[amcFid] : null)
-    const commIds = store.stockData.map(r => r.commodity_id)
+    const commIds = stockData.map(r => r.commodity_id)
     const amcMap = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
 
     // Fetch SDP stock data and aggregate by commodity
@@ -71,7 +75,7 @@ export function Stock() {
       })
     }
 
-    const grouped = groupStockByComm(store.stockData)
+    const grouped = groupStockByComm(stockData)
     const gMap = {}
     grouped.forEach(g => { gMap[g.commodity_id] = g })
 
