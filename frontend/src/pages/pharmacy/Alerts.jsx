@@ -157,7 +157,9 @@ export function Alerts() {
       date_field: 'initiated_at', from: histFrom, to: histTo, limit: 300,
       section: commoditySection || undefined,
     }).catch(() => [])
-    setReqHistory((data || []).filter(t => !t.notes?.includes('[Internal:') && !t.notes?.includes('[DSD:')))
+    // Exclude internal moves — Store→Dispensary and the DSD/SDP site dispatches
+    // (e.g. "[SDP: Main Lab]") — so only real facility→facility redistributions show.
+    setReqHistory((data || []).filter(t => !t.notes?.includes('[Internal:') && !t.notes?.includes('[DSD:') && !t.notes?.includes('[SDP:')))
     setLoadingHist(false)
   }
 
