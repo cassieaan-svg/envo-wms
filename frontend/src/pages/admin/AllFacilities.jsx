@@ -4,7 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
-import { EmptyState } from '../../components/ui/Loading'
+import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { useStock } from '../../hooks/useStock'
@@ -69,6 +69,7 @@ export function AllFacilities() {
   const [siteFilter, setSiteFilter] = useState('')   // breakdown card filter: '', low, out, over
   const [facSearch, setFacSearch]   = useState('')   // breakdown table: facility name search
   const [refreshKey, setRefreshKey] = useState(0)    // bumps to re-fetch site/consumption data
+  const [stockLoading, setStockLoading] = useState(true) // main store stock for this scope
   const { loadStock } = useStock()
 
   // Admin location scope (State → LGA → Facility via the shared FacilityPicker,
@@ -76,6 +77,17 @@ export function AllFacilities() {
   const { fid: scopeFid, scopeIds: scopeIdList } = store.getAdminStockScope()
   const scopeSet = scopeFid ? new Set([scopeFid]) : (scopeIdList ? new Set(scopeIdList) : null)
   const inScope  = fId => !scopeSet || scopeSet.has(fId)
+
+  // Load the store stock for this scope and gate the table until it's in. This
+  // page used to only read whatever stock was already loaded elsewhere, so landing
+  // here before the app-wide load finished (or after a scope change) rendered every
+  // commodity at 0. loadStock is deduped, so this rides an in-flight load.
+  useEffect(() => {
+    let active = true
+    setStockLoading(true)
+    Promise.resolve(loadStock()).finally(() => { if (active) setStockLoading(false) })
+    return () => { active = false }
+  }, [scopeFid, store.adminFilterState, store.adminFilterLGA])
 
   const agg = {}
   // Seed from every tracked commodity so zero-stock items and their
@@ -408,7 +420,7 @@ export function AllFacilities() {
             )}
           </div>
         </CardHeader>
-        {items.length===0 ? <EmptyState message="No stock data yet."/> : (
+        {stockLoading ? <LoadingState message="Loading stock…" /> : items.length===0 ? <EmptyState message="No stock data yet."/> : (
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
               {['Commodity','Category','Unit','Total stock','Reporting sites','Low stock sites','Out of stock sites','Overstock sites'].map(h=>(
