@@ -60,6 +60,7 @@ export function Transfers() {
   const isDispenser = accessLevel === 'facility' && facilityRole === 'dispenser'
   const isDSD       = accessLevel === 'facility' && facilityRole === 'dsd'
   const userDsdSiteName = useAppStore(s => s.dsdSiteName)
+  const userDsdType     = useAppStore(s => s.dsdType)   // this DSD login's model (falls back below)
   // Non-reactive store access for callbacks (avoids full-store subscription)
   const getStore = useAppStore.getState
   // Suppress the next pending reload triggered by restoreDispatchedStock's own DB update
@@ -638,7 +639,7 @@ export function Transfers() {
         commodity_id: l.commodity_id, commodity_name: comm?.name || '',
         quantity: parseInt(l.stock_required), qty_requested: parseInt(l.stock_required), status: 'pending_approval',
         initiated_by: dsdSentBy, initiated_at: new Date().toISOString(),
-        notes: `[DSD: ${effectiveSiteName}] type:${isDSD ? 'Community Pharmacy' : dsdType} balance:${l.stock_balance} required:${l.stock_required}${dsdNotes ? ' ' + dsdNotes : ''}`,
+        notes: `[DSD: ${effectiveSiteName}] type:${isDSD ? (userDsdType || 'Community Pharmacy') : dsdType} balance:${l.stock_balance} required:${l.stock_required}${dsdNotes ? ' ' + dsdNotes : ''}`,
         section: commoditySection,
       }
     })
@@ -1346,6 +1347,7 @@ export function Transfers() {
                           <select value={dsdType} onChange={e => setDsdType(e.target.value)} required className={inputCls}>
                             <option value="">Select DSD type…</option>
                             <option value="Community Pharmacy">Community Pharmacy</option>
+                            <option value="Fast Track">Fast Track</option>
                             <option value="Decentralized Hub & Spoke">Decentralized Hub &amp; Spoke</option>
                             <option value="Other">Other</option>
                           </select>

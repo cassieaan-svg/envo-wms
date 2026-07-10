@@ -64,6 +64,7 @@ export async function hydrateSession(user) {
   store.setFacilityRole(facilityRole)
   store.setSdpName(meta.sdp_name || null)
   store.setDsdSiteName(meta.dsd_site_name || null)
+  store.setDsdType(meta.dsd_type || null)
   store.setCommoditySection(commoditySection)
   store.setAdminState(meta.admin_state || null)
   store.setAdminLGA(meta.admin_lga || null)

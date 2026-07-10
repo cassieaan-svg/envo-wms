@@ -10,6 +10,7 @@ export const useAppStore = create((set, get) => ({
   facilityRole:     null,   // 'dispenser' | 'store_manager' | 'sdp' | 'dsd'
   sdpName:          null,
   dsdSiteName:      null,
+  dsdType:          null,   // DSD model for a dsd login: 'Community Pharmacy' | 'Fast Track' | …
   commoditySection: null,   // 'pharmacy' | 'lab' | null
   adminState:       null,
   adminLGA:         null,
@@ -41,6 +42,7 @@ export const useAppStore = create((set, get) => ({
   setFacilityRole:     (facilityRole)     => set({ facilityRole }),
   setSdpName:          (sdpName)          => set({ sdpName }),
   setDsdSiteName:      (dsdSiteName)      => set({ dsdSiteName }),
+  setDsdType:          (dsdType)          => set({ dsdType }),
   setCommoditySection: (commoditySection) => set({ commoditySection }),
   setAdminState:       (adminState)       => set({ adminState }),
   setAdminLGA:         (adminLGA)         => set({ adminLGA }),
@@ -158,7 +160,7 @@ export const useAppStore = create((set, get) => ({
                     : s.commoditySection === 'lab'      ? 'Lab' : ''
       const role    = s.facilityRole === 'store_manager' ? 'Store Manager'
                     : s.facilityRole === 'sdp'           ? 'Service Delivery Point'
-                    : s.facilityRole === 'dsd'           ? 'Community Pharmacy / DSD'
+                    : s.facilityRole === 'dsd'           ? 'DSD'
                     : 'Dispenser'
       return [section, role].filter(Boolean).join(' ')
     }
@@ -166,7 +168,7 @@ export const useAppStore = create((set, get) => ({
   },
 
   reset: () => set({
-    user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, commoditySection:null,
+    user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, dsdType:null, commoditySection:null,
     adminState:null, adminLGA:null, adminCluster:null, currentFacility:null,
     adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
     allFacilities:[], allCommodities:[], stockData:[], dsdFacilities:[], amcWindows:{},
