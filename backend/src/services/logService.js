@@ -15,6 +15,29 @@ function dayBounds(date) {
   return [`${date}T00:00:00`, `${date}T23:59:59`]
 }
 
+// Category → section map (mirrors the frontend's SECTION_CATEGORIES). The section
+// is deterministically implied by the commodity, so we enforce it server-side:
+// if a caller omits `section` on a log write, derive it from the commodity's
+// category. This guarantees every log row is section-tagged regardless of which
+// page recorded it — a store manager's section-filtered Activity Log then never
+// silently drops site (SDP/DSD) records that forgot to pass section.
+const SECTION_BY_CATEGORY = {
+  'Pharmacy drugs': 'pharmacy',
+  'Medical supplies': 'pharmacy',
+  'RTKs': 'lab',
+  'Lab reagents': 'lab',
+  'Lab consumables': 'lab',
+}
+
+// Resolve a log row's section: use the caller-provided value, else derive it from
+// the commodity's category. Runs inside the caller's transaction (exec). Returns
+// null only when neither is available (unmapped/blank category).
+async function resolveSection(section, commodityId, exec) {
+  if (section) return section
+  const { rows } = await exec('select category from commodities where id = $1', [commodityId])
+  return SECTION_BY_CATEGORY[rows[0]?.category] || null
+}
+
 // Shared facility/commodity/date-range/section filters for the log history
 // queries. Mutates `conds`/`params` in place (params is 1-based for $n). Covers
 // both the per-facility per-day "recent entries" view and the multi-facility
@@ -103,13 +126,14 @@ export class LogService {
 
     // Log insert + stock decrement commit (or roll back) together.
     return await withTransaction(async exec => {
+      const resolvedSection = await resolveSection(section, commodity_id, exec)
       const { rows } = await exec(
         `insert into dispense_log
            (facility_id, commodity_id, quantity, dispensed_by, dispensed_at, notes, section)
          values ($1, $2, $3, $4, $5, $6, $7)
          returning *`,
         [facility_id, commodity_id, qty, dispensed_by,
-         dispensed_at || new Date().toISOString(), notes || '', section || null]
+         dispensed_at || new Date().toISOString(), notes || '', resolvedSection]
       )
       const dispenseLog = rows[0] || null
 
@@ -214,6 +238,7 @@ export class LogService {
 
     // Log insert + stock increment commit (or roll back) together.
     return await withTransaction(async exec => {
+      const resolvedSection = await resolveSection(section, commodity_id, exec)
       const { rows } = await exec(
         `insert into intake_log
            (facility_id, commodity_id, quantity, supplier_source, batch_number, expiry_date,
@@ -222,7 +247,7 @@ export class LogService {
          returning *`,
         [facility_id, commodity_id, qty, supplier_source || '', batch_number || '',
          expiry_date || null, delivery_note_ref || '', condition_on_arrival || 'Good',
-         received_by, received_at || new Date().toISOString(), notes || '', section || null]
+         received_by, received_at || new Date().toISOString(), notes || '', resolvedSection]
       )
       const intakeLog = rows[0] || null
 
@@ -292,6 +317,7 @@ export class LogService {
 
     // Log insert + stock adjustment commit (or roll back) together.
     return await withTransaction(async exec => {
+      const resolvedSection = await resolveSection(section, commodity_id, exec)
       const { rows } = await exec(
         `insert into stock_adjustment_log
            (facility_id, commodity_id, quantity, adjustment_type, reason, adjusted_by,
@@ -300,7 +326,7 @@ export class LogService {
          returning *`,
         [facility_id, commodity_id, qty, adjustment_type, reason, adjusted_by,
          reference_number || '', notes || '', adjusted_at || new Date().toISOString(),
-         expiry_date || null, batch_number || '', section || null]
+         expiry_date || null, batch_number || '', resolvedSection]
       )
       const adjustmentLog = rows[0] || null
 

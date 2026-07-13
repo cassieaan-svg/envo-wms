@@ -74,6 +74,7 @@ export function Dispense() {
         dispensed_at:  date ? new Date(date).toISOString() : new Date().toISOString(),
         notes:         `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`,
         dsd_site_name: dsdSiteName,
+        section:       store.commoditySection,
       })
     } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
     setDsdStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)

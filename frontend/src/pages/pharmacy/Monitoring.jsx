@@ -8,6 +8,17 @@ import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { fmtDate, capExpiryBatchesToStockByFacility } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
+// Minimal CSV export (mirrors the AllFacilities helper): download rows as a file.
+function exportCsv(filename, headers, rows) {
+  const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+  const csv = [headers, ...rows].map(r => r.map(esc).join(',')).join('\r\n')
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
 export function Monitoring() {
   const store = useAppStore()
   const isAdm = store.isAdmin()
@@ -426,7 +437,16 @@ export function Monitoring() {
                 <>
                   <CardHeader>
                     <CardTitle>{commDrill.name} — facilities consuming this commodity</CardTitle>
-                    <button onClick={()=>setCommDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
+                    <div className="flex gap-2">
+                      <button onClick={()=>{
+                        const base=(commDrill.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
+                        const headers=['#','Facility','LGA','Units Consumed','Unit','Share %']
+                        const rows=byFac.map((f,i)=>[i+1,f.name,f.lga,f.qty,commDrill.unit||'',Math.round((f.qty/cTotal)*100)||0])
+                        exportCsv(`${base}_facilities-consuming.csv`, headers, rows)
+                      }} disabled={byFac.length===0}
+                        className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">↓ Download CSV</button>
+                      <button onClick={()=>setCommDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
+                    </div>
                   </CardHeader>
                   {byFac.length===0 ? <EmptyState message="No facility-level data."/> : (
                     <div className="table-wrap"><table className="w-full text-sm">

@@ -42,15 +42,18 @@ import { Dispense  as SdpDispense  } from './pages/sdp/Dispense'
 import { Transfers as SdpTransfers } from './pages/sdp/Transfers'
 import { Stock     as SdpStock     } from './pages/sdp/Stock'
 
+// Shared read-only activity log for SDP/DSD site logins
+import { SiteActivityLog } from './components/SiteActivityLog'
+
 // CRRF pages
 import { CRRF as PharmCRRF } from './pages/pharmacy/CRRF'
 import { CRRF as LabCRRF   } from './pages/lab/CRRF'
 
 const dsdMap = {
-  dispense: DsdDispense, transfers: DsdTransfers, stock: DsdStock,
+  dispense: DsdDispense, transfers: DsdTransfers, stock: DsdStock, log: SiteActivityLog,
 }
 const sdpMap = {
-  dispense: SdpDispense, transfers: SdpTransfers, stock: SdpStock,
+  dispense: SdpDispense, transfers: SdpTransfers, stock: SdpStock, log: SiteActivityLog,
 }
 const pharmMap = {
   dashboard: PharmDashboard, stock: PharmStock, dispense: PharmDispense,
