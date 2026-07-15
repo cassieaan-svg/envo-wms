@@ -216,7 +216,12 @@ export class TransferService {
 
   /**
    * Receiver accepts an in-transit external transfer: credit receiver store
-   * stock, write an intake_log entry, and mark accepted.
+   * stock and mark accepted. NOTE: we deliberately do NOT also write an
+   * intake_log row — the transfer_log entry already records this receipt, and an
+   * intake row would double-count it (shown as a separate "Intake" in the
+   * activity feed, and counted twice in CRRF: once as Quantity Received and
+   * again as the external-transfer Adj+). The redistribution-in is reflected via
+   * the transfer itself (CRRF counts external transfers as Adj+).
    */
   static async accept(transferId, data) {
     const { received_by } = data
@@ -226,15 +231,6 @@ export class TransferService {
 
     return withTransaction(async exec => {
       await this._creditStock(exec, transfer.receiving_facility_id, transfer.commodity_id, transfer.quantity, 'store', transfer.section)
-
-      await exec(
-        `insert into intake_log
-           (facility_id, commodity_id, quantity, supplier_source, condition_on_arrival, received_by, received_at, notes, section)
-         values ($1,$2,$3,$4,'Good',$5, now(), $6, $7)`,
-        [transfer.receiving_facility_id, transfer.commodity_id, transfer.quantity,
-         transfer.sending_facility_name, received_by,
-         `Facility transfer in from ${transfer.sending_facility_name || 'Unknown'}`, transfer.section]
-      )
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2

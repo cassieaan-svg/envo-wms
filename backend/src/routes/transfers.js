@@ -171,7 +171,7 @@ router.patch('/:id/assign', async (req, res) => {
   }
 })
 
-/** PATCH /api/transfers/:id/accept - receiver accepts (credits receiver store + intake_log) */
+/** PATCH /api/transfers/:id/accept - receiver accepts (credits receiver store; no intake_log — the transfer already records the receipt) */
 router.patch('/:id/accept', async (req, res) => {
   try {
     if (!req.body?.received_by) {

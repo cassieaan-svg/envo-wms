@@ -175,7 +175,7 @@ export function Log() {
                 details = r.dispensed_by ? `By: ${r.dispensed_by}` : '—'
               } else if (r._type==='intake') {
                 qty = <span className="font-mono text-sm text-green-400">+{r.quantity} {r.commodities?.unit||''}</span>
-                details = r.source_type||'—'
+                details = [r.supplier_source, r.notes].filter(Boolean).join(' · ') || '—'
               } else if (r._type==='transfer') {
                 // Direction is relative to the viewer's facility; admins span
                 // both sides, so show a neutral quantity and the route + status.
