@@ -190,9 +190,7 @@ export function Dashboard() {
             <button onClick={doCsv} disabled={!stockRows.length}
               className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Download CSV</button>
             <button onClick={doPdf} disabled={!stockRows.length}
-              className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Download PDF</button>
-            <button onClick={doPdf} disabled={!stockRows.length}
-              className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Print</button>
+              className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Print / Save as PDF</button>
           </div>
         </div>
       </Card>

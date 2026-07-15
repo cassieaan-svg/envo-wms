@@ -447,8 +447,7 @@ export function Monitoring() {
                     <CardTitle>{commDrill.name} — facilities consuming this commodity</CardTitle>
                     <div className="flex gap-2 flex-wrap">
                       <button onClick={()=>exportCsv(`${base}_facilities-consuming.csv`, expHeaders, expRows())} disabled={!shownRows.length} className={btnCls}>Download CSV</button>
-                      <button onClick={()=>exportPdf(`${commDrill.name} — facilities consuming`, expSub, expHeaders, expRows(), new Set([3,5]))} disabled={!shownRows.length} className={btnCls}>Download PDF</button>
-                      <button onClick={()=>exportPdf(`${commDrill.name} — facilities consuming`, expSub, expHeaders, expRows(), new Set([3,5]))} disabled={!shownRows.length} className={btnCls}>Print</button>
+                      <button onClick={()=>exportPdf(`${commDrill.name} — facilities consuming`, expSub, expHeaders, expRows(), new Set([3,5]))} disabled={!shownRows.length} className={btnCls}>Print / Save as PDF</button>
                       <button onClick={()=>setShowNonConsumers(v=>!v)} disabled={nonConsumers.length===0} className={btnCls}>
                         {showNonConsumers ? 'Hide non-consuming' : `Show ${nonConsumers.length} with no consumption`}
                       </button>
