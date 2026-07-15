@@ -90,7 +90,7 @@ export function Reports({ embedded = false } = {}) {
   async function loadWeekly() {
     setLoading(true)
     const rows = await fetchReportRows({ category, from: wFrom, to: wTo, fid, scopeIds, commIds })
-    setSummary({ rows, label: `${wFrom} → ${wTo}` })
+    setSummary({ rows, label: `${wFrom} to ${wTo}` })
     setLoading(false)
   }
 
@@ -106,7 +106,9 @@ export function Reports({ embedded = false } = {}) {
 
   // Download helper.
   function downloadCsv(csv, name) {
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    // Prepend a UTF-8 BOM so Excel decodes special characters (—, →, accents)
+    // correctly instead of showing mojibake like "â€"".
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = name
     a.click()
@@ -116,7 +118,7 @@ export function Reports({ embedded = false } = {}) {
   async function exportCSV() {
     if (!summary?.rows) { toast('Load data first','red'); return }
     const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r) && notInternalForAdmin(r))
-    const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report — ${summary.label}`
+    const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report, ${summary.label}`
     const commLookup = {}
     store.allCommodities.forEach(c => { commLookup[c.id] = c.name })
 

@@ -57,6 +57,7 @@ const normalizeIntake = row => ({
   lga: row.facilities?.lga || '',
   status: row.status || '',
   notes: row.notes || '',
+  supplier: row.supplier_source || '',
 })
 
 const normalizeAdjustment = row => ({
@@ -246,18 +247,18 @@ export function buildActivityCsv(rows, category, title, stockMap = {}) {
 
   if (category === 'intake') {
     let csv = `${label}\r\n`
-    csv += `S/No,Date,Facility,LGA,Category,Commodity,Unit,Quantity Received\r\n`
+    csv += `S/No,Date,Facility,LGA,Category,Commodity,Unit,Quantity Received,Supplier\r\n`
     rows.forEach((row, i) => {
-      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.lga || ''}","${row.category}","${row.commodity}","${row.unit}",${row.quantity}\r\n`
+      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.lga || ''}","${row.category}","${row.commodity}","${row.unit}",${row.quantity},"${(row.supplier || '').replace(/"/g, '""')}"\r\n`
     })
     return csv
   }
 
   if (category === 'adjustment') {
     let csv = `${label}\r\n`
-    csv += `S/No,Date,Facility,LGA,Category,Commodity,Unit,Quantity Received,Reason\r\n`
+    csv += `S/No,Date,Facility,LGA,Category,Commodity,Unit,Quantity Adjusted,Reason,Notes\r\n`
     rows.forEach((row, i) => {
-      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.lga || ''}","${row.category}","${row.commodity}","${row.unit}",${row.quantity},"${(row.reason || '').replace(/"/g, '""')}"\r\n`
+      csv += `${i + 1},"${(row.date || '').slice(0, 10)}","${row.facility}","${row.lga || ''}","${row.category}","${row.commodity}","${row.unit}",${row.quantity},"${(row.reason || '').replace(/"/g, '""')}","${(row.notes || '').replace(/"/g, '""')}"\r\n`
     })
     return csv
   }
@@ -363,44 +364,98 @@ export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {
     }
   })
 
+  // Wide pivot: one row per facility (with LGA), seven columns per commodity
+  // (the CRRF columns), plus a per-commodity totals row.
+  const commodities = new Set()
+  Object.values(agg).forEach(byComm => Object.keys(byComm).forEach(c => commodities.add(c)))
+  const comms = [...commodities].sort((a, b) => a.localeCompare(b))
+  const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+  const SUB = ['Beginning Balance', 'Quantity Received', 'Quantity Consumed', 'Adj Positive (+)', 'Adj Negative (-)', 'Losses', 'Ending Balance']
+
+  const header = ['LGA', 'Facility']
+  comms.forEach(c => SUB.forEach(s => header.push(`${c}, ${s}`)))
+
   let csv = `${title}\r\n`
+  csv += header.map(esc).join(',') + '\r\n'
+
   const facs = Object.keys(agg).sort((a, b) => (lgaByName[a] || '').localeCompare(lgaByName[b] || '') || a.localeCompare(b))
+  const totals = {}
+  comms.forEach(c => { totals[c] = { B: 0, received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0, E: 0 } })
+
   facs.forEach(fac => {
-    csv += `\r\n"${fac}${lgaByName[fac] ? ' — ' + lgaByName[fac] : ''}"\r\n`
-    csv += `S/No,Drugs,Basic Unit,Beginning Balance,Quantity Received,Quantity Consumed,Adj Positive (+),Adj Negative (-),Losses,Ending Balance\r\n`
+    const cells = [lgaByName[fac] || '', fac]
     const stock = facStock[fac] || {}
-    const items = Object.values(agg[fac]).sort((a, b) => a.category.localeCompare(b.category) || a.commodity.localeCompare(b.commodity))
-    items.forEach((r, i) => {
-      const E = stock[r.commodity] ?? ''
-      const A = E !== '' ? E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses : ''
-      csv += `${i + 1},"${r.commodity}","${r.unit}",${A},${r.received},${r.dispensed},${r.adjPos},${r.adjNeg},${r.losses},${E}\r\n`
+    comms.forEach(c => {
+      const r = agg[fac][c]
+      if (!r) { cells.push('', '', '', '', '', '', ''); return }
+      const E = stock[c]
+      const hasE = E != null
+      const B = hasE ? E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses : ''
+      cells.push(B, r.received, r.dispensed, r.adjPos, r.adjNeg, r.losses, hasE ? E : '')
+      totals[c].received += r.received; totals[c].dispensed += r.dispensed
+      totals[c].adjPos += r.adjPos; totals[c].adjNeg += r.adjNeg; totals[c].losses += r.losses
+      if (hasE) { totals[c].B += B; totals[c].E += E }
     })
+    csv += cells.map(esc).join(',') + '\r\n'
   })
+
+  const totalRow = ['', 'TOTAL']
+  comms.forEach(c => { const t = totals[c]; totalRow.push(t.B, t.received, t.dispensed, t.adjPos, t.adjNeg, t.losses, t.E) })
+  csv += totalRow.map(esc).join(',') + '\r\n'
+
   return csv
 }
 
 // Per-facility consumption summary for a multi-facility admin export.
+// Wide pivot (mirrors the DHIS2 SOH-dashboard shape): one row per facility with
+// its LGA, and THREE columns per commodity — "<name> — Beginning Balance",
+// "<name> — Qty Consumed", "<name> — Ending Balance" — plus a per-commodity
+// totals row at the bottom. Ending = current SOH (facStock); Beginning =
+// Ending + Consumed (assumes no other movement in the window, matching the
+// prior report's logic). Blank cell = the facility consumed none of that
+// commodity in the period.
 export function buildConsumptionByFacilityCsv(rows, title, facStock = {}, lgaByName = {}) {
-  const agg = {}   // facilityName → commodityName → { category, unit, consumed }
+  const agg = {}           // facility → commodity → consumed
+  const commSet = new Set()
   rows.forEach(row => {
     if (row.activity !== 'Consumption' || !row.facility) return
     if (!agg[row.facility]) agg[row.facility] = {}
-    if (!agg[row.facility][row.commodity]) agg[row.facility][row.commodity] = { commodity: row.commodity, category: row.category, unit: row.unit, consumed: 0 }
-    agg[row.facility][row.commodity].consumed += row.quantity
+    agg[row.facility][row.commodity] = (agg[row.facility][row.commodity] || 0) + row.quantity
+    commSet.add(row.commodity)
   })
+  const commodities = [...commSet].sort((a, b) => a.localeCompare(b))
+  const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+
+  const header = ['LGA', 'Facility']
+  commodities.forEach(c => header.push(`${c}, Beginning Balance`, `${c}, Qty Consumed`, `${c}, Ending Balance`))
 
   let csv = `${title}\r\n`
-  const facs = Object.keys(agg).sort((a, b) => (lgaByName[a] || '').localeCompare(lgaByName[b] || '') || a.localeCompare(b))
+  csv += header.map(esc).join(',') + '\r\n'
+
+  const facs = Object.keys(agg).sort((a, b) =>
+    (lgaByName[a] || '').localeCompare(lgaByName[b] || '') || a.localeCompare(b))
+
+  const totals = {}
+  commodities.forEach(c => { totals[c] = { begin: 0, consumed: 0, ending: 0 } })
+
   facs.forEach(fac => {
-    csv += `\r\n"${fac}${lgaByName[fac] ? ' — ' + lgaByName[fac] : ''}"\r\n`
-    csv += `S/No,Commodity,Category,Unit,Beginning Balance,Quantity Consumed,Ending Balance\r\n`
+    const cells = [lgaByName[fac] || '', fac]
     const stock = facStock[fac] || {}
-    const items = Object.values(agg[fac]).sort((a, b) => a.commodity.localeCompare(b.commodity))
-    items.forEach((r, i) => {
-      const ending = stock[r.commodity] ?? ''
-      const beginning = ending !== '' ? ending + r.consumed : ''
-      csv += `${i + 1},"${r.commodity}","${r.category}","${r.unit}",${beginning},${r.consumed},${ending}\r\n`
+    commodities.forEach(c => {
+      const consumed = agg[fac][c]
+      if (consumed == null) { cells.push('', '', ''); return }
+      const ending = stock[c]
+      const hasEnd = ending != null
+      cells.push(hasEnd ? ending + consumed : '', consumed, hasEnd ? ending : '')
+      totals[c].consumed += consumed
+      if (hasEnd) { totals[c].begin += ending + consumed; totals[c].ending += ending }
     })
+    csv += cells.map(esc).join(',') + '\r\n'
   })
+
+  const totalRow = ['', 'TOTAL']
+  commodities.forEach(c => totalRow.push(totals[c].begin, totals[c].consumed, totals[c].ending))
+  csv += totalRow.map(esc).join(',') + '\r\n'
+
   return csv
 }
