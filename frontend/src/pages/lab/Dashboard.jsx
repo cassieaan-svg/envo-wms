@@ -9,6 +9,9 @@ import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
+import { exportCsv, exportPdf } from '../../utils/download'
+
+const STATUS_LABEL = { ok: 'Optimal', low: 'Low stock', out: 'Out of stock', over: 'Overstock' }
 
 export function Dashboard() {
   const store            = useAppStore()
@@ -106,6 +109,27 @@ export function Dashboard() {
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
   })
 
+  // Export mirrors the filtered table (WYSIWYG). Active filters are recorded in
+  // the file name + PDF subtitle so each download is self-documenting.
+  const activeFilters = [
+    catFilter,
+    stsFilter && (STATUS_LABEL[stsFilter] || stsFilter),
+    search && `search "${search}"`,
+  ].filter(Boolean).join(', ')
+  const exportHeaders = ['Category', 'Commodity', 'Unit', 'Store SOH', 'SDP SOH', 'Total SOH', 'AMC', 'MOS (months)', 'Status']
+  const exportData = stockRows.map(r => [
+    r.commodities?.category || '', r.commodities?.name || '', r.commodities?.unit || '',
+    r.storeQty || 0, r.sdpQty || 0, r.quantity || 0,
+    r.amc || 0, r.mos != null ? Number(r.mos).toFixed(1) : '', STATUS_LABEL[r.status] || r.status || '',
+  ])
+  const exportRight = new Set([3, 4, 5, 6, 7])
+  const facLabel = store.currentFacility?.name || 'All facilities in scope'
+  const exportSubtitle = activeFilters ? `${facLabel} — filtered: ${activeFilters}` : facLabel
+  const filterSlug = activeFilters ? '-' + activeFilters.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') : ''
+  const exportBase = `stock-dashboard${filterSlug}-${new Date().toISOString().slice(0, 10)}`
+  const doCsv = () => exportCsv(`${exportBase}.csv`, exportHeaders, exportData)
+  const doPdf = () => exportPdf('Stock Dashboard', exportSubtitle, exportHeaders, exportData, exportRight)
+
   return (
     <div>
       <div className="mb-6">
@@ -143,6 +167,14 @@ export function Dashboard() {
             <option value="">All categories</option>
             {availableCats.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
+          <div className="flex gap-2 ml-auto">
+            <button onClick={doCsv} disabled={!stockRows.length}
+              className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Download CSV</button>
+            <button onClick={doPdf} disabled={!stockRows.length}
+              className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Download PDF</button>
+            <button onClick={doPdf} disabled={!stockRows.length}
+              className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Print</button>
+          </div>
         </div>
       </Card>
 
