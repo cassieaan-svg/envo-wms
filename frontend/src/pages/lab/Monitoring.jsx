@@ -7,17 +7,7 @@ import { CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DailyTrendChart } from '../../components/DailyTrendChart'
-
-// Minimal CSV export (mirrors the AllFacilities helper): download rows as a file.
-function exportCsv(filename, headers, rows) {
-  const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-  const csv = [headers, ...rows].map(r => r.map(esc).join(',')).join('\r\n')
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(a.href)
-}
+import { exportCsv, exportPdf } from '../../utils/download'
 import { fmtDate, capExpiryBatchesToStockByFacility } from '../../utils/helpers'
 
 export function Monitoring() {
@@ -34,6 +24,7 @@ export function Monitoring() {
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
   const [lgaDrill, setLgaDrill] = useState(null)  // LGA name drilled into within a by-LGA breakdown
   const [catHover, setCatHover] = useState(null)  // category hovered in the donut (highlight only)
+  const [showNonConsumers, setShowNonConsumers] = useState(false)  // commodity drill: append 0-consumption facilities
   const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
   const [expBatchComm, setExpBatchComm] = useState(null)  // Expiring-batches table: commodity drilled into {id,name,cat}
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
@@ -417,31 +408,66 @@ export function Monitoring() {
               const commRows = consData.rows.filter(r=>r.commodity_id===commDrill.id)
               const cTotal = commRows.reduce((s,r)=>s+r.quantity,0)||1
               const byFac = aggRows(commRows, r=>r.facility_id).map(([id,qty])=>({id,qty,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
+              // Facilities in the current scope that utilized none of this commodity.
+              const consumedIds = new Set(byFac.map(f=>f.id))
+              const inScopeIds = (scopeIds && scopeIds.length) ? scopeIds : store.allFacilities.map(f=>f.id)
+              const nonConsumers = inScopeIds
+                .filter(id => !consumedIds.has(id) && facMeta[id])
+                .map(id => ({ id, qty:0, name: facMeta[id]?.name||'—', lga: facMeta[id]?.lga||'—' }))
+                .sort((a,b) => (a.lga||'').localeCompare(b.lga||'') || a.name.localeCompare(b.name))
+              const shownRows = showNonConsumers ? [...byFac, ...nonConsumers] : byFac
+              const base = (commDrill.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
+              const expHeaders = ['#','Facility','LGA','Units Utilized','Unit','Share %']
+              const expRows = () => shownRows.map((f,i)=>[i+1,f.name,f.lga,f.qty,commDrill.unit||'',Math.round((f.qty/cTotal)*100)||0])
+              const expSub = showNonConsumers ? 'including facilities with no utilization' : null
+              const btnCls = "text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50"
               return (
                 <>
                   <CardHeader>
                     <CardTitle>{commDrill.name} — facilities utilizing this commodity</CardTitle>
-                    <button onClick={()=>setCommDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
+                    <div className="flex gap-2 flex-wrap">
+                      <button onClick={()=>exportCsv(`${base}_facilities-utilizing.csv`, expHeaders, expRows())} disabled={!shownRows.length} className={btnCls}>Download CSV</button>
+                      <button onClick={()=>exportPdf(`${commDrill.name} — facilities utilizing`, expSub, expHeaders, expRows(), new Set([3,5]))} disabled={!shownRows.length} className={btnCls}>Download PDF</button>
+                      <button onClick={()=>exportPdf(`${commDrill.name} — facilities utilizing`, expSub, expHeaders, expRows(), new Set([3,5]))} disabled={!shownRows.length} className={btnCls}>Print</button>
+                      <button onClick={()=>setShowNonConsumers(v=>!v)} disabled={nonConsumers.length===0} className={btnCls}>
+                        {showNonConsumers ? 'Hide non-utilizing' : `Show ${nonConsumers.length} with no utilization`}
+                      </button>
+                      <button onClick={()=>{setCommDrill(null);setShowNonConsumers(false)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
+                    </div>
                   </CardHeader>
-                  {byFac.length===0 ? <EmptyState message="No facility-level data."/> : (
+                  {byFac.length===0 && !showNonConsumers ? <EmptyState message="No facility-level data."/> : (
                     <div className="table-wrap"><table className="w-full text-sm">
                       <thead><tr className="border-b border-white/8 bg-white/2">
                         {['#','Facility','LGA','Units Utilized','Share'].map(h=>(
                           <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                         ))}
                       </tr></thead>
-                      <tbody>{byFac.map((f,i)=>{
-                        const pct=Math.round((f.qty/cTotal)*100)||0
-                        return (
+                      <tbody>
+                        {byFac.map((f,i)=>{
+                          const pct=Math.round((f.qty/cTotal)*100)||0
+                          return (
+                            <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
+                              <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                              <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
+                              <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
+                              <td className="px-4 py-3 font-mono text-sm text-green-400">{f.qty.toLocaleString()} {commDrill.unit||''}</td>
+                              <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
+                            </tr>
+                          )
+                        })}
+                        {showNonConsumers && nonConsumers.length>0 && (
+                          <tr className="bg-white/2"><td colSpan={5} className="px-4 py-2 text-xs text-gray-500 uppercase tracking-wider">Facilities with no utilization ({nonConsumers.length})</td></tr>
+                        )}
+                        {showNonConsumers && nonConsumers.map((f,i)=>(
                           <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
-                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
-                            <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{byFac.length+i+1}</td>
+                            <td className="px-4 py-3 font-medium text-gray-400">{f.name}</td>
                             <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
-                            <td className="px-4 py-3 font-mono text-sm text-green-400">{f.qty.toLocaleString()} {commDrill.unit||''}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
+                            <td className="px-4 py-3 font-mono text-sm text-gray-600">0 {commDrill.unit||''}</td>
+                            <td className="px-4 py-3 text-xs text-gray-600">0%</td>
                           </tr>
-                        )
-                      })}</tbody>
+                        ))}
+                      </tbody>
                     </table></div>
                   )}
                 </>
