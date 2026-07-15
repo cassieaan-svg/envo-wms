@@ -7,6 +7,7 @@ import { CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { fmtDate, capExpiryBatchesToStockByFacility } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
+import { DailyTrendChart } from '../../components/DailyTrendChart'
 
 // Minimal CSV export (mirrors the AllFacilities helper): download rows as a file.
 function exportCsv(filename, headers, rows) {
@@ -31,6 +32,8 @@ export function Monitoring() {
   const [catDrill, setCatDrill]   = useState(null)  // category drilled into
   const [commDrill, setCommDrill] = useState(null)  // { id, name, unit } drilled into
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
+  const [lgaDrill, setLgaDrill] = useState(null)  // LGA name drilled into within a by-LGA breakdown
+  const [catHover, setCatHover] = useState(null)  // category hovered in the donut (highlight only)
   const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
   const [expBatchComm, setExpBatchComm] = useState(null)  // Expiring-batches table: commodity drilled into {id,name,cat}
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
@@ -55,7 +58,7 @@ export function Monitoring() {
 
   async function loadConsumption() {
     setLoading(true)
-    setCatDrill(null); setCommDrill(null); setMetricDrill(null)
+    setCatDrill(null); setCommDrill(null); setMetricDrill(null); setLgaDrill(null)
     const start = new Date(); start.setDate(start.getDate()-period)
     const scopeParams = store.getAdminScopeParams()
 
@@ -177,39 +180,50 @@ export function Monitoring() {
     return (
       <>
         <CardBody>
-          <div className="text-xs text-gray-500 uppercase tracking-widest mb-2">By LGA</div>
+          <div className="text-xs text-gray-500 uppercase tracking-widest mb-2">By LGA <span className="normal-case tracking-normal text-gray-600">— click an LGA to see its facilities</span></div>
           <div className="space-y-2">
             {byLga.map(([lga,v])=>{
               const pct=Math.round((v/total)*100)||0
+              const active=lgaDrill===lga
               return (
-                <div key={lga}>
-                  <div className="flex justify-between mb-1"><span className="text-sm text-gray-300">{lga}</span><span className="text-xs font-mono text-gray-500">{pct}% · {v.toLocaleString()}</span></div>
-                  <div className="h-1.5 bg-white/5 rounded-full"><div style={{width:`${pct}%`,height:'100%',background:'#3fb950',borderRadius:'9999px'}}/></div>
-                </div>
+                <button key={lga} onClick={()=>setLgaDrill(active?null:lga)} className="w-full text-left group">
+                  <div className="flex justify-between mb-1">
+                    <span className={`text-sm ${active?'text-green-400':'text-gray-300 group-hover:text-gray-100'}`}>{lga} ›</span>
+                    <span className="text-xs font-mono text-gray-500">{pct}% · {v.toLocaleString()}</span>
+                  </div>
+                  <div className="h-1.5 bg-white/5 rounded-full"><div style={{width:`${pct}%`,height:'100%',background:active?'#58d364':'#3fb950',borderRadius:'9999px'}}/></div>
+                </button>
               )
             })}
           </div>
         </CardBody>
-        <div className="px-5 pt-1 pb-2 text-xs text-gray-500 uppercase tracking-widest">By facility</div>
-        <div className="table-wrap"><table className="w-full text-sm">
-          <thead><tr className="border-b border-white/8 bg-white/2">
-            {['#','Facility','LGA',unitsLabel,'Share'].map(h=>(
-              <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-            ))}
-          </tr></thead>
-          <tbody>{byFac.map((f,i)=>{
-            const pct=Math.round((f.v/total)*100)||0
-            return (
-              <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
-                <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
-                <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
-                <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
-                <td className="px-4 py-3 font-mono text-sm text-green-400">{f.v.toLocaleString()}</td>
-                <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
-              </tr>
-            )
-          })}</tbody>
-        </table></div>
+        <div className="px-5 pt-1 pb-2 text-xs text-gray-500 uppercase tracking-widest flex items-center justify-between">
+          <span>{lgaDrill ? `Facilities in ${lgaDrill}` : 'By facility'}</span>
+          {lgaDrill && <button onClick={()=>setLgaDrill(null)} className="normal-case tracking-normal text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">← All LGAs</button>}
+        </div>
+        {!lgaDrill ? (
+          <div className="px-5 pb-5 text-sm text-gray-500">Select an LGA above to see its facilities.</div>
+        ) : (
+          <div className="table-wrap"><table className="w-full text-sm">
+            <thead><tr className="border-b border-white/8 bg-white/2">
+              {['#','Facility','LGA',unitsLabel,'Share'].map(h=>(
+                <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>{byFac.filter(f=>f.lga===lgaDrill).map((f,i)=>{
+              const pct=Math.round((f.v/total)*100)||0
+              return (
+                <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
+                  <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                  <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
+                  <td className="px-4 py-3 font-mono text-sm text-green-400">{f.v.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
+                </tr>
+              )
+            })}</tbody>
+          </table></div>
+        )}
       </>
     )
   }
@@ -305,23 +319,23 @@ export function Monitoring() {
         <>
           <MetricGrid>
             <Metric label={`Units consumed (${period}d)`} value={consData.total.toLocaleString()} color="green"/>
-            <Metric label="Commodities moved" value={consData.byComm.length} color="blue"
+            <Metric label="Commodities consumed" value={consData.byComm.length} color="blue"
               onClick={isAdm?()=>setMetricDrill(metricDrill==='commodities'?null:'commodities'):undefined} active={metricDrill==='commodities'}/>
-            <Metric label="Transactions" value={consData.rows.length.toLocaleString()}
-              onClick={isAdm?()=>setMetricDrill(metricDrill==='transactions'?null:'transactions'):undefined} active={metricDrill==='transactions'}/>
+            <Metric label="Consumption records" value={consData.rows.length.toLocaleString()}
+              onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='transactions'?null:'transactions')}:undefined} active={metricDrill==='transactions'}/>
           </MetricGrid>
 
           {isAdm && metricDrill && (
             <Card>
               <CardHeader>
-                <CardTitle>{metricDrill==='transactions' ? 'Transactions — by LGA & facility' : 'Commodities moved — full list'}</CardTitle>
-                <button onClick={()=>setMetricDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
+                <CardTitle>{metricDrill==='transactions' ? 'Consumption records — by LGA & facility' : 'Commodities consumed — full list'}</CardTitle>
+                <button onClick={()=>{setMetricDrill(null);setLgaDrill(null)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
               </CardHeader>
               {metricDrill==='commodities' ? (
-                consData.byComm.length===0 ? <EmptyState message="No commodities moved in this period."/> : (
+                consData.byComm.length===0 ? <EmptyState message="No commodities consumed in this period."/> : (
                   <div className="table-wrap"><table className="w-full text-sm">
                     <thead><tr className="border-b border-white/8 bg-white/2">
-                      {['#','Commodity','Category','Units Consumed','Transactions','Share'].map(h=>(
+                      {['#','Commodity','Category','Units Consumed','Consumption records','Share'].map(h=>(
                         <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                       ))}
                     </tr></thead>
@@ -341,7 +355,7 @@ export function Monitoring() {
                   </table></div>
                 )
               ) : (
-                <FacilityLgaBreakdown rows={consData.rows} mode={metricDrill==='transactions'?'count':'units'} unitsLabel={metricDrill==='transactions'?'Transactions':'Units Consumed'}/>
+                <FacilityLgaBreakdown rows={consData.rows} mode={metricDrill==='transactions'?'count':'units'} unitsLabel={metricDrill==='transactions'?'Consumption records':'Units Consumed'}/>
               )}
             </Card>
           )}
@@ -350,27 +364,7 @@ export function Monitoring() {
             <Card>
               <CardHeader><CardTitle>Daily consumption</CardTitle></CardHeader>
               <CardBody>
-                {(() => {
-                  const entries = Object.entries(consData.daily)
-                  const maxVal = Math.max(...entries.map(([,v])=>v),1)
-                  const step = Math.max(1, Math.ceil(entries.length/15))
-                  return (
-                    <div style={{display:'flex',alignItems:'flex-end',gap:'2px',height:'80px'}}>
-                      {entries.map(([day,val],i)=>{
-                        const h=Math.round((val/maxVal)*100)
-                        const d=new Date(day)
-                        const lbl=d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})
-                        const showLbl = entries.length<=31 || i%step===0
-                        return (
-                          <div key={day} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
-                            <div style={{width:'100%',background:'#3fb950',borderRadius:'2px 2px 0 0',height:`${h}%`,minHeight:val>0?2:0,opacity:0.85}} title={`${lbl}: ${val.toLocaleString()}`}/>
-                            <div style={{fontSize:'9px',color:'#484f58',writingMode:'vertical-rl',transform:'rotate(180deg)',maxHeight:'28px',overflow:'hidden'}}>{showLbl?lbl:''}</div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )
-                })()}
+                <DailyTrendChart daily={consData.daily} unit="units" />
               </CardBody>
             </Card>
 
@@ -384,22 +378,31 @@ export function Monitoring() {
                   if (catEntries.length===0) return <div className="text-sm text-gray-500 py-6 text-center">No consumption in this period.</div>
                   const R=42, C=2*Math.PI*R
                   let acc=0
+                  const focusCat=catHover||catDrill
+                  const centerVal=focusCat?(consData.byCat[focusCat]||0):total
+                  const centerSub=focusCat?`${Math.round(((consData.byCat[focusCat]||0)/total)*100)||0}% of total`:'units'
                   return (
                     <div className="flex items-center gap-5 flex-wrap">
-                      <svg viewBox="0 0 100 100" style={{width:130,height:130,flexShrink:0}}>
+                      <svg viewBox="0 0 100 100" style={{width:140,height:140,flexShrink:0}}>
                         <g transform="rotate(-90 50 50)">
                           {catEntries.map(([cat,qty],i)=>{
                             const dash=(qty/total)*C
+                            const dim=focusCat&&focusCat!==cat
+                            const on=(catDrill===cat)||(catHover===cat)
                             const seg=(
                               <circle key={cat} cx="50" cy="50" r={R} fill="none"
-                                stroke={catColor(cat,i)} strokeWidth="16"
+                                stroke={catColor(cat,i)} strokeWidth={on?19:15}
                                 strokeDasharray={`${dash} ${C-dash}`} strokeDashoffset={-acc}
-                                style={{opacity:catDrill&&catDrill!==cat?0.3:1,transition:'opacity .15s'}}/>
+                                onClick={()=>isAdm && setCatDrill(catDrill===cat?null:cat)}
+                                onMouseEnter={()=>setCatHover(cat)} onMouseLeave={()=>setCatHover(null)}
+                                style={{opacity:dim?0.3:1,cursor:isAdm?'pointer':'default',transition:'opacity .15s, stroke-width .15s'}}/>
                             )
                             acc+=dash
                             return seg
                           })}
                         </g>
+                        <text x="50" y="48" textAnchor="middle" style={{fill:'#e6edf3',fontSize:'12px',fontWeight:600}}>{centerVal.toLocaleString()}</text>
+                        <text x="50" y="57" textAnchor="middle" style={{fill:'#8b949e',fontSize:'6px',letterSpacing:'0.3px'}}>{centerSub}</text>
                       </svg>
                       <div className="flex-1 min-w-[180px] space-y-1">
                         {catEntries.map(([cat,qty],i)=>{
@@ -408,7 +411,8 @@ export function Monitoring() {
                           return (
                             <button key={cat} type="button" disabled={!isAdm}
                               onClick={()=>isAdm && setCatDrill(active?null:cat)}
-                              className={`w-full flex items-center justify-between gap-3 text-left px-2 py-1 rounded-lg ${isAdm?'hover:bg-white/5 cursor-pointer':''} ${active?'bg-white/8':''}`}>
+                              onMouseEnter={()=>setCatHover(cat)} onMouseLeave={()=>setCatHover(null)}
+                              className={`w-full flex items-center justify-between gap-3 text-left px-2 py-1 rounded-lg ${isAdm?'hover:bg-white/5 cursor-pointer':''} ${active||catHover===cat?'bg-white/8':''}`}>
                               <span className="flex items-center gap-2 text-sm text-gray-300">
                                 <span style={{width:10,height:10,borderRadius:'9999px',background:catColor(cat,i),display:'inline-block',flexShrink:0}}/>
                                 {cat}
@@ -473,11 +477,20 @@ export function Monitoring() {
               )
             })() : (
               <>
-                <CardHeader><CardTitle>Top commodities</CardTitle>{isAdm && consData.byComm.length>0 && <span className="text-xs text-gray-500">click a commodity for facilities</span>}</CardHeader>
+                <CardHeader><CardTitle>Top commodities</CardTitle>
+                  <div className="flex items-center gap-3">
+                    {isAdm && consData.byComm.length>0 && <span className="text-xs text-gray-500">click a commodity for facilities</span>}
+                    <button onClick={()=>{
+                      const headers=['#','Commodity','Category','Units consumed','Unit','Consumption records','Share %']
+                      const rows=consData.byComm.map((c,i)=>[i+1,c.name,c.cat,c.qty,c.unit||'',c.txn,Math.round((c.qty/consData.total)*100)||0])
+                      exportCsv(`top-commodities_consumption_${period}d.csv`, headers, rows)
+                    }} disabled={consData.byComm.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">↓ Download CSV</button>
+                  </div>
+                </CardHeader>
                 {consData.byComm.length===0 ? <EmptyState message="No dispensing in this period."/> : (
                   <div className="table-wrap"><table className="w-full text-sm">
                     <thead><tr className="border-b border-white/8 bg-white/2">
-                      {['#','Commodity','Category','Units Consumed','Transactions','Share'].map(h=>(
+                      {['#','Commodity','Category','Units Consumed','Consumption records','Share'].map(h=>(
                         <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                       ))}
                     </tr></thead>
@@ -684,7 +697,15 @@ export function Monitoring() {
                       <>
                         <div className="px-5 py-3 border-b border-white/8 flex items-center justify-between flex-wrap gap-2">
                           <span className="text-sm text-gray-300 flex items-center gap-2">{expBatchComm.name} <CatBadge>{expBatchComm.cat}</CatBadge> — expiring batches by facility</span>
-                          <button onClick={()=>setExpBatchComm(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Back to commodities</button>
+                          <div className="flex gap-2">
+                            <button onClick={()=>{
+                              const base=(expBatchComm.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
+                              const headers=['Facility','LGA','Batch','Expiry date','Days left','Qty','Unit','Urgency']
+                              const rows=batches.map(r=>{const dL=Math.round((new Date(r.expiry_date)-today)/86400000);const u=dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [facMeta[r.facility_id]?.name||'—',facMeta[r.facility_id]?.lga||'—',r.batch_number||'',fmtDate(r.expiry_date),dL,r.quantity,r.commodities?.unit||'',u]})
+                              exportCsv(`${base}_expiring-batches.csv`, headers, rows)
+                            }} disabled={batches.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">↓ Download CSV</button>
+                            <button onClick={()=>setExpBatchComm(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Back to commodities</button>
+                          </div>
                         </div>
                         <div className="table-wrap"><table className="w-full text-sm">
                           <thead><tr className="border-b border-white/8 bg-white/2">
@@ -720,6 +741,14 @@ export function Monitoring() {
                     })
                     const list=Object.values(byComm).sort((a,b)=>a.soonest-b.soonest)
                     return (
+                      <>
+                      <div className="px-5 py-2 flex justify-end">
+                        <button onClick={()=>{
+                          const headers=['Commodity','Category','Facilities','Batches','Total qty','Unit','Soonest expiry','Days left','Urgency']
+                          const rows=list.map(g=>{const dL=Math.round((g.soonest-today)/86400000);const u=dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [g.name,g.cat,g.facs.size,g.batches,g.qty,g.unit,fmtDate(g.soonest.toISOString().slice(0,10)),dL,u]})
+                          exportCsv(`expiring-commodities_${expPeriod}d.csv`, headers, rows)
+                        }} disabled={list.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">↓ Download CSV</button>
+                      </div>
                       <div className="table-wrap"><table className="w-full text-sm">
                         <thead><tr className="border-b border-white/8 bg-white/2">
                           {['Commodity','Category','Facilities','Batches','Total qty','Soonest expiry','Days left','Urgency'].map(h=>(
@@ -743,6 +772,7 @@ export function Monitoring() {
                           )
                         })}</tbody>
                       </table></div>
+                      </>
                     )
                   })()
                 }
