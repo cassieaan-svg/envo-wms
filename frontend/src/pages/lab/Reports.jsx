@@ -114,7 +114,7 @@ export function Reports({ embedded = false } = {}) {
     toast('CSV exported','green')
   }
 
-  async function exportCSV() {
+  async function exportCSV(includeAll = false) {
     if (!summary?.rows) { toast('Load data first','red'); return }
     const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r) && notInternalForAdmin(r))
     const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report, ${summary.label}`
@@ -148,10 +148,17 @@ export function Reports({ embedded = false } = {}) {
           if (data.length < PAGE) break
         }
       }
+      // "All facilities" mode (CRRF only): seed every in-scope facility so those
+      // with no activity in the period still appear, showing their stock balances.
+      const allFacs = (includeAll && category === 'all')
+        ? (store.allFacilities || [])
+            .filter(f => !(scopeIds && scopeIds.length) || scopeIds.includes(f.id))
+            .map(f => ({ name: f.name, lga: f.lga || '' }))
+        : null
       const csv = category === 'dispense'
         ? buildConsumptionByFacilityCsv(rows, title, facStock, lgaByName)
-        : buildCrrfByFacilityCsv(rows, title, facStock, lgaByName)
-      downloadCsv(csv, `${tab}-${category}-by-facility-${summary.label}.csv`)
+        : buildCrrfByFacilityCsv(rows, title, facStock, lgaByName, allFacs)
+      downloadCsv(csv, `${tab}-${category}-by-facility${allFacs ? '-all-facilities' : ''}-${summary.label}.csv`)
       return
     }
 
@@ -281,10 +288,16 @@ export function Reports({ embedded = false } = {}) {
             className="bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
             Load
           </button>
-          {summary && <button onClick={exportCSV}
+          {summary && <button onClick={() => exportCSV(false)}
             className="border border-white/10 text-gray-400 hover:text-gray-200 rounded-lg px-4 py-2 text-sm transition-colors">
             Download CSV
           </button>}
+          {summary && isAdmin && !fid && category === 'all' && (
+            <button onClick={() => exportCSV(true)}
+              className="border border-white/10 text-gray-400 hover:text-gray-200 rounded-lg px-4 py-2 text-sm transition-colors">
+              Download all facilities
+            </button>
+          )}
         </CardBody>
       </Card>
 

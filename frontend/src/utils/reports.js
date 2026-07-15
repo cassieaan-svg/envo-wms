@@ -333,7 +333,11 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
 // facility (with its LGA) instead of one rolled-up total per commodity.
 //   facStock:  { facilityName: { commodityName: SOH } }
 //   lgaByName: { facilityName: lga }
-export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {}) {
+// `allFacilities` (optional [{name, lga}]): when provided, EVERY listed facility
+// gets a row even with no activity in the period — a silent facility shows its
+// stock balances (Ending = Beginning, zero movement) for commodities it holds.
+// Omit it for the default "active facilities only" export.
+export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {}, allFacilities = null) {
   const LOSS_REASONS = ['Expired', 'Damaged', 'Lost / Stolen']
   const agg = {}   // facilityName → commodityName → tallies
   const ensure = (fac, commodity, category, unit) => {
@@ -364,6 +368,11 @@ export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {
     }
   })
 
+  // "All facilities" mode: seed every in-scope facility so silent ones appear.
+  if (Array.isArray(allFacilities)) {
+    allFacilities.forEach(f => { if (f && f.name && !agg[f.name]) agg[f.name] = {} })
+  }
+
   // Wide pivot: one row per facility (with LGA), seven columns per commodity
   // (the CRRF columns), plus a per-commodity totals row.
   const commodities = new Set()
@@ -387,9 +396,19 @@ export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {
     const stock = facStock[fac] || {}
     comms.forEach(c => {
       const r = agg[fac][c]
-      if (!r) { cells.push('', '', '', '', '', '', ''); return }
       const E = stock[c]
       const hasE = E != null
+      if (!r) {
+        // No activity for this commodity. In "all facilities" mode, still show the
+        // ending balance (= beginning, no movement) where the facility holds stock.
+        if (allFacilities && hasE) {
+          cells.push(E, 0, 0, 0, 0, 0, E)
+          totals[c].B += E; totals[c].E += E
+        } else {
+          cells.push('', '', '', '', '', '', '')
+        }
+        return
+      }
       const B = hasE ? E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses : ''
       cells.push(B, r.received, r.dispensed, r.adjPos, r.adjNeg, r.losses, hasE ? E : '')
       totals[c].received += r.received; totals[c].dispensed += r.dispensed
