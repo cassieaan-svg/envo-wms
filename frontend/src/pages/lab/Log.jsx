@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
+import { BinCardModal } from '../../components/BinCardModal'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { Reports } from './Reports'
 import { fmtDateTime, fmtDate, fmtDispenseQty, fmtStockQty, getCommodityPackSize } from '../../utils/helpers'
@@ -21,6 +22,7 @@ export function Log() {
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
   const [editRecord, setEditRecord] = useState(null)
+  const [binCard, setBinCard]       = useState(null)   // { fid, cid, name } → open bin card
   // Weekly/Monthly now lives here as a second tab. The one-shot store flag lets
   // the operation pages' "Export summary" buttons open straight onto it.
   const [view, setView] = useState(store.pendingReportsTab ? 'reports' : 'activity')
@@ -131,6 +133,9 @@ export function Log() {
           with nothing selected the whole jurisdiction shows. No-op for facilities. */}
       <FacilityPicker />
 
+      {binCard && (
+        <BinCardModal facilityId={binCard.fid} commodityId={binCard.cid} commodityName={binCard.name} onClose={()=>setBinCard(null)} />
+      )}
       {editRecord && (
         <EditModal record={editRecord} onClose={()=>setEditRecord(null)} onSave={()=>{setEditRecord(null);loadAll()}}/>
       )}
@@ -197,7 +202,16 @@ export function Log() {
                 <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
                   <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r._time)}</td>
                   <td className="px-4 py-3"><Badge type={typeBadge[r._type]}>{typeLabel[r._type]}</Badge></td>
-                  <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
+                  <td className="px-4 py-3">
+                    {(() => {
+                      const bcFid = r.facility_id || r.sending_facility_id || fid
+                      const cid = r.commodity_id || r.commodities?.id
+                      return bcFid && cid
+                        ? <button onClick={()=>setBinCard({ fid: bcFid, cid, name: r.commodities?.name })}
+                            className="font-medium text-gray-100 hover:text-blue-400 text-left" title="Open bin card">{r.commodities?.name||'—'}</button>
+                        : <span className="font-medium text-gray-100">{r.commodities?.name||'—'}</span>
+                    })()}
+                  </td>
                   {isAdmin && <td className="px-4 py-3 text-xs text-gray-400">{r._type==='transfer' ? `${r.sending_facility_name||'—'} → ${r.receiving_facility_name||'—'}` : (r.facilities?.name||'—')}</td>}
                   <td className="px-4 py-3">{qty}</td>
                   <td className="px-4 py-3 text-xs text-gray-500">{details}</td>
