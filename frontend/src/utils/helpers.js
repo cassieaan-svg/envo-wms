@@ -21,6 +21,17 @@ export function todayLagos() {
   return new Date().toLocaleDateString('en-CA', { timeZone: LAGOS })
 }
 
+// Timestamp to store for a user-dated entry (intake / consumption). When the
+// chosen date is today, use the real current time so the activity log reflects
+// when it was actually recorded — the old code always anchored the picked date at
+// noon, so same-day entries all showed 12:00. For a genuinely back-dated entry the
+// real time is unknown, so keep anchoring at local noon (never bare midnight,
+// which JS parses as UTC and can shift the calendar date across the Lagos offset).
+export function entryTimestamp(dateStr) {
+  if (!dateStr || dateStr === todayLagos()) return new Date().toISOString()
+  return new Date(dateStr + 'T12:00:00').toISOString()
+}
+
 // ── Commodity helpers ─────────────────────────────
 export function getCommodityPackSize(comm) {
   return (comm?.pack_size && comm.pack_size > 1) ? comm.pack_size : null

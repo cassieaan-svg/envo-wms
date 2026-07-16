@@ -9,7 +9,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, SECTION_CATEGORIES, todayLagos } from '../../utils/helpers'
+import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, SECTION_CATEGORIES, todayLagos, entryTimestamp } from '../../utils/helpers'
 
 export function Intake() {
   const store = useAppStore()
@@ -111,9 +111,8 @@ export function Intake() {
         batch_number: batch || null, expiry_date: expiry || null,
         delivery_note_ref: deliveryRef || null, condition_on_arrival: condition,
         received_by: receivedBy || null,
-        // Anchor a date-only entry at local noon (not bare midnight, which JS
-        // parses as UTC and would drift a day for viewers west of UTC).
-        received_at: receivedDate ? new Date(receivedDate + 'T12:00:00').toISOString() : new Date().toISOString(),
+        // Real time when recorded today; local noon for back-dated entries.
+        received_at: entryTimestamp(receivedDate),
         notes: notes || null,
         section: commoditySection,
       })

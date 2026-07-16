@@ -9,7 +9,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, todayLagos } from '../../utils/helpers'
+import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, todayLagos, entryTimestamp } from '../../utils/helpers'
 
 export function RecordStock() {
   const store = useAppStore()
@@ -78,7 +78,7 @@ export function RecordStock() {
           commodity_id:  commId,
           quantity:      parsedQty,
           dispensed_by:  by || null,
-          dispensed_at:  date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
+          dispensed_at:  entryTimestamp(date),
           notes:         `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`,
           dsd_site_name: dsdSiteName,
           section:       commoditySection,
@@ -119,7 +119,7 @@ export function RecordStock() {
           commodity_id:  item.commodityId,
           quantity:      item.quantity,
           dispensed_by:  by || null,
-          dispensed_at:  date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString(),
+          dispensed_at:  entryTimestamp(date),
           notes:         notes || null,
           location_type: 'dispensary',
           section:       commoditySection,
