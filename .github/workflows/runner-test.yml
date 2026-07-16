@@ -1,9 +1,13 @@
 name: Self-Hosted Runner Test
 
-# Run on pushes/PRs to main, and let you trigger it by hand from the Actions tab
+# Manual + PR only — deliberately NOT on push to main. This workflow shares the
+# self-hosted runner's checkout directory with "Deploy to VM", and a default
+# actions/checkout runs `git clean -ffdx`, which deletes the untracked
+# backend/.env the backend depends on (dotenv reads it at runtime). Running it on
+# every push raced the deploy and wiped .env, breaking DB auth (SASL: client
+# password must be a string). The checkouts below also pin clean: false as a
+# safety net so this can never nuke .env even on a PR/manual run.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -15,6 +19,8 @@ jobs:
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
+        with:
+          clean: false   # never git-clean the shared self-hosted workspace (keeps backend/.env)
 
       - name: Say hello from the runner
         shell: powershell
@@ -39,6 +45,8 @@ jobs:
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
+        with:
+          clean: false   # never git-clean the shared self-hosted workspace (keeps backend/.env)
 
       - name: Install & build frontend
         shell: powershell
