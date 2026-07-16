@@ -7,21 +7,32 @@ import { fmtDate } from '../utils/helpers'
 // Digitised bin/stock card: a per-commodity, per-bin running ledger. Opened from
 // the Activity Log by clicking a commodity, or (for store managers) from the
 // "Bin Card" button with a commodity picker so any commodity's card is reachable,
-// not just ones that appear in the log. Step 2 = Main Store only; the location
-// selector fills out (Dispensary / DSD / SDP) once the backend adds those bins.
-const LOCATIONS = [{ value: 'store', label: 'Main Store' }]
+// not just ones that appear in the log. The location selector lists the facility's
+// bins — Main Store, Dispensary, and each DSD / SDP site.
+const DEFAULT_BINS = [{ value: 'store', label: 'Main Store' }]
 
 const HEADERS = ['Date', 'Ref', 'From / To', 'Batch', 'Expiry', 'Received', 'Issued', 'Loss & Adj', 'Balance', 'By', 'Remarks']
 const RIGHT = new Set([5, 6, 7, 8])   // numeric columns
 
-// `commodities` (optional [{id,name}]) turns on the in-modal commodity picker;
-// `commodityId` is then just the initial selection (may be null → pick first).
+// `commodities` (optional [{id,name,category}]) turns on the in-modal commodity
+// picker (with a category filter); `commodityId` is then just the initial selection.
 export function BinCardModal({ facilityId, commodityId, commodityName, commodities, onClose }) {
   const [location, setLocation] = useState('store')
+  const [bins, setBins] = useState(DEFAULT_BINS)
+  const [category, setCategory] = useState('')
   const [cid, setCid] = useState(commodityId || null)
   const [card, setCard] = useState(null)
   const [loading, setLoading] = useState(!!(commodityId))
   const [error, setError] = useState(null)
+
+  // Bins available at this facility (Main Store / Dispensary / DSD / SDP sites).
+  useEffect(() => {
+    let active = true
+    api.binCardBins({ facility_id: facilityId })
+      .then(d => { if (active && d?.length) setBins(d) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [facilityId])
 
   useEffect(() => {
     if (!cid) { setCard(null); setLoading(false); return }
@@ -33,12 +44,15 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
     return () => { active = false }
   }, [facilityId, cid, location])
 
+  const categories = [...new Set((commodities || []).map(c => c.category).filter(Boolean))].sort()
+  const shownCommodities = category ? (commodities || []).filter(c => c.category === category) : (commodities || [])
+
   const num = n => (n === 0 || n == null || n === '') ? '' : Number(n).toLocaleString()
   const signed = n => n > 0 ? `+${num(n)}` : n < 0 ? num(n) : ''
   const dstr = d => d ? fmtDate(d) : ''
 
   const pickedName = card?.commodity?.name || commodities?.find(c => c.id === cid)?.name || commodityName || ''
-  const locLabel = LOCATIONS.find(l => l.value === location)?.label || location
+  const locLabel = bins.find(l => l.value === location)?.label || location
   const title = `Bin Card — ${pickedName}`
   const subtitle = card ? `${card.facility?.name || ''} · ${locLabel} · Unit: ${card.commodity?.unit || '—'} · Current SOH: ${card.currentBalance ?? '—'}` : ''
   const exportRows = () => (card?.rows || []).map(r => [dstr(r.date), r.ref, r.party, r.batch, dstr(r.expiry), r.received || '', r.issued || '', r.adjustment || '', r.balance, r.by, r.remarks])
@@ -65,18 +79,25 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
         <div className="flex gap-2 items-center flex-wrap px-5 py-3 border-b border-white/5">
           {commodities?.length > 0 && (
             <>
+              {categories.length > 1 && (
+                <select value={category} onChange={e => setCategory(e.target.value)} title="Filter commodities by category"
+                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                  <option value="">All categories</option>
+                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              )}
               <label className="text-xs text-gray-500 uppercase tracking-widest">Commodity</label>
-              <select value={cid || ''} onChange={e => setCid(e.target.value || null)}
+              <select value={shownCommodities.some(c => c.id === cid) ? cid : ''} onChange={e => setCid(e.target.value || null)}
                 className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 max-w-xs">
                 <option value="">Select commodity…</option>
-                {commodities.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {shownCommodities.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </>
           )}
           <label className="text-xs text-gray-500 uppercase tracking-widest">Location</label>
           <select value={location} onChange={e => setLocation(e.target.value)}
             className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-            {LOCATIONS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+            {bins.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
           </select>
           {loading && <Spinner size="sm" />}
           <div className="ml-auto flex gap-2">

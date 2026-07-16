@@ -8,6 +8,25 @@ const router = express.Router()
 // Auth + scope applied globally to /api (server.js).
 
 /**
+ * GET /api/bincard/bins?facility_id=
+ * Lists the bins (Main Store, Dispensary, DSD/SDP sites) that exist for a
+ * facility, for the location selector.
+ */
+router.get('/bins', async (req, res) => {
+  try {
+    const { facility_id } = req.query
+    if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+    if (!(await enforceFacilityRead(req, res, facility_id, 'stock'))) return
+
+    const bins = await BinCardService.getBins(facility_id)
+    res.json({ success: true, data: bins, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error listing bins:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'BINCARD_ERROR' })
+  }
+})
+
+/**
  * GET /api/bincard?facility_id=&commodity_id=&location=store
  * Returns a single bin's running ledger (header + rows with running balance).
  */

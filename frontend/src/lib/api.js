@@ -139,6 +139,7 @@ export const api = {
   facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
   commodities: { list: () => get('/commodities') },
   binCard:     (params) => get('/bincard', params),
+  binCardBins: (params) => get('/bincard/bins', params),
 
   amcSettings: {
     list:   (params) => get('/amc-settings', params),
