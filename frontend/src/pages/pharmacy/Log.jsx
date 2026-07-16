@@ -15,6 +15,7 @@ import { fmtDateTime, fmtDate, fmtDispenseQty, fmtStockQty, getCommodityPackSize
 export function Log() {
   const store     = useAppStore()
   const canManage = store.canManageStock()
+  const isStoreMgr = store.isStoreManager()
   const commoditySection = store.commoditySection
   const [typeFilter, setTypeFilter] = useState('')
   const [catFilter, setCatFilter]   = useState('')
@@ -140,7 +141,8 @@ export function Log() {
 
       <>
       {binCard && (
-        <BinCardModal facilityId={binCard.fid} commodityId={binCard.cid} commodityName={binCard.name} onClose={()=>setBinCard(null)} />
+        <BinCardModal facilityId={binCard.fid} commodityId={binCard.cid} commodityName={binCard.name}
+          commodities={store.allCommodities} onClose={()=>setBinCard(null)} />
       )}
       {canEdit && editRecord && (
         <EditModal record={editRecord} onClose={()=>setEditRecord(null)} onSave={()=>{setEditRecord(null);loadAll()}}/>
@@ -171,6 +173,10 @@ export function Log() {
               <option value="">All categories</option>
               {categories.map(c=><option key={c} value={c}>{c}</option>)}
             </select>
+            {isStoreMgr && fid && (
+              <button onClick={()=>setBinCard({ fid })}
+                className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5">Bin Card</button>
+            )}
             <button onClick={loadAll} disabled={loading} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
               {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
             </button>
