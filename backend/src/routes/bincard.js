@@ -18,7 +18,7 @@ router.get('/bins', async (req, res) => {
     if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     if (!(await enforceFacilityRead(req, res, facility_id, 'stock'))) return
 
-    const bins = await BinCardService.getBins(facility_id)
+    const bins = await BinCardService.getBins(facility_id, req.scope.section)
     res.json({ success: true, data: bins, timestamp: new Date().toISOString() })
   } catch (err) {
     console.error('Error listing bins:', err)

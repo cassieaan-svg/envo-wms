@@ -44,20 +44,29 @@ function parseLocation(location) {
 }
 
 export class BinCardService {
-  // The bins that exist for a facility, for the location selector. Always Main
-  // Store; dispensary and each DSD/SDP site are included only when present in the
-  // stock tables, so the selector shows exactly the bins that hold (or held) stock.
-  static async getBins(facilityId) {
+  // The bins that exist for a facility, for the location selector. Bins are
+  // section-specific: pharmacy dispenses from the Dispensary and DSD sites; lab
+  // dispenses at its SDP site(s) (e.g. "Main Lab"). So a lab caller must not see
+  // the Dispensary and a pharmacy caller must not see SDP sites. `section` is the
+  // caller's commodity_section ('pharmacy' | 'lab'); null (overall/state admin,
+  // sees both) shows every bin. Always includes Main Store.
+  static async getBins(facilityId, section = null) {
     const bins = [{ value: 'store', label: 'Main Store' }]
-    const hasDisp = (await query(
-      `select 1 from stock where facility_id = $1 and location_type = 'dispensary' limit 1`, [facilityId])).rows.length
-    if (hasDisp) bins.push({ value: 'dispensary', label: 'Dispensary' })
-    for (const r of (await query(
-      `select distinct dsd_site_name s from dsd_stock where facility_id = $1 and coalesce(dsd_site_name,'') <> '' order by 1`,
-      [facilityId])).rows) bins.push({ value: `dsd:${r.s}`, label: `DSD — ${r.s}` })
-    for (const r of (await query(
-      `select distinct sdp_name s from sdp_stock where facility_id = $1 and coalesce(sdp_name,'') <> '' order by 1`,
-      [facilityId])).rows) bins.push({ value: `sdp:${r.s}`, label: `SDP — ${r.s}` })
+    const wantPharm = section == null || section === 'pharmacy'
+    const wantLab   = section == null || section === 'lab'
+    if (wantPharm) {
+      const hasDisp = (await query(
+        `select 1 from stock where facility_id = $1 and location_type = 'dispensary' limit 1`, [facilityId])).rows.length
+      if (hasDisp) bins.push({ value: 'dispensary', label: 'Dispensary' })
+      for (const r of (await query(
+        `select distinct dsd_site_name s from dsd_stock where facility_id = $1 and coalesce(dsd_site_name,'') <> '' order by 1`,
+        [facilityId])).rows) bins.push({ value: `dsd:${r.s}`, label: `DSD — ${r.s}` })
+    }
+    if (wantLab) {
+      for (const r of (await query(
+        `select distinct sdp_name s from sdp_stock where facility_id = $1 and coalesce(sdp_name,'') <> '' order by 1`,
+        [facilityId])).rows) bins.push({ value: `sdp:${r.s}`, label: `SDP — ${r.s}` })
+    }
     return bins
   }
 
@@ -89,6 +98,18 @@ export class BinCardService {
     }
 
     rows.sort((a, b) => new Date(a.date) - new Date(b.date))
+
+    // Batch / expiry aren't captured per movement for redistributions and
+    // dispenses (and the transfers that don't tag them), so every row would show
+    // blanks. Fill any missing batch/expiry from the commodity's batch at this
+    // facility (its latest intake) so the card shows them on every record — for
+    // the store, dispensary and DSD/SDP bins alike. Rows that carry their own
+    // (intake, adjustment, tagged transfers) keep it.
+    const ref = await BinCardService._refBatchExpiry(facilityId, commodityId)
+    for (const r of rows) {
+      if (!r.batch)  r.batch  = ref.batch
+      if (!r.expiry) r.expiry = ref.expiry
+    }
 
     // Reconstruct running balance so the last row equals the bin's current SOH.
     const delta = r => (r.received || 0) - (r.issued || 0) + (r.adjustment || 0)
@@ -147,16 +168,17 @@ export class BinCardService {
       // sending facility = us and receiving_facility_id null (or, older rows, = us).
       const internal = r.sending_facility_id === facilityId &&
         (r.receiving_facility_id == null || r.receiving_facility_id === facilityId)
+      const batch = rx(r.notes, 'Batch') || '', expiry = rx(r.notes, 'Expiry') || ''
       if (internal) {
         // store → dispensary / DSD / SDP : store is Issued
         const dest = rx(r.notes, 'DSD') || rx(r.notes, 'SDP') || 'Dispensary'
-        rows.push({ date, type: 'Redistribution', ref: '', party: `→ ${dest}`, batch: '', expiry: '',
+        rows.push({ date, type: 'Redistribution', ref: '', party: `→ ${dest}`, batch, expiry,
           received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
       } else if (r.receiving_facility_id === facilityId) {
-        rows.push({ date, type: 'Transfer in', ref: '', party: `from ${r.sending_facility_name || '—'}`, batch: '', expiry: '',
+        rows.push({ date, type: 'Transfer in', ref: '', party: `from ${r.sending_facility_name || '—'}`, batch, expiry,
           received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.status })
       } else {
-        rows.push({ date, type: 'Transfer out', ref: '', party: `to ${r.receiving_facility_name || '—'}`, batch: '', expiry: '',
+        rows.push({ date, type: 'Transfer out', ref: '', party: `to ${r.receiving_facility_name || '—'}`, batch, expiry,
           received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: r.status })
       }
     }
@@ -170,7 +192,8 @@ export class BinCardService {
     for (const r of await BinCardService._internalRedistributions(facilityId, commodityId)) {
       if (isSiteTagged(r.notes)) continue
       rows.push({ date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
-        batch: '', expiry: '', received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
+        batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
+        received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
     }
     // Dispensing (untagged = from dispensary) → Issued
     for (const r of await BinCardService._dispenses(facilityId, commodityId)) {
@@ -186,7 +209,8 @@ export class BinCardService {
     for (const r of await BinCardService._internalRedistributions(facilityId, commodityId)) {
       if (!tagMatches(r.notes, tag, site)) continue
       rows.push({ date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
-        batch: '', expiry: '', received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
+        batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
+        received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
     }
     for (const r of await BinCardService._dispenses(facilityId, commodityId)) {
       if (!tagMatches(r.notes, tag, site)) continue
@@ -214,9 +238,22 @@ export class BinCardService {
 
   static _dispenseRow(r) {
     return {
-      date: r.date, type: 'Dispense', ref: '', party: r.dispensed_to || '', batch: '', expiry: '',
+      date: r.date, type: 'Dispense', ref: '', party: r.dispensed_to || '',
+      batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
       received: 0, issued: r.quantity, adjustment: 0, by: r.dispensed_by || '',
       remarks: [r.regimen_name, r.notes].filter(Boolean).join(' · '),
     }
+  }
+
+  // The commodity's batch/expiry at this facility, from its most recent intake
+  // that recorded either. Used to fill rows whose own movement didn't capture
+  // batch/expiry (redistributions, dispenses, untagged transfers).
+  static async _refBatchExpiry(facilityId, commodityId) {
+    const r = (await query(
+      `select batch_number, expiry_date from intake_log
+        where facility_id = $1 and commodity_id = $2
+          and (coalesce(batch_number,'') <> '' or expiry_date is not null)
+        order by received_at desc limit 1`, [facilityId, commodityId])).rows[0]
+    return { batch: r?.batch_number || '', expiry: r?.expiry_date || '' }
   }
 }
