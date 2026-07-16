@@ -49,13 +49,17 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
 
   const num = n => (n === 0 || n == null || n === '') ? '' : Number(n).toLocaleString()
   const signed = n => n > 0 ? `+${num(n)}` : n < 0 ? num(n) : ''
+  // Numeric-column variants that render 0 (muted) rather than a blank, so the
+  // ledger reads as a full grid.
+  const num0 = n => Number(n || 0).toLocaleString()
+  const signed0 = n => n > 0 ? `+${num(n)}` : n < 0 ? num(n) : '0'
   const dstr = d => d ? fmtDate(d) : ''
 
   const pickedName = card?.commodity?.name || commodities?.find(c => c.id === cid)?.name || commodityName || ''
   const locLabel = bins.find(l => l.value === location)?.label || location
   const title = `Bin Card — ${pickedName}`
   const subtitle = card ? `${card.facility?.name || ''} · ${locLabel} · Unit: ${card.commodity?.unit || '—'} · Current SOH: ${card.currentBalance ?? '—'}` : ''
-  const exportRows = () => (card?.rows || []).map(r => [dstr(r.date), r.ref, r.party, r.batch, dstr(r.expiry), r.received || '', r.issued || '', r.adjustment || '', r.balance, r.by, r.remarks])
+  const exportRows = () => (card?.rows || []).map(r => [dstr(r.date), r.ref, r.party, r.batch, dstr(r.expiry), r.received || 0, r.issued || 0, r.adjustment || 0, r.balance, r.by, r.remarks])
   const base = (card?.commodity?.name || 'commodity').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '')
   const doCsv = () => exportCsv(`bincard_${base}_${location}.csv`, HEADERS, exportRows())
   const doPdf = () => exportPdf(title, subtitle, HEADERS, exportRows(), RIGHT)
@@ -118,7 +122,7 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
             <tbody>
               <tr className="border-b border-white/5 bg-white/2">
                 <td className="px-3 py-2 text-xs text-gray-500 italic" colSpan={8}>Opening balance</td>
-                <td className="px-3 py-2 text-right font-mono text-gray-400">{num(card.openingBalance) || 0}</td>
+                <td className="px-3 py-2 text-right font-mono text-gray-400">{num0(card.openingBalance)}</td>
                 <td colSpan={2}></td>
               </tr>
               {card.rows.map((r, i) => (
@@ -128,10 +132,10 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
                   <td className="px-3 py-2 text-gray-200">{r.party}</td>
                   <td className="px-3 py-2 text-xs text-gray-500">{r.batch}</td>
                   <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{dstr(r.expiry)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-green-400">{num(r.received)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-red-400">{num(r.issued)}</td>
-                  <td className={`px-3 py-2 text-right font-mono ${r.adjustment > 0 ? 'text-green-400' : r.adjustment < 0 ? 'text-red-400' : ''}`}>{signed(r.adjustment)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-200">{num(r.balance)}</td>
+                  <td className={`px-3 py-2 text-right font-mono ${r.received ? 'text-green-400' : 'text-gray-600'}`}>{num0(r.received)}</td>
+                  <td className={`px-3 py-2 text-right font-mono ${r.issued ? 'text-red-400' : 'text-gray-600'}`}>{num0(r.issued)}</td>
+                  <td className={`px-3 py-2 text-right font-mono ${r.adjustment > 0 ? 'text-green-400' : r.adjustment < 0 ? 'text-red-400' : 'text-gray-600'}`}>{signed0(r.adjustment)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-200">{num0(r.balance)}</td>
                   <td className="px-3 py-2 text-xs text-gray-500">{r.by}</td>
                   <td className="px-3 py-2 text-xs text-gray-500">{r.remarks}</td>
                 </tr>
