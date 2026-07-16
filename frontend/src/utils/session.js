@@ -14,12 +14,11 @@ export async function hydrateSession(user) {
   if (meta.access_level) accessLevel = meta.access_level
   else if (meta.is_admin === true || meta.is_admin === 'true') accessLevel = 'overall_admin'
 
-  // overall_admin / state_admin see both pharmacy + lab (section = null). Everyone
-  // else — cluster_admin, lga_admin, and now section-scoped state_viewers — keeps
-  // their token's commodity_section (a state_viewer with none set still sees both).
-  const commoditySection = ['overall_admin','state_admin'].includes(accessLevel)
-    ? null
-    : meta.commodity_section || null
+  // Section = the account's commodity_section (null = sees both pharmacy + lab).
+  // Admins normally have none set (envo.admin, state_admins) so they still see
+  // both; a section-tagged overall_admin is an HQ viewer (Lab HQ / Pharmacy HQ)
+  // that sees only its section (read-only, national scope).
+  const commoditySection = meta.commodity_section || null
 
   const facilityRole = meta.facility_role || 'dispenser'
 

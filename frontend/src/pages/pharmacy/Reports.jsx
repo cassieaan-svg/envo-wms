@@ -55,6 +55,9 @@ export function Reports({ embedded = false } = {}) {
   const isAdmin = store.isAdmin()
   const { fid, scopeIds } = store.getAdminStockScope()
   const commIds = isAdmin ? null : store.allCommodities.map(c => c.id)
+  // A section-scoped admin (HQ viewer) filters reports to its section; commIds
+  // stays null and `section` does the filtering server-side (avoids a huge IN()).
+  const commoditySection = store.commoditySection
 
   // Reset the loaded summary whenever the facility scope changes so the report
   // is reloaded against the new selection.
@@ -89,7 +92,7 @@ export function Reports({ embedded = false } = {}) {
 
   async function loadWeekly() {
     setLoading(true)
-    const rows = await fetchReportRows({ category, from: wFrom, to: wTo, fid, scopeIds, commIds })
+    const rows = await fetchReportRows({ category, from: wFrom, to: wTo, fid, scopeIds, commIds, section: commoditySection })
     setSummary({ rows, label: `${wFrom} to ${wTo}` })
     setLoading(false)
   }
@@ -99,7 +102,7 @@ export function Reports({ embedded = false } = {}) {
     const from = month + '-01'
     const lastDay = new Date(month.split('-')[0], month.split('-')[1], 0).getDate()
     const to = `${month}-${String(lastDay).padStart(2,'0')}`
-    const rows = await fetchReportRows({ category, from, to, fid, scopeIds, commIds })
+    const rows = await fetchReportRows({ category, from, to, fid, scopeIds, commIds, section: commoditySection })
     setSummary({ rows, label: month })
     setLoading(false)
   }

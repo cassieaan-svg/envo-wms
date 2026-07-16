@@ -141,7 +141,11 @@ export const useAppStore = create((set, get) => ({
 
   getSectionLabel: () => {
     const s = get()
-    if (s.accessLevel === 'overall_admin') return 'Overall Admin'
+    if (s.accessLevel === 'overall_admin') {
+      if (s.commoditySection === 'lab')      return 'Lab HQ'
+      if (s.commoditySection === 'pharmacy') return 'Pharmacy HQ'
+      return 'Overall Admin'
+    }
     if (s.accessLevel === 'state_admin')   return `${s.adminState} State Admin`
     if (s.accessLevel === 'state_viewer') {
       const sec = s.commoditySection === 'pharmacy' ? 'Pharmacy' : s.commoditySection === 'lab' ? 'Lab' : ''
