@@ -27,6 +27,26 @@ router.get('/bins', async (req, res) => {
 })
 
 /**
+ * GET /api/bincard/redist-batches?facility_id=&commodity_id=
+ * FEFO-estimated batch/expiry per redistribution (keyed by transfer id) for the
+ * Internal RIRV batch pre-fill.
+ */
+router.get('/redist-batches', async (req, res) => {
+  try {
+    const { facility_id, commodity_id } = req.query
+    if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+    if (!validators.isUUID(commodity_id)) return sendValidationError(res, 'Invalid commodity_id format', 'commodity_id')
+    if (!(await enforceFacilityRead(req, res, facility_id, 'stock'))) return
+
+    const data = await BinCardService.redistBatches(facility_id, commodity_id)
+    res.json({ success: true, data, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error building redist batches:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'BINCARD_ERROR' })
+  }
+})
+
+/**
  * GET /api/bincard?facility_id=&commodity_id=&location=store
  * Returns a single bin's running ledger (header + rows with running balance).
  */

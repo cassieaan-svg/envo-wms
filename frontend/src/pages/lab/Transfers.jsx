@@ -739,16 +739,22 @@ export function Transfers() {
     </button>
   )
 
-  // Group internal-redistribution rows into a "move": same source, destination
-  // (from the notes tag) and initiation minute. There is no move-id in the data,
-  // so this best-effort key ties a multi-commodity redistribution together.
+  // A move = same source + destination (from the notes tag) on the same DAY: a
+  // multi-commodity request to one place is one move. There is no move-id in the
+  // data, so this day-level key ties the move's lines together.
   const rxTag = (n, tag) => new RegExp(`\\[${tag}:\\s*([^\\]]+)\\]`, 'i').exec(n || '')?.[1]?.trim()
-  const moveKey = r => [r.sending_facility_id, rxTag(r.notes, 'DSD') || rxTag(r.notes, 'SDP') || 'Dispensary', String(r.initiated_at || '').slice(0, 16)].join('|')
+  const moveKey = r => [r.sending_facility_id, rxTag(r.notes, 'DSD') || rxTag(r.notes, 'SDP') || 'Dispensary', String(r.initiated_at || '').slice(0, 10)].join('|')
   async function printRIRVMove(t, rows) {
-    const key = moveKey(t)
-    const moveRows = rows.filter(r => moveKey(r) === key)
+    const moveRows = rows.filter(r => moveKey(r) === moveKey(t))
+    const facId = t.sending_facility_id || fid
+    // FEFO-estimated batch/expiry per redistribution (Batch column only).
+    const batches = {}
+    await Promise.all([...new Set(moveRows.map(r => r.commodity_id))].map(async cid => {
+      const m = await api.binCardRedistBatches({ facility_id: facId, commodity_id: cid }).catch(() => ({}))
+      Object.assign(batches, m || {})
+    }))
     const { printRIRV } = await import('../../utils/nationalForms')
-    printRIRV(moveRows, { facilityName: myFac?.name || '', packSize: cid => allCommodities.find(c => c.id === cid)?.pack_size || '' })
+    printRIRV(moveRows, { facilityName: myFac?.name || '', packSize: cid => allCommodities.find(c => c.id === cid)?.pack_size || '', batches })
   }
 
   const HistoryTable = ({ rows, loading, emptyMsg, kind }) => {

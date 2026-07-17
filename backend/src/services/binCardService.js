@@ -201,6 +201,23 @@ export class BinCardService {
     return Number((await query(sql, params)).rows[0]?.q ?? 0)
   }
 
+  // FEFO-estimated batch/expiry each of this commodity's redistributions drew from
+  // the store, keyed by transfer id. Used to pre-fill the Internal RIRV; the
+  // estimate is never written back to the transfer's notes.
+  static async redistBatches(facilityId, commodityId) {
+    const storeRows = await BinCardService._storeRows(facilityId, commodityId)
+    const drawn = fefoAttribute(storeRows)   // Map(transferId → taken lots)
+    const out = {}
+    for (const [tid, taken] of drawn) {
+      if (!taken?.length) continue
+      out[tid] = {
+        batch: [...new Set(taken.map(t => t.batch).filter(Boolean))].join(', '),
+        expiry: taken.length === 1 ? taken[0].expiry : null,
+      }
+    }
+    return out
+  }
+
   // ---- Main Store ledger --------------------------------------------------
   static async _storeRows(facilityId, commodityId) {
     const rows = []

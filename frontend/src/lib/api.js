@@ -140,6 +140,7 @@ export const api = {
   commodities: { list: () => get('/commodities') },
   binCard:     (params) => get('/bincard', params),
   binCardBins: (params) => get('/bincard/bins', params),
+  binCardRedistBatches: (params) => get('/bincard/redist-batches', params),
 
   amcSettings: {
     list:   (params) => get('/amc-settings', params),
