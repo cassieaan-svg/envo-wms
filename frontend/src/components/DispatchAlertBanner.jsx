@@ -39,7 +39,6 @@ export function DispatchAlertBanner() {
   return (
     <button onClick={() => setPage('transfers')}
       className="w-full mb-5 flex items-center gap-3 rounded-xl border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-left hover:bg-amber-500/20 transition-colors">
-      <span className="text-2xl leading-none">🚚</span>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-semibold text-amber-600 dark:text-amber-300">
           {count} redistribution {count === 1 ? 'request' : 'requests'} assigned to your facility — dispatch pending
