@@ -24,7 +24,7 @@ export function Monitoring() {
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
   const [lgaDrill, setLgaDrill] = useState(null)  // LGA name drilled into within a by-LGA breakdown
   const [catHover, setCatHover] = useState(null)  // category hovered in the donut (highlight only)
-  const [showNonConsumers, setShowNonConsumers] = useState(false)  // commodity drill: append 0-consumption facilities
+  const [consFilter, setConsFilter] = useState('consuming')  // commodity drill facility filter: 'consuming' | 'none' | 'all'
   const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
   const [expBatchComm, setExpBatchComm] = useState(null)  // Expiring-batches table: commodity drilled into {id,name,cat}
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
@@ -415,11 +415,13 @@ export function Monitoring() {
                 .filter(id => !consumedIds.has(id) && facMeta[id])
                 .map(id => ({ id, qty:0, name: facMeta[id]?.name||'—', lga: facMeta[id]?.lga||'—' }))
                 .sort((a,b) => (a.lga||'').localeCompare(b.lga||'') || a.name.localeCompare(b.name))
-              const shownRows = showNonConsumers ? [...byFac, ...nonConsumers] : byFac
+              const showConsuming = consFilter !== 'none'
+              const showNone = consFilter !== 'consuming'
+              const shownRows = [...(showConsuming ? byFac : []), ...(showNone ? nonConsumers : [])]
               const base = (commDrill.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
               const expHeaders = ['#','Facility','LGA','Units Utilized','Unit','Share %']
               const expRows = () => shownRows.map((f,i)=>[i+1,f.name,f.lga,f.qty,commDrill.unit||'',Math.round((f.qty/cTotal)*100)||0])
-              const expSub = showNonConsumers ? 'including facilities with no utilization' : null
+              const expSub = consFilter==='none' ? 'facilities with no utilization' : consFilter==='all' ? 'including facilities with no utilization' : null
               const btnCls = "text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50"
               return (
                 <>
@@ -428,13 +430,15 @@ export function Monitoring() {
                     <div className="flex gap-2 flex-wrap">
                       <button onClick={()=>exportCsv(`${base}_facilities-utilizing.csv`, expHeaders, expRows())} disabled={!shownRows.length} className={btnCls}>Download CSV</button>
                       <button onClick={()=>exportPdf(`${commDrill.name} — facilities utilizing`, expSub, expHeaders, expRows(), new Set([3,5]))} disabled={!shownRows.length} className={btnCls}>Print / Save as PDF</button>
-                      <button onClick={()=>setShowNonConsumers(v=>!v)} disabled={nonConsumers.length===0} className={btnCls}>
-                        {showNonConsumers ? 'Hide non-utilizing' : `Show ${nonConsumers.length} with no utilization`}
-                      </button>
-                      <button onClick={()=>{setCommDrill(null);setShowNonConsumers(false)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
+                      <select value={consFilter} onChange={e=>setConsFilter(e.target.value)} className={btnCls} title="Filter facilities by utilization">
+                        <option value="consuming">With utilization ({byFac.length})</option>
+                        <option value="none">No utilization ({nonConsumers.length})</option>
+                        <option value="all">All facilities ({byFac.length+nonConsumers.length})</option>
+                      </select>
+                      <button onClick={()=>{setCommDrill(null);setConsFilter('consuming')}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Top commodities</button>
                     </div>
                   </CardHeader>
-                  {byFac.length===0 && !showNonConsumers ? <EmptyState message="No facility-level data."/> : (
+                  {!shownRows.length ? <EmptyState message={consFilter==='none' ? 'Every facility in scope utilized this commodity.' : 'No facility-level data.'}/> : (
                     <div className="table-wrap"><table className="w-full text-sm">
                       <thead><tr className="border-b border-white/8 bg-white/2">
                         {['#','Facility','LGA','Units Utilized','Share'].map(h=>(
@@ -442,7 +446,7 @@ export function Monitoring() {
                         ))}
                       </tr></thead>
                       <tbody>
-                        {byFac.map((f,i)=>{
+                        {showConsuming && byFac.map((f,i)=>{
                           const pct=Math.round((f.qty/cTotal)*100)||0
                           return (
                             <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
@@ -454,12 +458,12 @@ export function Monitoring() {
                             </tr>
                           )
                         })}
-                        {showNonConsumers && nonConsumers.length>0 && (
+                        {consFilter==='all' && showNone && nonConsumers.length>0 && (
                           <tr className="bg-white/2"><td colSpan={5} className="px-4 py-2 text-xs text-gray-500 uppercase tracking-wider">Facilities with no utilization ({nonConsumers.length})</td></tr>
                         )}
-                        {showNonConsumers && nonConsumers.map((f,i)=>(
+                        {showNone && nonConsumers.map((f,i)=>(
                           <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
-                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{byFac.length+i+1}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{(consFilter==='all'?byFac.length:0)+i+1}</td>
                             <td className="px-4 py-3 font-medium text-gray-400">{f.name}</td>
                             <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
                             <td className="px-4 py-3 font-mono text-sm text-gray-600">0 {commDrill.unit||''}</td>
