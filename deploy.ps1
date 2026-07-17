@@ -10,9 +10,10 @@
 # One-time VM setup (do this once):
 #   git clone https://github.com/cassieaan-svg/envo-inventory-tracker.git C:\envo\app
 #   copy "<current working backend\.env>" C:\envo\app\backend\.env
+#   Set-Location C:\envo\app\backend; npm install        # cd in - npm --prefix is flaky on Windows
 #   $pm2 = "C:\Users\eLIMS\AppData\Roaming\npm\pm2.cmd"
 #   & $pm2 delete backend
-#   Set-Location C:\envo\app\backend; & $pm2 start src/server.js --name backend; & $pm2 save
+#   & $pm2 start src/server.js --name backend; & $pm2 save
 # Thereafter just run this script to deploy.
 
 $ErrorActionPreference = 'Stop'
@@ -36,13 +37,21 @@ if (-not (Test-Path .\backend\.env)) {
   throw "backend/.env is missing at $AppDir\backend. Create it once by copying your working .env there."
 }
 
-# 3. Backend deps.
-npm --prefix backend install --no-audit --no-fund
+# 3. Backend deps. cd into the folder - `npm --prefix` is unreliable on Windows
+#    (it looks for package.json in the current dir, not the prefix).
+Push-Location "$AppDir\backend"
+npm install --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "backend 'npm install' failed (exit $LASTEXITCODE)" }
+Pop-Location
 
-# 4. Frontend build (Vite inlines VITE_ vars from the environment).
+# 4. Frontend deps + build (Vite inlines VITE_ vars from the environment).
 $env:VITE_API_URL = $ApiUrl
-npm --prefix frontend install --no-audit --no-fund
-npm --prefix frontend run build                          # vite outDir '../dist' -> $AppDir\dist
+Push-Location "$AppDir\frontend"
+npm install --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "frontend 'npm install' failed (exit $LASTEXITCODE)" }
+npm run build                                            # vite outDir '../dist' -> $AppDir\dist
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "frontend 'npm run build' failed (exit $LASTEXITCODE)" }
+Pop-Location
 if (-not (Test-Path .\dist\index.html)) { throw "frontend build produced no dist\index.html" }
 
 # 5. Publish the frontend to IIS.
