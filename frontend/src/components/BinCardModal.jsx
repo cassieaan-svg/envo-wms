@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { LoadingState, EmptyState, Spinner } from './ui/Loading'
-import { exportCsv, exportPdf } from '../utils/download'
+import { exportCsv } from '../utils/download'
 import { fmtDate } from '../utils/helpers'
 
 // Digitised bin/stock card: a per-commodity, per-bin running ledger. Opened from
@@ -62,7 +62,8 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
   const exportRows = () => (card?.rows || []).map(r => [dstr(r.date), r.ref, r.party, r.batch, dstr(r.expiry), r.received || 0, r.issued || 0, r.adjustment || 0, r.balance, r.by, r.remarks])
   const base = (card?.commodity?.name || 'commodity').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '')
   const doCsv = () => exportCsv(`bincard_${base}_${location}.csv`, HEADERS, exportRows())
-  const doPdf = () => exportPdf(title, subtitle, HEADERS, exportRows(), RIGHT)
+  // Print the national BIN CARD (coat of arms + exact layout); loaded on demand.
+  const doPdf = async () => { const { printBinCard } = await import('../utils/nationalForms'); printBinCard(card) }
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>

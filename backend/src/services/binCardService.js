@@ -246,7 +246,7 @@ export class BinCardService {
       if (internal) {
         // store → dispensary / DSD / SDP : store is Issued. Batch is FEFO-estimated.
         const dest = rx(r.notes, 'DSD') || rx(r.notes, 'SDP') || 'Dispensary'
-        rows.push({ _tid: r.id, date, type: 'Redistribution', ref: '', party: `→ ${dest}`, batch, expiry,
+        rows.push({ _tid: r.id, date, type: 'Redistribution', ref: '', party: dest, batch, expiry,
           received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
       } else if (r.receiving_facility_id === facilityId) {
         rows.push({ _tid: r.id, date, type: 'Transfer in', ref: '', party: `from ${r.sending_facility_name || '—'}`, batch, expiry,
