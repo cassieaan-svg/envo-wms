@@ -7,7 +7,19 @@ import { query } from '../db.js'
 // passwords keep working with no reset.
 
 const JWT_SECRET = process.env.JWT_SECRET
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d'
+
+// jsonwebtoken's expiresIn must be a number of seconds or an ms-style timespan
+// ("7d", "20h", "60"). Guard against a malformed JWT_EXPIRES_IN in the env so a
+// bad value can't throw on every login — fall back to 7 days.
+function resolveExpiresIn(raw) {
+  const v = (raw ?? '').toString().trim()
+  if (!v) return '7d'
+  if (/^\d+$/.test(v)) return Number(v)   // plain number = seconds
+  if (/^\d+(\.\d+)?\s*(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|years?|yrs?|y)$/i.test(v)) return v
+  console.warn(`[auth] invalid JWT_EXPIRES_IN "${raw}" — falling back to 7d`)
+  return '7d'
+}
+const JWT_EXPIRES_IN = resolveExpiresIn(process.env.JWT_EXPIRES_IN)
 
 // Shape the user exactly like the Supabase auth user the frontend expects.
 export function userPayload(u) {
