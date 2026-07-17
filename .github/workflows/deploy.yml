@@ -1,11 +1,16 @@
 name: Deploy to VM
 
+# Manual only — NO auto-deploy on push. Deploys are done deliberately by running
+# deploy.ps1 on the VM (RDP), or by triggering this workflow from the Actions tab.
+# Both do the same thing: git reset the dedicated clone at C:\envo\app to
+# origin/main, build, publish the frontend to IIS, and pm2 restart the backend.
+#
+# The live backend/.env lives in C:\envo\app\backend and is set ONCE by hand — it
+# is never regenerated from a secret here, so secret drift can't break prod.
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:        # lets you redeploy by hand from the Actions tab
+  workflow_dispatch:
 
-# Never let two deploys run at the same time; queue them instead
+# Never let two deploys run at once.
 concurrency:
   group: deploy-vm
   cancel-in-progress: false
@@ -14,62 +19,9 @@ jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          clean: false       # IMPORTANT: keep backend/.env (untracked) on the VM
-
-      - name: Install & build frontend
+      - name: Run deploy.ps1 against the dedicated clone
         shell: powershell
-        working-directory: frontend
-        env:
-          # The runner's checkout has no frontend/.env, so without this the build
-          # falls back to http://localhost:5000 and the live login breaks. Vite
-          # inlines VITE_-prefixed vars from the environment at build time.
-          VITE_API_URL: https://envo.ecews.org
+        # No actions/checkout: the live app is C:\envo\app, not the runner
+        # workspace. deploy.ps1 there does the git pull + build + restart itself.
         run: |
-          npm install
-          npm run build
-          # vite outputs to repo-root /dist (see vite.config.js outDir: '../dist')
-
-      - name: Copy frontend to IIS
-        shell: powershell
-        run: xcopy ".\dist\*" "C:\sites\envo\" /E /I /Y
-
-      - name: Install backend dependencies
-        shell: powershell
-        working-directory: backend
-        run: npm install
-
-      - name: Write backend .env from secret
-        shell: powershell
-        working-directory: backend
-        env:
-          BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
-        run: |
-          # backend/.env is gitignored, so a fresh runner checkout has no DB creds
-          # and the backend can't authenticate to Postgres (SASL: "client password
-          # must be a string"). Regenerate it every deploy from the BACKEND_ENV repo
-          # secret (must contain PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD/JWT_SECRET/
-          # JWT_EXPIRES_IN). Written as ASCII so no UTF-8 BOM corrupts the first line.
-          $env:BACKEND_ENV | Set-Content -Path .env -Encoding ascii
-          if (-not (Test-Path .env) -or ((Get-Item .env).Length -eq 0)) {
-            Write-Error 'backend/.env is empty - set the BACKEND_ENV repo secret (Settings > Secrets and variables > Actions).'
-            exit 1
-          }
-
-      - name: Start or restart backend with pm2
-        shell: powershell
-        working-directory: backend
-        run: |
-          # The runner's PATH doesn't include the npm global bin, and %APPDATA%
-          # may not resolve to the eLIMS profile under the runner service account.
-          # Call pm2 by its known full path (pm2.cmd shim avoids .ps1 exec-policy).
-          $pm2 = "C:\Users\eLIMS\AppData\Roaming\npm\pm2.cmd"
-          & $pm2 describe backend > $null 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            & $pm2 start src/server.js --name backend
-          } else {
-            & $pm2 restart backend --update-env
-          }
-          & $pm2 save
+          & "C:\envo\app\deploy.ps1"
