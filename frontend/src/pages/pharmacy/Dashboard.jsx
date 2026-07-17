@@ -9,6 +9,7 @@ import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
+import { DispatchAlertBanner } from '../../components/DispatchAlertBanner'
 import { exportCsv, exportPdf } from '../../utils/download'
 
 const STATUS_LABEL = { ok: 'Optimal', low: 'Low stock', out: 'Out of stock', over: 'Overstock' }
@@ -160,6 +161,8 @@ export function Dashboard() {
       </div>
 
       <FacilityPicker />
+
+      <DispatchAlertBanner />
 
       <MetricGrid>
         <Metric label="Commodities tracked" value={enrichedAll.length} color="blue" onClick={()=>setSts('')} active={stsFilter===''} />

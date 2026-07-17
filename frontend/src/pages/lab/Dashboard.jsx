@@ -8,6 +8,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
+import { DispatchAlertBanner } from '../../components/DispatchAlertBanner'
 import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, groupStockByComm, SECTION_CATEGORIES } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
 
@@ -141,6 +142,8 @@ export function Dashboard() {
       </div>
 
       <FacilityPicker />
+
+      <DispatchAlertBanner />
 
       <MetricGrid>
         <Metric label="Commodities tracked" value={groupedAll.length} color="blue" onClick={()=>setSts('')} active={stsFilter===''} />
