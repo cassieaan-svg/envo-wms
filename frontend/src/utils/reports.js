@@ -183,7 +183,7 @@ export function getSummaryMetrics(rows, category) {
   if (category === 'dispense') {
     return [
       { label: 'Stock consumed', value: rows.reduce((sum, r) => sum + (r.quantity || 0), 0), color: 'blue' },
-      { label: 'Individuals served', value: rows.length, color: 'green' },
+      { label: 'Consumption records', value: rows.length, color: 'green' },
       { label: 'Commodities moved', value: new Set(rows.map(r => r.commodity)).size, color: 'amber' },
     ]
   }
