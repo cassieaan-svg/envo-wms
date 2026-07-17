@@ -48,8 +48,9 @@ if (-not (Test-Path .\dist\index.html)) { throw "frontend build produced no dist
 # 5. Publish the frontend to IIS.
 xcopy ".\dist\*" "$IisDir\" /E /I /Y
 
-# 6. Restart the backend (pm2 runs it from $AppDir\backend, where .env lives).
-& $Pm2 restart backend --update-env
+# 6. Restart the backend (pm2 runs it from $AppDir\backend). dotenv re-reads
+#    backend/.env on every restart, so no --update-env is needed.
+& $Pm2 restart backend
 & $Pm2 save
 
 Write-Host "== Deploy complete ==" -ForegroundColor Green
