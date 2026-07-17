@@ -43,6 +43,72 @@ function parseLocation(location) {
   return { kind: 'store' }
 }
 
+// ── FEFO batch attribution ────────────────────────────────────────────────
+// EnVo records a batch only on intakes, adjustments and external transfers (in
+// their notes). Internal redistributions and dispenses carry no batch, so the
+// batch they moved is ESTIMATED first-expiry-first-out from what's on hand. The
+// rule: a movement that recorded its own batch keeps it and consumes exactly
+// that batch; only movements with no recorded batch are FEFO-estimated.
+const recvOf = r => (r.received || 0) + Math.max(0, r.adjustment || 0)
+const issOf  = r => (r.issued || 0) + Math.max(0, -(r.adjustment || 0))
+const expKey = e => e ? new Date(e).toISOString().slice(0, 10) : ''
+
+function makeLots() {
+  const pool = []   // { batch, expiry, rem }
+  return {
+    add(batch, expiry, qty) {
+      if (!(qty > 0)) return
+      const b = batch || '', k = `${b}|${expKey(expiry)}`
+      let l = pool.find(x => x.k === k)
+      if (!l) { l = { k, batch: b, expiry: expiry || null, rem: 0 }; pool.push(l) }
+      l.rem += qty
+    },
+    // Draw from a recorded batch (or expiry) when given, otherwise soonest-expiry first.
+    draw(qty, m = {}) {
+      const taken = []
+      let pick = pool.filter(l => l.rem > 1e-9)
+      if (m.batch)        pick = pick.filter(l => l.batch === m.batch)
+      else if (m.expiry)  pick = pick.filter(l => expKey(l.expiry) === expKey(m.expiry))
+      else                pick = pick.sort((a, b) => new Date(a.expiry || '9999-12-31') - new Date(b.expiry || '9999-12-31'))
+      for (const l of pick) {
+        if (qty <= 1e-9) break
+        const t = Math.min(l.rem, qty); l.rem -= t; qty -= t
+        taken.push({ batch: l.batch, expiry: l.expiry, qty: t })
+      }
+      return taken
+    },
+  }
+}
+
+// Attribute batches across a bin's rows via FEFO. Receipts seed lots (a
+// redistribution-in uses `_seedLots`, the batch breakdown handed down from the
+// store; others seed their own recorded batch). Issues with a recorded batch
+// consume that exact batch and keep it displayed; issues with none are set to
+// what FEFO drew. Returns Map(transferId → drawn lots) so sub-bins can inherit
+// which batch each redistribution carried. Never overrides a recorded batch.
+function fefoAttribute(rows) {
+  const lots = makeLots()
+  const order = [...rows].sort((a, b) => (new Date(a.date) - new Date(b.date)) || (recvOf(b) - recvOf(a)))
+  const drawnByTid = new Map()
+  for (const r of order) {
+    if (recvOf(r) > 0) {
+      if (r._seedLots?.length) for (const s of r._seedLots) lots.add(s.batch, s.expiry, s.qty)
+      else lots.add(r.batch, r.expiry, recvOf(r))
+    } else if (issOf(r) > 0) {
+      // A movement that recorded its own batch or expiry keeps it (and consumes
+      // that lot); only a movement that recorded neither is FEFO-estimated.
+      const recorded = !!(r.batch || r.expiry)
+      const taken = recorded ? lots.draw(issOf(r), { batch: r.batch, expiry: r.expiry }) : lots.draw(issOf(r))
+      if (!recorded && taken.length) {
+        r.batch = [...new Set(taken.map(t => t.batch).filter(Boolean))].join(', ')
+        r.expiry = taken.length === 1 ? taken[0].expiry : ''
+      }
+      if (r._tid) drawnByTid.set(r._tid, taken)
+    }
+  }
+  return drawnByTid
+}
+
 export class BinCardService {
   // The bins that exist for a facility, for the location selector. Bins are
   // section-specific: pharmacy dispenses from the Dispensary and DSD sites; lab
@@ -76,45 +142,53 @@ export class BinCardService {
     const facility  = (await query('select name, state, lga, code from facilities where id = $1', [facilityId])).rows[0] || {}
     const commodity = (await query('select name, unit, category, pack_size from commodities where id = $1', [commodityId])).rows[0] || {}
 
+    // The store ledger is built (and FEFO-attributed) always: its per-redistribution
+    // batch attribution is what a sub-bin's incoming stock inherits.
+    const storeRows = await BinCardService._storeRows(facilityId, commodityId)
+    const redistBatches = fefoAttribute(storeRows)   // Map(transferId → drawn lots); also sets store rows' batches
+
     let rows, currentBalance
     if (kind === 'store') {
-      rows = await BinCardService._storeRows(facilityId, commodityId)
+      rows = storeRows
       currentBalance = await BinCardService._soh(
         `select coalesce(quantity,0) q from stock where facility_id=$1 and commodity_id=$2 and location_type='store'`,
         [facilityId, commodityId])
-    } else if (kind === 'dispensary') {
-      rows = await BinCardService._dispensaryRows(facilityId, commodityId)
-      currentBalance = await BinCardService._soh(
-        `select coalesce(quantity,0) q from stock where facility_id=$1 and commodity_id=$2 and location_type='dispensary'`,
-        [facilityId, commodityId])
     } else {
-      const table = kind === 'dsd' ? 'dsd_stock' : 'sdp_stock'
-      const col   = kind === 'dsd' ? 'dsd_site_name' : 'sdp_name'
-      rows = await BinCardService._siteRows(facilityId, commodityId, kind.toUpperCase(), site)
-      currentBalance = await BinCardService._soh(
-        `select coalesce(quantity,0) q from ${table}
-          where facility_id=$1 and commodity_id=$2 and lower(btrim(${col}))=lower(btrim($3))`,
-        [facilityId, commodityId, site])
+      if (kind === 'dispensary') {
+        rows = await BinCardService._dispensaryRows(facilityId, commodityId)
+        currentBalance = await BinCardService._soh(
+          `select coalesce(quantity,0) q from stock where facility_id=$1 and commodity_id=$2 and location_type='dispensary'`,
+          [facilityId, commodityId])
+      } else {
+        const table = kind === 'dsd' ? 'dsd_stock' : 'sdp_stock'
+        const col   = kind === 'dsd' ? 'dsd_site_name' : 'sdp_name'
+        rows = await BinCardService._siteRows(facilityId, commodityId, kind.toUpperCase(), site)
+        currentBalance = await BinCardService._soh(
+          `select coalesce(quantity,0) q from ${table}
+            where facility_id=$1 and commodity_id=$2 and lower(btrim(${col}))=lower(btrim($3))`,
+          [facilityId, commodityId, site])
+      }
+      // Each redistribution INTO this bin carries whatever batch(es) FEFO drew out
+      // of the store for that transfer. Seed those, then FEFO the bin's dispenses.
+      for (const r of rows) {
+        if (r._tid && recvOf(r) > 0 && !r.batch && !r.expiry) {
+          const taken = redistBatches.get(r._tid)
+          if (taken?.length) {
+            r._seedLots = taken
+            r.batch = [...new Set(taken.map(t => t.batch).filter(Boolean))].join(', ')
+            r.expiry = taken.length === 1 ? taken[0].expiry : ''
+          }
+        }
+      }
+      fefoAttribute(rows)
     }
 
     rows.sort((a, b) => new Date(a.date) - new Date(b.date))
 
-    // Batch / expiry aren't captured per movement for redistributions and
-    // dispenses (and the transfers that don't tag them), so every row would show
-    // blanks. Fill any missing batch/expiry from the commodity's batch at this
-    // facility (its latest intake) so the card shows them on every record — for
-    // the store, dispensary and DSD/SDP bins alike. Rows that carry their own
-    // (intake, adjustment, tagged transfers) keep it.
-    const ref = await BinCardService._refBatchExpiry(facilityId, commodityId)
-    for (const r of rows) {
-      if (!r.batch)  r.batch  = ref.batch
-      if (!r.expiry) r.expiry = ref.expiry
-    }
-
     // Reconstruct running balance so the last row equals the bin's current SOH.
     const delta = r => (r.received || 0) - (r.issued || 0) + (r.adjustment || 0)
     let bal = currentBalance - rows.reduce((s, r) => s + delta(r), 0)
-    for (const r of rows) { bal += delta(r); r.balance = bal }
+    for (const r of rows) { bal += delta(r); r.balance = bal; delete r._tid; delete r._seedLots }
 
     return {
       facility, commodity, location, currentBalance,
@@ -158,7 +232,7 @@ export class BinCardService {
 
     // 3) Transfers that moved stock and touch this facility
     for (const r of (await query(
-      `select sending_facility_id, sending_facility_name, receiving_facility_id, receiving_facility_name,
+      `select id, sending_facility_id, sending_facility_name, receiving_facility_id, receiving_facility_name,
               quantity, status, resolved_at, initiated_at, resolved_by, notes
        from stock_transfer_log
        where commodity_id = $2 and (sending_facility_id = $1 or receiving_facility_id = $1)`, [facilityId, commodityId])).rows) {
@@ -170,15 +244,15 @@ export class BinCardService {
         (r.receiving_facility_id == null || r.receiving_facility_id === facilityId)
       const batch = rx(r.notes, 'Batch') || '', expiry = rx(r.notes, 'Expiry') || ''
       if (internal) {
-        // store → dispensary / DSD / SDP : store is Issued
+        // store → dispensary / DSD / SDP : store is Issued. Batch is FEFO-estimated.
         const dest = rx(r.notes, 'DSD') || rx(r.notes, 'SDP') || 'Dispensary'
-        rows.push({ date, type: 'Redistribution', ref: '', party: `→ ${dest}`, batch, expiry,
+        rows.push({ _tid: r.id, date, type: 'Redistribution', ref: '', party: `→ ${dest}`, batch, expiry,
           received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
       } else if (r.receiving_facility_id === facilityId) {
-        rows.push({ date, type: 'Transfer in', ref: '', party: `from ${r.sending_facility_name || '—'}`, batch, expiry,
+        rows.push({ _tid: r.id, date, type: 'Transfer in', ref: '', party: `from ${r.sending_facility_name || '—'}`, batch, expiry,
           received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.status })
       } else {
-        rows.push({ date, type: 'Transfer out', ref: '', party: `to ${r.receiving_facility_name || '—'}`, batch, expiry,
+        rows.push({ _tid: r.id, date, type: 'Transfer out', ref: '', party: `to ${r.receiving_facility_name || '—'}`, batch, expiry,
           received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: r.status })
       }
     }
@@ -191,7 +265,7 @@ export class BinCardService {
     // Internal redistribution store→dispensary (untagged) → Received
     for (const r of await BinCardService._internalRedistributions(facilityId, commodityId)) {
       if (isSiteTagged(r.notes)) continue
-      rows.push({ date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
+      rows.push({ _tid: r.id, date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
         batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
         received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
     }
@@ -208,7 +282,7 @@ export class BinCardService {
     const rows = []
     for (const r of await BinCardService._internalRedistributions(facilityId, commodityId)) {
       if (!tagMatches(r.notes, tag, site)) continue
-      rows.push({ date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
+      rows.push({ _tid: r.id, date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
         batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
         received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
     }
@@ -223,7 +297,7 @@ export class BinCardService {
   // null, or = us on older rows). Destination bin is read from the notes tag.
   static async _internalRedistributions(facilityId, commodityId) {
     return (await query(
-      `select quantity, status, resolved_at, initiated_at, resolved_by, notes
+      `select id, quantity, status, resolved_at, initiated_at, resolved_by, notes
        from stock_transfer_log
        where commodity_id = $2 and sending_facility_id = $1
          and (receiving_facility_id is null or receiving_facility_id = $1)`, [facilityId, commodityId])).rows
@@ -243,17 +317,5 @@ export class BinCardService {
       received: 0, issued: r.quantity, adjustment: 0, by: r.dispensed_by || '',
       remarks: [r.regimen_name, r.notes].filter(Boolean).join(' · '),
     }
-  }
-
-  // The commodity's batch/expiry at this facility, from its most recent intake
-  // that recorded either. Used to fill rows whose own movement didn't capture
-  // batch/expiry (redistributions, dispenses, untagged transfers).
-  static async _refBatchExpiry(facilityId, commodityId) {
-    const r = (await query(
-      `select batch_number, expiry_date from intake_log
-        where facility_id = $1 and commodity_id = $2
-          and (coalesce(batch_number,'') <> '' or expiry_date is not null)
-        order by received_at desc limit 1`, [facilityId, commodityId])).rows[0]
-    return { batch: r?.batch_number || '', expiry: r?.expiry_date || '' }
   }
 }
