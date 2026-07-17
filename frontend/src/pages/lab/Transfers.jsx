@@ -739,7 +739,19 @@ export function Transfers() {
     </button>
   )
 
-  const HistoryTable = ({ rows, loading, emptyMsg }) => {
+  // Group internal-redistribution rows into a "move": same source, destination
+  // (from the notes tag) and initiation minute. There is no move-id in the data,
+  // so this best-effort key ties a multi-commodity redistribution together.
+  const rxTag = (n, tag) => new RegExp(`\\[${tag}:\\s*([^\\]]+)\\]`, 'i').exec(n || '')?.[1]?.trim()
+  const moveKey = r => [r.sending_facility_id, rxTag(r.notes, 'DSD') || rxTag(r.notes, 'SDP') || 'Dispensary', String(r.initiated_at || '').slice(0, 16)].join('|')
+  async function printRIRVMove(t, rows) {
+    const key = moveKey(t)
+    const moveRows = rows.filter(r => moveKey(r) === key)
+    const { printRIRV } = await import('../../utils/nationalForms')
+    printRIRV(moveRows, { facilityName: myFac?.name || '', packSize: cid => allCommodities.find(c => c.id === cid)?.pack_size || '' })
+  }
+
+  const HistoryTable = ({ rows, loading, emptyMsg, kind }) => {
     if (loading) return <div className="px-5 py-4 text-sm text-gray-500">Loading history…</div>
     if (!rows.length) return <div className="px-5 py-4 text-sm text-gray-500">{emptyMsg}</div>
     return (
@@ -761,9 +773,9 @@ export function Transfers() {
             <td className="px-4 py-3 text-xs text-gray-500">{t.receiving_facility_name}</td>
             <td className="px-4 py-3"><Badge type={t.dispute_note === 'Disputed — stock restored' ? 'amber' : t.status === 'accepted' ? 'ok' : 'out'}>{t.dispute_note === 'Disputed — stock restored' ? 'Stock restored' : t.status}</Badge></td>
             <td className="px-4 py-3">
-              <button onClick={() => printSlip(t)} className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
+              <button onClick={() => kind === 'internal' ? printRIRVMove(t, rows) : printSlip(t)} className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3"><path d="M4 5V2h8v3M4 11H2V6h12v5h-2M4 9h8v5H4z"/></svg>
-                Print
+                {kind === 'internal' ? 'Print RIRV' : 'Print'}
               </button>
             </td>
           </tr>
@@ -1195,7 +1207,7 @@ export function Transfers() {
                   <button onClick={() => loadAllIntHistory(intHistFrom, intHistTo)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
                 </div>
               </CardHeader>
-              <HistoryTable rows={allIntHistory} loading={loadingAllInt} emptyMsg="No internal redistributions recorded." />
+              <HistoryTable rows={allIntHistory} loading={loadingAllInt} emptyMsg="No internal redistributions recorded." kind="internal" />
             </Card>
           )}
 
@@ -1303,7 +1315,7 @@ export function Transfers() {
 
               <Card>
                 <CardHeader><CardTitle>Service Delivery Point redistribution history</CardTitle></CardHeader>
-                <HistoryTable rows={dsdHistory} loading={loadingD} emptyMsg="No service delivery point redistributions recorded." />
+                <HistoryTable rows={dsdHistory} loading={loadingD} emptyMsg="No service delivery point redistributions recorded." kind="internal" />
               </Card>
             </>
           )}

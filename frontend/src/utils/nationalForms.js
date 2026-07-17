@@ -37,6 +37,8 @@ const CSS = `
   tr.close td{ background:#e9eef5; font-weight:700; }
   .red{ color:#c0121a; font-weight:700; }
   .foot{ font-size:9px; color:#555; margin-top:8px; text-align:right; }
+  .sigs{ display:grid; grid-template-columns:1fr 1fr; gap:6px 24px; margin-top:14px; font-size:10.5px; }
+  .sg{ padding:3px 0; } .lbl{ color:#333; }
   @page{ size:landscape; margin:8mm; }
 `
 
@@ -119,4 +121,50 @@ export function printBinCard(card, locationLabel) {
       <tr><th>Received</th><th>Issued</th><th>Losses &amp; Adj.</th></tr></thead>
       <tbody>${bodyRows.join('')}</tbody></table>`
   openPrint(`Bin Card — ${comm.name || ''}`, inner)
+}
+
+// ── INTERNAL RIRV ─────────────────────────────────────────────────────────
+const rx = (notes, tag) => new RegExp(`\\[${tag}:\\s*([^\\]]+)\\]`, 'i').exec(notes || '')?.[1]?.trim()
+// Destination label from a redistribution's notes: DSD/SDP site, else Dispensary.
+function moveDest(notes) {
+  const dsd = rx(notes, 'DSD'); if (dsd) return `DSD — ${dsd}`
+  const sdp = rx(notes, 'SDP'); if (sdp) return `SDP — ${sdp}`
+  return 'Dispensary'
+}
+const sigRow = role => `<div class="sg"><span class="lbl">${role}</span> ${line('', 150)} `
+  + `<span class="lbl">Signature</span> ${line('', 90)} <span class="lbl">Date</span> ${line('', 80)}</div>`
+
+// moveRows: the stock_transfer_log rows of ONE redistribution move (same
+// destination). ctx: { facilityName, packSize(commodityId)->str, batches(id)->{batch,expiry} }.
+export function printRIRV(moveRows, ctx = {}) {
+  const rows = moveRows || []
+  const first = rows[0] || {}
+  const to = moveDest(first.notes)
+  const pack = ctx.packSize || (() => '')
+  const batches = ctx.batches || {}
+  const bal = n => { const m = /balance:(\-?\d+)/.exec(n || ''); return m ? m[1] : '' }
+
+  const lineRows = rows.map((r, i) => {
+    const b = batches[r.id] || {}
+    return '<tr>' + `<td>${i + 1}</td>` + `<td class="l">${esc(r.commodity_name)}</td>`
+      + `<td>${esc(pack(r.commodity_id))}</td>` + `<td class="n">${q(bal(r.notes))}</td>`
+      + `<td class="n">${q(r.qty_requested)}</td>` + `<td class="n">${q(r.quantity)}</td>`
+      + `<td>${esc(b.batch || '')}</td>` + `<td>${dstr(b.expiry) || ''}</td>` + `<td class="l"></td></tr>`
+  }).join('')
+  // pad to a minimum of rows so the voucher keeps its shape
+  const pad = Math.max(0, Math.min(15, 8 - rows.length))
+  const blanks = Array.from({ length: pad }, (_, i) => `<tr><td>${rows.length + i + 1}</td>${'<td></td>'.repeat(8)}</tr>`).join('')
+
+  const inner = armsHeader('INTERNAL REQUISITION, ISSUE &amp; RECEIPT VOUCHER') + `
+    <div class="fields">
+      <div class="frow"><div class="f">Name of Facility: ${line(ctx.facilityName, 300)}</div><div class="f">Facility Code: ${line()}</div></div>
+      <div class="frow"><div class="f">From: ${line('Main Store', 200)}</div><div class="f">To: ${line(to, 200)}</div></div>
+    </div>
+    <table><thead>
+      <tr><th rowspan="2">Serial No</th><th rowspan="2" style="width:26%">Item Description and Strength</th><th rowspan="2">Pack Size</th>
+        <th>Requisition</th><th colspan="4">To be filled by storekeeper</th></tr>
+      <tr><th>Stock Balance</th><th>Qty Required</th><th>Qty Issued</th><th>Batch #</th><th>Expiry Date</th><th>Remarks</th></tr></thead>
+      <tbody>${lineRows}${blanks}</tbody></table>
+    <div class="sigs">${sigRow('Requisition Prepared by (Full Name):')}${sigRow('Requisition Recommended by (Full Name):')}${sigRow('Requisition Approved by (Full Name):')}${sigRow('Commodities Issued by (Full Name):')}${sigRow('Commodities Received by (Full Name):')}</div>`
+  openPrint(`Internal RIRV — ${to}`, inner)
 }
