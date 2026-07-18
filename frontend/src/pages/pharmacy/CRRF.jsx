@@ -186,10 +186,9 @@ export function CRRF() {
   async function printNational() {
     if (!allData.length) { toast('Generate data first', 'red'); return }
     const { rows: tplRows, matched } = buildCrrfRows(variant, allData)
-    const extra = extraRows(variant, allData, matched)
-    const rowsToPrint = extra.length
-      ? [...tplRows, { group: 'Additional commodities (not on the national list)' }, ...extra]
-      : tplRows
+    // Off-list commodities the facility stocks continue the numbering directly
+    // after the last national row — no separate heading.
+    const rowsToPrint = [...tplRows, ...extraRows(variant, allData, matched)]
     const ctx = { facilityName: facility?.name || '', lga: facility?.lga || '', state: facility?.state || '', periodStart: from, periodEnd: to }
     const mod = await import('../../utils/nationalForms')
     mod[CRRF_PRINTERS[variant]](rowsToPrint, ctx)
