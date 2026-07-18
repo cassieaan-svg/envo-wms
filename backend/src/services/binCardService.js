@@ -30,6 +30,15 @@ const MOVED_STATUSES = new Set(['accepted'])
 // dispenses to a site bin and to label the store's outgoing redistributions).
 const rx = (notes, tag) => new RegExp(`\\[${tag}:\\s*([^\\]]+)\\]`, 'i').exec(notes || '')?.[1]?.trim()
 const isSiteTagged = notes => !!(rx(notes, 'DSD') || rx(notes, 'SDP'))
+// The genuine free-text note a person typed for a movement — strip the machine
+// tags ([Batch: …], [DSD: …], [Internal:] …) and the derived balance:/required:
+// tokens, leaving only what was entered by hand. Empty when there was none. The
+// bin card's Remarks column shows only this, not status/reason/regimen chatter.
+const freeNote = notes => String(notes || '')
+  .replace(/\[[^\]]*\]/g, ' ')
+  .replace(/\b(balance|required)\s*:\s*-?\d+/gi, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
 const tagMatches = (notes, tag, site) => {
   const v = rx(notes, tag)
   return v != null && v.toLowerCase() === String(site).trim().toLowerCase()
@@ -230,7 +239,7 @@ export class BinCardService {
         date: r.date, type: 'Intake', ref: r.delivery_note_ref || '', party: r.supplier_source || '',
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: r.quantity, issued: 0, adjustment: 0,
-        by: r.received_by || '', remarks: r.notes || '',
+        by: r.received_by || '', remarks: freeNote(r.notes),
       })
     }
 
@@ -243,7 +252,7 @@ export class BinCardService {
         date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: 0, issued: 0, adjustment: signed,
-        by: r.adjusted_by || '', remarks: [r.reason, r.notes].filter(Boolean).join(' — '),
+        by: r.adjusted_by || '', remarks: freeNote(r.notes),   // reason already shows in the party column
       })
     }
 
@@ -264,13 +273,13 @@ export class BinCardService {
         // store → dispensary / DSD / SDP : store is Issued. Batch is FEFO-estimated.
         const dest = rx(r.notes, 'DSD') || rx(r.notes, 'SDP') || 'Dispensary'
         rows.push({ _tid: r.id, date, type: 'Redistribution', ref: '', party: dest, batch, expiry,
-          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
+          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
       } else if (r.receiving_facility_id === facilityId) {
         rows.push({ _tid: r.id, date, type: 'Transfer in', ref: '', party: `from ${r.sending_facility_name || '—'}`, batch, expiry,
-          received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.status })
+          received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
       } else {
         rows.push({ _tid: r.id, date, type: 'Transfer out', ref: '', party: `to ${r.receiving_facility_name || '—'}`, batch, expiry,
-          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: r.status })
+          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
       }
     }
     return rows
@@ -284,7 +293,7 @@ export class BinCardService {
       if (isSiteTagged(r.notes)) continue
       rows.push({ _tid: r.id, date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
         batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
-        received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
+        received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
     }
     // Dispensing (untagged = from dispensary) → Issued
     for (const r of await BinCardService._dispenses(facilityId, commodityId)) {
@@ -301,7 +310,7 @@ export class BinCardService {
       if (!tagMatches(r.notes, tag, site)) continue
       rows.push({ _tid: r.id, date: r.resolved_at || r.initiated_at, type: 'Redistribution', ref: '', party: 'from Main Store',
         batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
-        received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: r.notes || '' })
+        received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
     }
     for (const r of await BinCardService._dispenses(facilityId, commodityId)) {
       if (!tagMatches(r.notes, tag, site)) continue
@@ -332,7 +341,7 @@ export class BinCardService {
       date: r.date, type: 'Dispense', ref: '', party: r.dispensed_to || '',
       batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
       received: 0, issued: r.quantity, adjustment: 0, by: r.dispensed_by || '',
-      remarks: [r.regimen_name, r.notes].filter(Boolean).join(' · '),
+      remarks: freeNote(r.notes),
     }
   }
 }
