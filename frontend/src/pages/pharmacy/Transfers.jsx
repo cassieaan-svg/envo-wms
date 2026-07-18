@@ -380,7 +380,12 @@ export function Transfers() {
       date_field: 'initiated_at', from: f, to: t2, limit: 200,
       section: commoditySection || undefined,
     }).catch(() => [])
-    setRequestHistory(data || []); setLoadingReqHist(false)
+    // External redistributions only: a real facility→facility move (both parties
+    // set and different), never an internal store→dispensary/DSD/SDP redistribution.
+    const ext = (data || []).filter(r => r.sending_facility_id && r.receiving_facility_id
+      && r.sending_facility_id !== r.receiving_facility_id
+      && !r.notes?.includes('[Internal:') && !r.notes?.includes('[DSD:') && !r.notes?.includes('[SDP:'))
+    setRequestHistory(ext); setLoadingReqHist(false)
   }
 
   async function cancelRequest(id) {
@@ -1210,8 +1215,8 @@ export function Transfers() {
               {loadingReqHist ? <LoadingState /> : requestHistory.length === 0 ? <EmptyState message="No request history" /> : (
                 <div className="table-wrap"><table className="w-full text-sm">
                   <thead><tr className="border-b border-white/8 bg-white/2">
-                    {['Date', 'Commodity', 'Qty requested', 'Qty issued', 'From', 'To', 'Status', 'Compiled by'].map(h => (
-                      <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                    {['Date', 'Commodity', 'Qty requested', 'Qty issued', 'From', 'To', 'Status', 'Compiled by', ''].map((h, i) => (
+                      <th key={i} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>{requestHistory.map(r => {
@@ -1230,6 +1235,15 @@ export function Transfers() {
                         <td className="px-4 py-3 text-xs text-gray-500">{r.receiving_facility_name || '—'}</td>
                         <td className={`px-4 py-3 text-xs font-semibold ${sc}`}>{r.status}</td>
                         <td className="px-4 py-3 text-xs text-gray-500">{r.initiated_by || '—'}</td>
+                        <td className="px-4 py-3">
+                          {r.status === 'accepted' && (
+                            <button onClick={() => printTransferMove(r, requestHistory)} title="Transfer & Return form"
+                              className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
+                              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3"><path d="M4 5V2h8v3M4 11H2V6h12v5h-2M4 9h8v5H4z"/></svg>
+                              Print
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     )
                   })}</tbody>

@@ -211,21 +211,25 @@ export function printTransfer(moveRows, ctx = {}) {
   const blanks = Array.from({ length: pad }, (_, i) => `<tr><td>${rows.length + i + 1}</td>${'<td></td>'.repeat(5)}</tr>`).join('')
   const carrier = rx(first.notes, 'Carrier') || ''
   const approvedBy = rx(first.notes, 'Approved by') || ''
+  // Map the parties + date onto the form so both facilities print with names filled.
+  const compiledBy = first.initiated_by || ''
+  const receivedBy = first.resolved_by || ''
+  const moveDate = dstr(first.resolved_at || first.initiated_at)
 
   const inner = armsHeader('RECORD FOR TRANSFERRING / RETURNING COMMODITIES') + `
     <div class="fields">
       <div class="frow"><div class="f">Name of facility returning/transferring commodities: ${line(from, 300)}</div></div>
-      <div class="frow"><div class="f">Sent to: ${line(to, 320)}</div></div>
+      <div class="frow"><div class="f">Sent to: ${line(to, 320)}</div><div class="f">Date: ${line(moveDate, 130)}</div></div>
     </div>
     <table><thead><tr><th>S/No</th><th style="width:34%">Product Description</th><th>Batch No.</th><th>Expiry Date</th><th>Quantity</th><th style="width:26%">Reason for return / transfer</th></tr></thead>
       <tbody>${lineRows}${blanks}</tbody></table>
-    <div class="sigs two">${sigRow('Record compiled by:', first.initiated_by || '')}${sigRow('Record approved by:', approvedBy)}${sigRow('Transfer / return by:')}</div>
+    <div class="sigs two">${sigRow('Record compiled by:', compiledBy, moveDate)}${sigRow('Record approved by:', approvedBy, moveDate)}${sigRow('Transfer / return by:', carrier, moveDate)}</div>
     <div class="cert"><b>Carrier:</b> I certify that the above quantities of transfer/return were received by me except where explained below.
       <div class="cm">Comments: ${line('', 520)}</div>
-      <div class="sg">Name of Carrier: ${line(carrier, 160)} Designation: ${line('', 120)} Signature: ${line('', 120)} Date: ${line('', 80)}</div></div>
+      <div class="sg">Name of Carrier: ${line(carrier, 160)} Designation: ${line('', 120)} Signature: ${line('', 120)} Date: ${line(moveDate, 80)}</div></div>
     <div class="cert"><b>Receiving Facility:</b> I certify that the above quantities were received by me except where explained below (please explain the condition of items on receipt).
       <div class="cm">Comments: ${line('', 520)}</div>
-      <div class="sg">Receiver's name: ${line('', 160)} Signature: ${line('', 120)} Date: ${line('', 80)}</div>
+      <div class="sg">Receiver's name: ${line(receivedBy, 160)} Signature: ${line('', 120)} Date: ${line(moveDate, 80)}</div>
       <div class="sg">Transfer approved by: ${line('', 160)} Signature: ${line('', 120)} Date: ${line('', 80)}</div></div>
     <div class="note">NOTE: TO BE COMPLETED IN TRIPLICATES</div>`
   openPrint(`Transfer & Return — ${to}`, inner)
