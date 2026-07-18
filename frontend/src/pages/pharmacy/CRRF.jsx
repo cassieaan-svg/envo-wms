@@ -39,6 +39,13 @@ function buildCrrfRows(variant, allData) {
   return { rows, matched: used }
 }
 
+// National CRRF variants per section. Pharmacy: ARV/OI + Condom; Lab: CD4 + RTK/DBS.
+const CRRF_VARIANTS = {
+  pharmacy: [{ value: 'arv', label: 'ARVs & OIs' }, { value: 'condom', label: 'Condoms & Lubricants' }],
+  lab:      [{ value: 'cd4', label: 'CD4' }, { value: 'rtk', label: 'HIV RTKs & DBS' }],
+}
+const CRRF_PRINTERS = { arv: 'printCrrfArv', condom: 'printCrrfCondom', cd4: 'printCrrfCd4', rtk: 'printCrrfRtk' }
+
 const BI_MONTHLY_PERIODS = [
   { label: 'Jan – Feb', start: '01-01', end: '02', months: [0, 1] },
   { label: 'Mar – Apr', start: '03-01', end: '04', months: [2, 3] },
@@ -76,7 +83,9 @@ export function CRRF() {
   const [loading, setLoading] = useState(false)
   const [generated, setGenerated] = useState(false)
   const [catFilter, setCatFilter] = useState('')
-  const [variant, setVariant] = useState('arv')   // national CRRF type: 'arv' | 'condom'
+  const section = commoditySection === 'lab' ? 'lab' : 'pharmacy'
+  const crrfVariants = CRRF_VARIANTS[section]
+  const [variant, setVariant] = useState(() => crrfVariants[0].value)   // ARV/Condom (pharmacy) | CD4/RTK (lab)
   const [allData, setAllData] = useState([])       // full per-commodity computed set (for template matching)
   const [orphans, setOrphans] = useState([])       // active commodities not in any pharmacy template
 
@@ -165,7 +174,7 @@ export function CRRF() {
     })
     setAllData(full)
     const active = full.filter(r => r.received || r.dispensed || r.adjPos || r.adjNeg || r.losses || r.soh)
-    const inAnyTpl = new Set([...buildCrrfRows('arv', full).matched, ...buildCrrfRows('condom', full).matched])
+    const inAnyTpl = new Set(crrfVariants.flatMap(v => [...buildCrrfRows(v.value, full).matched]))
     setOrphans(active.filter(r => !inAnyTpl.has(r.commodity)).map(r => r.commodity))
 
     setGenerated(true)
@@ -177,7 +186,7 @@ export function CRRF() {
     const { rows: tplRows } = buildCrrfRows(variant, allData)
     const ctx = { facilityName: facility?.name || '', lga: facility?.lga || '', state: facility?.state || '', periodStart: from, periodEnd: to }
     const mod = await import('../../utils/nationalForms')
-    variant === 'condom' ? mod.printCrrfCondom(tplRows, ctx) : mod.printCrrfArv(tplRows, ctx)
+    mod[CRRF_PRINTERS[variant]](tplRows, ctx)
   }
 
   const shownRows = catFilter ? rows.filter(r => r.category === catFilter) : rows
@@ -357,8 +366,7 @@ export function CRRF() {
           <div>
             <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">CRRF type</label>
             <select value={variant} onChange={e => setVariant(e.target.value)} className={inputCls}>
-              <option value="arv">ARVs &amp; OIs</option>
-              <option value="condom">Condoms &amp; Lubricants</option>
+              {crrfVariants.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
             </select>
           </div>
           <button onClick={generate} disabled={loading}

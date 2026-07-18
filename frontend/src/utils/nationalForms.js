@@ -287,3 +287,61 @@ export function printCrrfCondom(rows, ctx = {}) {
     ${expiryOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):'])}`
   openPrint('CRRF — Condoms & Lubricants', inner)
 }
+
+// ── CRRF — Lab CD4 ────────────────────────────────────────────────────────
+// Equipment downtime block (blank — no data captured for it in the system).
+const equipmentDowntime = `
+  <div class="sub-h">Equipment Downtime</div>
+  <div class="hint">Record any period the analyzer was non-functional during the reporting period.</div>
+  <table class="mini"><thead><tr><th style="width:34%">Equipment</th><th>Serial No.</th><th>Date Down</th><th>Date Restored</th><th>Reason</th></tr></thead>
+    <tbody><tr><td></td><td></td><td></td><td></td><td></td></tr><tr><td></td><td></td><td></td><td></td><td></td></tr></tbody></table>`
+
+export function printCrrfCd4(rows, ctx = {}) {
+  let n = 0
+  const body = rows.map(r => r.group
+    ? `<tr class="grp"><td></td><td class="l" colspan="12">${esc(r.group)}</td></tr>`
+    : (n++, '<tr>' + `<td>${n}</td><td class="l">${esc(r.name)}</td><td>${esc(r.pack || '')}</td><td>${esc(r.unit || '')}</td>`
+      + `<td class="n">${z(r.A)}</td><td class="n">${z(r.received)}</td><td class="n">${z(r.dispensed)}</td>`
+      + `<td class="n">${z(r.adjPos)}</td><td class="n">${z(r.adjNeg)}</td><td class="n">${z(r.losses)}</td><td class="n b">${z(r.E)}</td>`
+      + `<td class="n">${z(r.F)}</td><td class="n b">${z(r.G)}</td><td class="l"></td></tr>`)).join('')
+  const inner = armsHeader('COMBINED REPORT AND REQUISITION FORM (CRRF) - CD4', 'CD4 Reagents &amp; Consumables') + crrfFields(ctx) + `
+    <table class="crrf sm"><thead>
+      <tr><th rowspan="3">S/No</th><th rowspan="3" style="width:22%">Reagent / Item Description</th><th rowspan="3">Pack Size</th><th rowspan="3">Reporting Unit</th>
+          <th colspan="7" class="rep">REPORT</th><th colspan="2" class="req">REQUISITION</th><th rowspan="3">Remarks</th></tr>
+      <tr><th rowspan="2">Beginning Balance</th><th rowspan="2">Qty Received</th><th rowspan="2">No. of Tests Done</th><th colspan="2">Adjustments</th><th rowspan="2">Losses</th><th rowspan="2">Ending Balance (Physical Count)</th><th rowspan="2">Max Stock Qty</th><th rowspan="2">Qty to Order</th></tr>
+      <tr><th>Positive +</th><th>Negative &#8722;</th></tr>
+      <tr class="keys"><th></th><th></th><th></th><th></th><th>A</th><th>B</th><th>C</th><th>D (+)</th><th>D (&#8722;)</th><th>E</th><th>F</th><th>G = C&#215;2</th><th>H = G&#8722;F</th><th>I</th></tr></thead>
+      <tbody>${body}</tbody></table>
+    ${equipmentDowntime}
+    ${expiryOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):'])}
+    <div class="ver">Version 2022</div>`
+  openPrint('CRRF — CD4', inner)
+}
+
+// ── CRRF — Lab HIV RTKs & DBS ─────────────────────────────────────────────
+export function printCrrfRtk(rows, ctx = {}) {
+  let n = 0
+  const body = rows.map(r => r.group
+    ? `<tr class="grp"><td></td><td class="l" colspan="11">${esc(r.group)}</td></tr>`
+    : (n++, '<tr>' + `<td>${n}</td><td class="l">${esc(r.name)}</td><td>${esc(r.unit || '')}</td>`
+      + `<td class="n">${z(r.A)}</td><td class="n">${z(r.received)}</td><td class="n">${z(r.dispensed)}</td>`
+      + `<td class="n">${z(r.adjPos)}</td><td class="n">${z(r.adjNeg)}</td><td class="n">${z(r.losses)}</td><td class="n b">${z(r.E)}</td>`
+      + `<td class="n">${z(r.F)}</td><td class="n b">${z(r.G)}</td><td class="l"></td></tr>`)).join('')
+  // Bimonthly test summary — blank (per-programme test counts aren't captured).
+  const testSummary = `
+    <div class="sub-h">Bimonthly Summary of Tests Conducted</div>
+    <table class="mini"><thead><tr><th style="width:30%">Test Kit</th><th>HTS</th><th>PMTCT</th><th>TB/HIV</th><th>Others</th><th>TOTAL</th></tr></thead>
+      <tbody>${rows.filter(r => !r.group).map(r => `<tr><td class="l">${esc(r.name)}</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table>`
+  const inner = armsHeader('COMBINED REPORT AND REQUISITION FORM (CRRF) - HIV RTKs &amp; DBS', 'HIV Rapid Test Kits &amp; DBS') + crrfFields(ctx) + `
+    <table class="crrf sm"><thead>
+      <tr><th rowspan="3">S/No</th><th rowspan="3" style="width:26%">Test Kit / Item</th><th rowspan="3">Reporting Unit</th>
+          <th colspan="7" class="rep">REPORT</th><th colspan="2" class="req">REQUISITION</th><th rowspan="3">Remarks</th></tr>
+      <tr><th rowspan="2">Beginning Balance</th><th rowspan="2">Qty Received</th><th rowspan="2">No. of Tests Done</th><th colspan="2">Adjustments</th><th rowspan="2">Losses</th><th rowspan="2">Ending Balance (Physical Count)</th><th rowspan="2">Max Stock Qty</th><th rowspan="2">Qty to Order</th></tr>
+      <tr><th>Positive +</th><th>Negative &#8722;</th></tr>
+      <tr class="keys"><th></th><th></th><th></th><th>A</th><th>B</th><th>C</th><th>D (+)</th><th>D (&#8722;)</th><th>E</th><th>F</th><th>G = C&#215;2</th><th>H = G&#8722;F</th><th>I</th></tr></thead>
+      <tbody>${body}</tbody></table>
+    ${testSummary}
+    ${expiryOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):'])}
+    <div class="ver">Version 2022</div>`
+  openPrint('CRRF — HIV RTKs & DBS', inner)
+}
