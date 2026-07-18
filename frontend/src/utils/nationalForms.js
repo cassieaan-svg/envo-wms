@@ -238,14 +238,6 @@ function crrfFields(ctx = {}) {
   </div>`
 }
 
-const expiryOfficers = officers => `
-  <div class="sub-h">Expiry Details / Additional Remarks</div>
-  <div class="hint">1. Please provide details (expiry dates) &nbsp; 2. Any other information</div>
-  <table class="mini"><thead><tr><th>Description</th><th>Lot No</th><th>Exp date</th><th>Quantity</th></tr></thead>
-    <tbody><tr><td></td><td></td><td></td><td></td></tr><tr><td></td><td></td><td></td><td></td></tr></tbody></table>
-  <div class="sub-h">Reporting Officers Details</div>
-  ${officers.map(o => `<div class="sg"><span class="lbl">${o}</span> ${line('', 180)} <span class="lbl">Phone</span> ${line('', 120)} <span class="lbl">Date</span> ${line('', 80)}</div>`).join('')}`
-
 // ── CRRF — Pharmacy ARV/OI ───────────────────────────────────────────────
 export function printCrrfArv(rows, ctx = {}) {
   let n = 0
@@ -261,7 +253,14 @@ export function printCrrfArv(rows, ctx = {}) {
       <tr><th rowspan="2">Beginning Balance</th><th rowspan="2">Qty Received</th><th rowspan="2">Qty Dispensed</th><th colspan="2">Losses &amp; Adjustments</th><th rowspan="2">Ending Balance (Physical Count)</th><th rowspan="2">Max Stock Qty</th><th rowspan="2">Qty to Order</th></tr>
       <tr><th>Positive +</th><th>Negative &#8722;</th></tr>
       <tr class="keys"><th></th><th></th><th></th><th>A</th><th>B</th><th>C</th><th>D (+)</th><th>D (&#8722;)</th><th>E</th><th>F = C&#215;2</th><th>G = F&#8722;E</th><th>H</th></tr></thead>
-      <tbody>${body}</tbody></table>`
+      <tbody>${body}</tbody></table>
+    <div class="sub-h">Comments</div>
+    <div class="remark-box"></div>
+    <div class="sub-h">Expiry Details / Any other information</div>
+    <div class="hint">1. Please provide details (expiry dates) &nbsp;·&nbsp; 2. Any other information</div>
+    <table class="mini"><thead><tr><th style="width:6%">S/No</th><th style="width:48%">Description</th><th>Lot No</th><th>Exp date</th><th>Quantity</th></tr></thead>
+      <tbody>${[1, 2, 3, 4].map(i => `<tr><td>${i}</td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table>
+    ${labOfficers('Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):', '2017')}`
   openPrint('CRRF — ARVs & OIs', inner)
 }
 
@@ -287,7 +286,8 @@ export function printCrrfCondom(rows, ctx = {}) {
       <tr class="keys"><th></th><th></th><th></th><th></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E+</th><th>E&#8722;</th><th>F</th><th>G</th><th>H = C&#215;2</th><th>I = H&#8722;G</th><th>J</th></tr></thead>
       <tbody>${body}</tbody></table>
     ${bimonthly}
-    ${expiryOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):'])}`
+    ${labExpiryRemarks()}
+    ${labOfficers('Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):', '2017')}`
   openPrint('CRRF — Condoms & Lubricants', inner)
 }
 
@@ -307,11 +307,12 @@ const labExpiryRemarks = () => `
     </div>
   </div>`
 // Reporting Officers Details — a/b are the two role labels (blank name/phone/date).
-const labOfficers = (a, b) => `
+// Pharmacy forms are Version 2017; lab forms Version 2022.
+const labOfficers = (a, b, version = '2022') => `
   <div class="sub-h">Reporting Officers Details</div>
   <div class="sg"><span class="lbl">${a}</span> ${line('', 180)} <span class="lbl">Phone Number</span> ${line('', 120)} <span class="lbl">Date</span> ${line('', 80)}</div>
   <div class="sg"><span class="lbl">${b}</span> ${line('', 180)} <span class="lbl">Phone Number</span> ${line('', 120)} <span class="lbl">Date</span> ${line('', 80)}</div>
-  <div class="ver">Version 2022</div>`
+  <div class="ver">Version ${version}</div>`
 
 // A lab reporting row: Qty Used (C) is the recorded consumption; No. of Tests Done
 // (D) is left blank (not captured — filled by hand). Physical Count G = system SOH,
