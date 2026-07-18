@@ -149,7 +149,7 @@ export const CRRF_TEMPLATES = {
       "unit": "60 tabs"
     },
     {
-      "name": "Opportunistics Infections Drugs"
+      "group": "Opportunistics Infections Drugs"
     },
     {
       "name": "Co-trimoxazole 120mg",
