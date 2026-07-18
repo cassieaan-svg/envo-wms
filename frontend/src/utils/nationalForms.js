@@ -182,8 +182,8 @@ export function printRIRV(moveRows, ctx = {}) {
 
   const inner = armsHeader('INTERNAL REQUISITION, ISSUE & RECEIPT VOUCHER') + `
     <div class="fields">
-      <div class="frow"><div class="f">Name of Facility: ${line(ctx.facilityName, 300)}</div><div class="f">Facility Code: ${line()}</div></div>
-      <div class="frow"><div class="f">From: ${line('Main Store', 200)}</div><div class="f">To: ${line(to, 200)}</div><div class="f">Date: ${line(moveDate, 130)}</div></div>
+      <div class="frow"><div class="f">Name of Facility: ${line(ctx.facilityName, 260)}</div><div class="f">Facility Code: ${line()}</div><div class="f">Date: ${line(moveDate, 130)}</div></div>
+      <div class="frow"><div class="f">From: ${line('Main Store', 200)}</div><div class="f">To: ${line(to, 200)}</div></div>
     </div>
     <table><thead>
       <tr><th rowspan="2">Serial No</th><th rowspan="2" style="width:26%">Item Description and Strength</th><th rowspan="2">Pack Size</th>
