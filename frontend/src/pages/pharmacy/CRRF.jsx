@@ -7,36 +7,42 @@ import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { NON_CRRF_ADJ_REASONS } from '../../utils/reports'
 import { CRRF_TEMPLATES } from '../../utils/crrfTemplates'
+import { CRRF_ALIASES } from '../../utils/crrfAliases'
 
-const _norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
-// Full template-ordered CRRF rows (zeros where the facility has no data), matching
-// commodities to template rows by normalised name. Two passes so pack-size variants
-// (same drug name, different pack) each grab the right row: pass 1 matches on
-// name+pack, pass 2 on name only — and each commodity is consumed at most once, so
-// one commodity can't fill two template rows.
+// Key a template row the same way the alias map targets it: "<name>|<unit-or-pack>".
+const tKey = it => `${it.name}|${it.unit || it.pack || ''}`
+const zeros = base => ({ ...base, A: 0, received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0, E: 0, F: 0, G: 0, distributed: 0 })
+const withData = (base, d) => ({ ...base, A: d.A, received: d.received, dispensed: d.dispensed, adjPos: d.adjPos, adjNeg: d.adjNeg, losses: d.losses, E: d.E, F: d.F, G: d.G, distributed: d.distributed || 0 })
+
+// Full template-ordered CRRF rows (zeros where the facility has no data). A
+// commodity reports on a template row only when it maps there EXACTLY — via the
+// CRRF_ALIASES map, or an exact name match. No fuzzy matching (it silently
+// mis-placed lookalike names). The printed row label always comes from the
+// template, never the commodity's DB name.
 function buildCrrfRows(variant, allData) {
-  const idx = allData.map(d => ({ ...d, _n: _norm(d.commodity) }))
   const used = new Set()
-  const pick = t => {
-    if (!t) return null
-    const avail = idx.filter(d => !used.has(d.commodity) && d._n)
-    const m = avail.find(d => d._n === t) || avail.find(d => d._n.includes(t))
-    if (m) used.add(m.commodity)
-    return m
-  }
-  const tpl = CRRF_TEMPLATES[variant] || []
-  const slots = tpl.map(item => item.group ? { group: item.group } : { item })
-  slots.forEach(s => { if (s.item) s.d = pick(_norm(s.item.name + ' ' + (s.item.unit || s.item.pack || ''))) })   // pass 1: name + pack
-  slots.forEach(s => { if (s.item && !s.d) s.d = pick(_norm(s.item.name)) })                                       // pass 2: name only
-  const rows = slots.map(s => {
-    if (s.group) return { group: s.group }
-    const { item, d } = s
+  const rows = (CRRF_TEMPLATES[variant] || []).map(item => {
+    if (item.group) return { group: item.group }
+    const key = tKey(item)
+    const d = allData.find(x => !used.has(x.commodity) && (CRRF_ALIASES[x.commodity] === key || x.commodity === item.name))
+    if (d) used.add(d.commodity)
     const base = { name: item.name, unit: item.unit || d?.unit || '', pack: item.pack || '' }
-    return d
-      ? { ...base, A: d.A, received: d.received, dispensed: d.dispensed, adjPos: d.adjPos, adjNeg: d.adjNeg, losses: d.losses, E: d.E, F: d.F, G: d.G, distributed: 0 }
-      : { ...base, A: 0, received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0, E: 0, F: 0, G: 0, distributed: 0 }
+    return d ? withData(base, d) : zeros(base)
   })
   return { rows, matched: used }
+}
+
+// Off-template commodities a facility stocks print as extra rows at the bottom of
+// their section's primary form — only where there is activity/stock, so a facility
+// only sees what it actually has. Categories are disjoint per variant, so a
+// commodity appears as an extra on at most one form.
+const EXTRA_CATEGORIES = { arv: ['Pharmacy drugs'], condom: ['Medical supplies'], cd4: ['Lab reagents'], rtk: ['RTKs'] }
+const isActive = d => d.received || d.dispensed || d.adjPos || d.adjNeg || d.losses || d.soh
+function extraRows(variant, allData, matched) {
+  const cats = EXTRA_CATEGORIES[variant] || []
+  return allData
+    .filter(d => cats.includes(d.category) && isActive(d) && !matched.has(d.commodity) && !CRRF_ALIASES[d.commodity])
+    .map(d => withData({ name: d.commodity, unit: d.unit || '', pack: '' }, d))
 }
 
 // National CRRF variants per section. Pharmacy: ARV/OI + Condom; Lab: CD4 + RTK/DBS.
@@ -87,7 +93,6 @@ export function CRRF() {
   const crrfVariants = CRRF_VARIANTS[section]
   const [variant, setVariant] = useState(() => crrfVariants[0].value)   // ARV/Condom (pharmacy) | CD4/RTK (lab)
   const [allData, setAllData] = useState([])       // full per-commodity computed set (for template matching)
-  const [orphans, setOrphans] = useState([])       // active commodities not in any pharmacy template
 
   const fid = store.getEffectiveFacilityId?.() || store.adminFilterFacility?.id || store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
@@ -173,9 +178,6 @@ export function CRRF() {
       return { ...r, A, E, F, G }
     })
     setAllData(full)
-    const active = full.filter(r => r.received || r.dispensed || r.adjPos || r.adjNeg || r.losses || r.soh)
-    const inAnyTpl = new Set(crrfVariants.flatMap(v => [...buildCrrfRows(v.value, full).matched]))
-    setOrphans(active.filter(r => !inAnyTpl.has(r.commodity)).map(r => r.commodity))
 
     setGenerated(true)
     setLoading(false)
@@ -183,10 +185,14 @@ export function CRRF() {
 
   async function printNational() {
     if (!allData.length) { toast('Generate data first', 'red'); return }
-    const { rows: tplRows } = buildCrrfRows(variant, allData)
+    const { rows: tplRows, matched } = buildCrrfRows(variant, allData)
+    const extra = extraRows(variant, allData, matched)
+    const rowsToPrint = extra.length
+      ? [...tplRows, { group: 'Additional commodities (not on the national list)' }, ...extra]
+      : tplRows
     const ctx = { facilityName: facility?.name || '', lga: facility?.lga || '', state: facility?.state || '', periodStart: from, periodEnd: to }
     const mod = await import('../../utils/nationalForms')
-    mod[CRRF_PRINTERS[variant]](tplRows, ctx)
+    mod[CRRF_PRINTERS[variant]](rowsToPrint, ctx)
   }
 
   const shownRows = catFilter ? rows.filter(r => r.category === catFilter) : rows
@@ -324,6 +330,11 @@ export function CRRF() {
   const inputCls = "bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
   const years = generateYears()
 
+  // Off-template commodities this facility stocks — appended to the printed form.
+  const currentExtras = generated && allData.length
+    ? extraRows(variant, allData, buildCrrfRows(variant, allData).matched).map(r => r.name)
+    : []
+
   // Group rows by category for rendering (honouring the category filter)
   const grouped = []
   let lastCat = null
@@ -400,9 +411,9 @@ export function CRRF() {
         </CardBody>
       </Card>
 
-      {generated && orphans.length > 0 && (
-        <div className="mb-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-          {orphans.length} active commodit{orphans.length > 1 ? 'ies' : 'y'} didn&rsquo;t map to a national CRRF template row — check naming: {orphans.slice(0, 8).join(', ')}{orphans.length > 8 ? '…' : ''}
+      {generated && currentExtras.length > 0 && (
+        <div className="mb-4 text-xs text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2">
+          {currentExtras.length} stocked commodit{currentExtras.length > 1 ? 'ies are' : 'y is'} not on the national {crrfVariants.find(v => v.value === variant)?.label} list — {currentExtras.length > 1 ? 'they' : 'it'} will print as extra row{currentExtras.length > 1 ? 's' : ''} at the bottom: {currentExtras.slice(0, 8).join(', ')}{currentExtras.length > 8 ? '…' : ''}
         </div>
       )}
 
