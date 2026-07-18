@@ -170,7 +170,7 @@ export function printRIRV(moveRows, ctx = {}) {
   const pad = Math.max(0, Math.min(15, 8 - rows.length))
   const blanks = Array.from({ length: pad }, (_, i) => `<tr><td>${rows.length + i + 1}</td>${'<td></td>'.repeat(8)}</tr>`).join('')
 
-  const inner = armsHeader('INTERNAL REQUISITION, ISSUE &amp; RECEIPT VOUCHER') + `
+  const inner = armsHeader('INTERNAL REQUISITION, ISSUE & RECEIPT VOUCHER') + `
     <div class="fields">
       <div class="frow"><div class="f">Name of Facility: ${line(ctx.facilityName, 300)}</div><div class="f">Facility Code: ${line()}</div></div>
       <div class="frow"><div class="f">From: ${line('Main Store', 200)}</div><div class="f">To: ${line(to, 200)}</div></div>
@@ -277,7 +277,7 @@ export function printCrrfCondom(rows, ctx = {}) {
     <div class="sub-h">Bimonthly Summary of Usage</div>
     <table class="mini"><thead><tr><th style="width:30%">Item</th><th>Distributed to Target Group</th><th>Quality Control</th><th>Condom Demonstration</th><th>Advocacy</th><th>TOTAL</th></tr></thead>
       <tbody>${rows.filter(r => !r.group).map(r => `<tr><td class="l">${esc(r.name)}</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table>`
-  const inner = armsHeader('COMBINED REPORT AND REQUISITION FORM (CRRF) - CONDOM &amp; LUBRICANT', 'Condoms &amp; Lubricants') + crrfFields(ctx) + `
+  const inner = armsHeader('COMBINED REPORT AND REQUISITION FORM (CRRF) - CONDOM & LUBRICANT', 'Condoms &amp; Lubricants') + crrfFields(ctx) + `
     <table class="crrf sm"><thead>
       <tr><th rowspan="3">Serial No.</th><th rowspan="3" style="width:20%">Item Description</th><th rowspan="3">Pack Size</th><th rowspan="3">Reporting Unit</th>
           <th colspan="8">&nbsp;</th><th colspan="2" class="req">REQUISITION / ISSUE</th><th rowspan="3">Remarks</th></tr>
