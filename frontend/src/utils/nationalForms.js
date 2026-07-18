@@ -114,8 +114,9 @@ export function printBinCard(card, locationLabel) {
     if (k !== curKey) { flush(); curKey = k; mRecv = 0; mIss = 0; mAdj = 0; mDate = r.date }
     mRecv += r.received || 0; mIss += r.issued || 0; mAdj += r.adjustment || 0; mBal = r.balance; mDate = r.date
     const party = String(r.party || '').replace(/^→\s*/, '')   // no arrows on the form
-    const partyCell = isGhsc(party) ? `<td class="l red">${esc(party)}</td>` : `<td class="l">${esc(party)}</td>`
-    bodyRows.push('<tr>' + `<td>${dstr(r.date)}</td><td>${esc(r.ref)}</td>` + partyCell
+    // A GHSC-PSM receipt is highlighted in red across the whole row.
+    const rowTag = isGhsc(party) ? '<tr class="red">' : '<tr>'
+    bodyRows.push(rowTag + `<td>${dstr(r.date)}</td><td>${esc(r.ref)}</td><td class="l">${esc(party)}</td>`
       + `<td>${esc(r.batch)}</td><td>${dstr(r.expiry)}</td>`
       + `<td class="n">${q(r.received)}</td><td class="n">${q(r.issued)}</td><td class="n">${signed(r.adjustment)}</td>`
       + `<td class="n b">${q(r.balance)}</td><td>${esc(r.by)}</td><td class="l">${esc(r.remarks)}</td></tr>`)
@@ -260,7 +261,7 @@ export function printCrrfArv(rows, ctx = {}) {
     <div class="hint">1. Please provide details (expiry dates) &nbsp;·&nbsp; 2. Any other information</div>
     <table class="mini"><thead><tr><th style="width:6%">S/No</th><th style="width:48%">Description</th><th>Lot No</th><th>Exp date</th><th>Quantity</th></tr></thead>
       <tbody>${[1, 2, 3, 4].map(i => `<tr><td>${i}</td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table>
-    ${labOfficers('Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):', '2017')}`
+    ${labOfficers(['Report Prepared by (Full Name &amp; Signature):'], '2017')}`
   openPrint('CRRF — ARVs & OIs', inner)
 }
 
@@ -287,7 +288,7 @@ export function printCrrfCondom(rows, ctx = {}) {
       <tbody>${body}</tbody></table>
     ${bimonthly}
     ${labExpiryRemarks()}
-    ${labOfficers('Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):', '2017')}`
+    ${labOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):'], '2017')}`
   openPrint('CRRF — Condoms & Lubricants', inner)
 }
 
@@ -306,12 +307,11 @@ const labExpiryRemarks = () => `
       <div class="remark-box"></div>
     </div>
   </div>`
-// Reporting Officers Details — a/b are the two role labels (blank name/phone/date).
-// Pharmacy forms are Version 2017; lab forms Version 2022.
-const labOfficers = (a, b, version = '2022') => `
+// Reporting Officers Details — `officers` is the list of role labels, each a blank
+// name/phone/date line. Pharmacy forms are Version 2017; lab forms Version 2022.
+const labOfficers = (officers, version = '2022') => `
   <div class="sub-h">Reporting Officers Details</div>
-  <div class="sg"><span class="lbl">${a}</span> ${line('', 180)} <span class="lbl">Phone Number</span> ${line('', 120)} <span class="lbl">Date</span> ${line('', 80)}</div>
-  <div class="sg"><span class="lbl">${b}</span> ${line('', 180)} <span class="lbl">Phone Number</span> ${line('', 120)} <span class="lbl">Date</span> ${line('', 80)}</div>
+  ${officers.map(o => `<div class="sg"><span class="lbl">${o}</span> ${line('', 180)} <span class="lbl">Phone Number</span> ${line('', 120)} <span class="lbl">Date</span> ${line('', 80)}</div>`).join('')}
   <div class="ver">Version ${version}</div>`
 
 // A lab reporting row: Qty Used (C) is the recorded consumption; No. of Tests Done
@@ -344,7 +344,7 @@ export function printCrrfCd4(rows, ctx = {}) {
       <tbody>${body}</tbody></table>
     ${equipment}
     ${labExpiryRemarks()}
-    ${labOfficers('Report Prepared by (Full Name &amp; Signature):', 'Report Approved by (Full Name &amp; Signature):')}`
+    ${labOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Report Approved by (Full Name &amp; Signature):'])}`
   openPrint('CRRF — CD4', inner)
 }
 
@@ -382,6 +382,6 @@ export function printCrrfRtk(rows, ctx = {}) {
     ${summary1}
     ${summary2}
     ${labExpiryRemarks()}
-    ${labOfficers('Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):')}`
+    ${labOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):'])}`
   openPrint('CRRF — HIV RTKs & DBS', inner)
 }
