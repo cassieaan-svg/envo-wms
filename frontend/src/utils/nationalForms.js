@@ -66,16 +66,21 @@ function armsHeader(title, sub = '') {
 // Open a print window with the given inner HTML, trigger the print dialog.
 function openPrint(title, inner) {
   // No app branding on the printed output — these are official national forms.
+  // The print dialog is triggered by a script INSIDE the new tab (not by the opener
+  // calling win.print()), so the print dialog belongs to the print tab and the app
+  // tab stays responsive instead of freezing until the print tab is closed.
+  const auto = '<' + 'script>window.addEventListener("load",function(){window.focus();window.print()});'
+    + 'window.addEventListener("afterprint",function(){window.close()});<' + '/script>'
   const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>`
-    + `<style>${CSS}</style></head><body><div class="paper">${inner}</div></body></html>`
+    + `<style>${CSS}</style></head><body><div class="paper">${inner}</div>${auto}</body></html>`
   const url = URL.createObjectURL(new Blob([doc], { type: 'text/html' }))
   const win = window.open(url, '_blank')
-  if (win) {
-    win.onload = () => { win.focus(); win.print(); URL.revokeObjectURL(url); win.onafterprint = () => win.close() }
-  } else {
+  if (!win) {
     URL.revokeObjectURL(url)
     toast('Allow pop-ups to print / export PDF', 'red')
+    return
   }
+  setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
 
 // ── BIN CARD ──────────────────────────────────────────────────────────────
@@ -147,8 +152,8 @@ function moveDest(notes) {
   const sdp = rx(notes, 'SDP'); if (sdp) return `SDP — ${sdp}`
   return 'Dispensary'
 }
-const sigRow = (role, val = '') => `<div class="sg"><span class="lbl">${role}</span> ${line(val, 150)} `
-  + `<span class="lbl">Signature</span> ${line('', 90)} <span class="lbl">Date</span> ${line('', 80)}</div>`
+const sigRow = (role, val = '', date = '') => `<div class="sg"><span class="lbl">${role}</span> ${line(val, 150)} `
+  + `<span class="lbl">Signature</span> ${line('', 90)} <span class="lbl">Date</span> ${line(date, 80)}</div>`
 
 // moveRows: the stock_transfer_log rows of ONE redistribution move (same
 // destination). ctx: { facilityName, packSize(commodityId)->str, batches(id)->{batch,expiry} }.
@@ -159,6 +164,10 @@ export function printRIRV(moveRows, ctx = {}) {
   const pack = ctx.packSize || (() => '')
   const batches = ctx.batches || {}
   const bal = n => { const m = /balance:(\-?\d+)/.exec(n || ''); return m ? m[1] : '' }
+  // Pre-fill the requester / receiver and move date so staff just sign on print.
+  const requestedBy = first.initiated_by || ''
+  const receivedBy = first.resolved_by || ''
+  const moveDate = dstr(first.resolved_at || first.initiated_at)
 
   const lineRows = rows.map((r, i) => {
     const b = batches[r.id] || {}
@@ -174,14 +183,14 @@ export function printRIRV(moveRows, ctx = {}) {
   const inner = armsHeader('INTERNAL REQUISITION, ISSUE & RECEIPT VOUCHER') + `
     <div class="fields">
       <div class="frow"><div class="f">Name of Facility: ${line(ctx.facilityName, 300)}</div><div class="f">Facility Code: ${line()}</div></div>
-      <div class="frow"><div class="f">From: ${line('Main Store', 200)}</div><div class="f">To: ${line(to, 200)}</div></div>
+      <div class="frow"><div class="f">From: ${line('Main Store', 200)}</div><div class="f">To: ${line(to, 200)}</div><div class="f">Date: ${line(moveDate, 130)}</div></div>
     </div>
     <table><thead>
       <tr><th rowspan="2">Serial No</th><th rowspan="2" style="width:26%">Item Description and Strength</th><th rowspan="2">Pack Size</th>
         <th>Requisition</th><th colspan="4">To be filled by storekeeper</th></tr>
       <tr><th>Stock Balance</th><th>Qty Required</th><th>Qty Issued</th><th>Batch #</th><th>Expiry Date</th><th>Remarks</th></tr></thead>
       <tbody>${lineRows}${blanks}</tbody></table>
-    <div class="sigs">${sigRow('Requisition Prepared by (Full Name):')}${sigRow('Requisition Recommended by (Full Name):')}${sigRow('Requisition Approved by (Full Name):')}${sigRow('Commodities Issued by (Full Name):')}${sigRow('Commodities Received by (Full Name):')}</div>`
+    <div class="sigs">${sigRow('Requisition Prepared by (Full Name):', requestedBy, moveDate)}${sigRow('Requisition Recommended by (Full Name):')}${sigRow('Requisition Approved by (Full Name):')}${sigRow('Commodities Issued by (Full Name):')}${sigRow('Commodities Received by (Full Name):', receivedBy, moveDate)}</div>`
   openPrint(`Internal RIRV — ${to}`, inner)
 }
 
