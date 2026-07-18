@@ -6,6 +6,38 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { NON_CRRF_ADJ_REASONS } from '../../utils/reports'
+import { CRRF_TEMPLATES } from '../../utils/crrfTemplates'
+
+const _norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+// Full template-ordered CRRF rows (zeros where the facility has no data), matching
+// commodities to template rows by normalised name. Two passes so pack-size variants
+// (same drug name, different pack) each grab the right row: pass 1 matches on
+// name+pack, pass 2 on name only — and each commodity is consumed at most once, so
+// one commodity can't fill two template rows.
+function buildCrrfRows(variant, allData) {
+  const idx = allData.map(d => ({ ...d, _n: _norm(d.commodity) }))
+  const used = new Set()
+  const pick = t => {
+    if (!t) return null
+    const avail = idx.filter(d => !used.has(d.commodity) && d._n)
+    const m = avail.find(d => d._n === t) || avail.find(d => d._n.includes(t))
+    if (m) used.add(m.commodity)
+    return m
+  }
+  const tpl = CRRF_TEMPLATES[variant] || []
+  const slots = tpl.map(item => item.group ? { group: item.group } : { item })
+  slots.forEach(s => { if (s.item) s.d = pick(_norm(s.item.name + ' ' + (s.item.unit || s.item.pack || ''))) })   // pass 1: name + pack
+  slots.forEach(s => { if (s.item && !s.d) s.d = pick(_norm(s.item.name)) })                                       // pass 2: name only
+  const rows = slots.map(s => {
+    if (s.group) return { group: s.group }
+    const { item, d } = s
+    const base = { name: item.name, unit: item.unit || d?.unit || '', pack: item.pack || '' }
+    return d
+      ? { ...base, A: d.A, received: d.received, dispensed: d.dispensed, adjPos: d.adjPos, adjNeg: d.adjNeg, losses: d.losses, E: d.E, F: d.F, G: d.G, distributed: 0 }
+      : { ...base, A: 0, received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0, E: 0, F: 0, G: 0, distributed: 0 }
+  })
+  return { rows, matched: used }
+}
 
 const BI_MONTHLY_PERIODS = [
   { label: 'Jan – Feb', start: '01-01', end: '02', months: [0, 1] },
@@ -44,6 +76,9 @@ export function CRRF() {
   const [loading, setLoading] = useState(false)
   const [generated, setGenerated] = useState(false)
   const [catFilter, setCatFilter] = useState('')
+  const [variant, setVariant] = useState('arv')   // national CRRF type: 'arv' | 'condom'
+  const [allData, setAllData] = useState([])       // full per-commodity computed set (for template matching)
+  const [orphans, setOrphans] = useState([])       // active commodities not in any pharmacy template
 
   const fid = store.getEffectiveFacilityId?.() || store.adminFilterFacility?.id || store.currentFacility?.id
   const commIds = store.allCommodities.map(c => c.id)
@@ -119,8 +154,30 @@ export function CRRF() {
       })
 
     setRows(result)
+
+    // Full computed set (all commodities, incl. zero-activity) for the national
+    // CRRF, which prints the whole template list. Flag active commodities that
+    // don't map to any pharmacy template row (naming mismatches to reconcile).
+    const full = Object.values(agg).map(r => {
+      const E = r.soh, A = E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses
+      const F = r.dispensed * 2, G = Math.max(0, F - E)
+      return { ...r, A, E, F, G }
+    })
+    setAllData(full)
+    const active = full.filter(r => r.received || r.dispensed || r.adjPos || r.adjNeg || r.losses || r.soh)
+    const inAnyTpl = new Set([...buildCrrfRows('arv', full).matched, ...buildCrrfRows('condom', full).matched])
+    setOrphans(active.filter(r => !inAnyTpl.has(r.commodity)).map(r => r.commodity))
+
     setGenerated(true)
     setLoading(false)
+  }
+
+  async function printNational() {
+    if (!allData.length) { toast('Generate data first', 'red'); return }
+    const { rows: tplRows } = buildCrrfRows(variant, allData)
+    const ctx = { facilityName: facility?.name || '', lga: facility?.lga || '', state: facility?.state || '', periodStart: from, periodEnd: to }
+    const mod = await import('../../utils/nationalForms')
+    variant === 'condom' ? mod.printCrrfCondom(tplRows, ctx) : mod.printCrrfArv(tplRows, ctx)
   }
 
   const shownRows = catFilter ? rows.filter(r => r.category === catFilter) : rows
@@ -297,6 +354,13 @@ export function CRRF() {
               {BI_MONTHLY_PERIODS.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
             </select>
           </div>
+          <div>
+            <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">CRRF type</label>
+            <select value={variant} onChange={e => setVariant(e.target.value)} className={inputCls}>
+              <option value="arv">ARVs &amp; OIs</option>
+              <option value="condom">Condoms &amp; Lubricants</option>
+            </select>
+          </div>
           <button onClick={generate} disabled={loading}
             className="bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
             {loading ? 'Loading…' : 'Generate'}
@@ -316,17 +380,23 @@ export function CRRF() {
                 className="border border-white/10 text-gray-400 hover:text-gray-200 rounded-lg px-4 py-2 text-sm transition-colors">
                 Download CSV
               </button>
-              <button onClick={printCRRF}
+              <button onClick={printNational}
                 className="border border-white/10 text-gray-400 hover:text-gray-200 rounded-lg px-4 py-2 text-sm transition-colors flex items-center gap-1.5">
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5">
                   <path d="M4 5V2h8v3M4 11H2V6h12v5h-2M4 9h8v5H4z"/>
                 </svg>
-                Print
+                Print CRRF
               </button>
             </>
           )}
         </CardBody>
       </Card>
+
+      {generated && orphans.length > 0 && (
+        <div className="mb-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+          {orphans.length} active commodit{orphans.length > 1 ? 'ies' : 'y'} didn&rsquo;t map to a national CRRF template row — check naming: {orphans.slice(0, 8).join(', ')}{orphans.length > 8 ? '…' : ''}
+        </div>
+      )}
 
       {loading ? <LoadingState /> : generated ? (
         <Card>

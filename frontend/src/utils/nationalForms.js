@@ -43,6 +43,14 @@ const CSS = `
   .cert{ margin-top:12px; font-size:10.5px; border-top:1px solid #999; padding-top:8px; line-height:1.9; }
   .cert .cm{ margin-top:4px; }
   .note{ margin-top:12px; font-size:11px; font-weight:700; text-align:center; letter-spacing:1px; }
+  .fields.three .frow{ gap:20px; }
+  tr.grp td{ background:#f2f2f2; font-weight:700; text-align:left; }
+  .crrf th.rep{ background:#dfe7df; } .crrf th.req{ background:#e7dfdf; }
+  .crrf tr.keys th{ background:#f5f5f5; font-style:italic; font-weight:400; color:#555; }
+  .crrf.sm{ font-size:9px; } .crrf.sm th{ font-size:8px; } .crrf.sm td,.crrf.sm th{ padding:3px 4px; }
+  .sub-h{ margin-top:14px; font-size:11.5px; font-weight:700; border-bottom:1px solid #999; padding-bottom:2px; }
+  .mini{ font-size:10px; margin-top:4px; } .mini th{ font-size:9px; }
+  .ver{ margin-top:8px; font-size:9px; color:#666; text-align:right; }
   @page{ size:landscape; margin:8mm; }
 `
 
@@ -208,4 +216,74 @@ export function printTransfer(moveRows, ctx = {}) {
       <div class="sg">Transfer approved by: ${line('', 160)} Signature: ${line('', 120)} Date: ${line('', 80)}</div></div>
     <div class="note">NOTE: TO BE COMPLETED IN TRIPLICATES</div>`
   openPrint(`Transfer & Return — ${to}`, inner)
+}
+
+// ── CRRF (Combined Report and Requisition Form) ───────────────────────────
+// Driven by a template list (full, ordered, grouped) so every row prints even
+// when the facility has none — zeros seeded. `rows` are the template rows the
+// page already matched to data: { group } | { sno, name, unit, pack, A, received,
+// dispensed, adjPos, adjNeg, losses, E, F, G }.
+const z = n => Number(n || 0).toLocaleString()
+
+function crrfFields(ctx = {}) {
+  return `
+  <div class="fields three">
+    <div class="frow"><div class="f">Facility Name: ${line(ctx.facilityName, 200)}</div><div class="f">Reporting Period Start: ${line(ctx.periodStart, 100)}</div><div class="f">Maximum Stock Level: ${line(ctx.maxLevel || '4 Months', 70)}</div></div>
+    <div class="frow"><div class="f">Facility Code: ${line()}</div><div class="f">Reporting Period End: ${line(ctx.periodEnd, 100)}</div><div class="f">Minimum Stock Level: ${line(ctx.minLevel || '2 Months', 70)}</div></div>
+    <div class="frow"><div class="f">LGA: ${line(ctx.lga, 150)}</div><div class="f">Date Prepared: ${line()}</div></div>
+    <div class="frow"><div class="f">State: ${line(ctx.state, 150)}</div></div>
+  </div>`
+}
+
+const expiryOfficers = officers => `
+  <div class="sub-h">Expiry Details / Additional Remarks</div>
+  <div class="hint">1. Please provide details (expiry dates) &nbsp; 2. Any other information</div>
+  <table class="mini"><thead><tr><th>Description</th><th>Lot No</th><th>Exp date</th><th>Quantity</th></tr></thead>
+    <tbody><tr><td></td><td></td><td></td><td></td></tr><tr><td></td><td></td><td></td><td></td></tr></tbody></table>
+  <div class="sub-h">Reporting Officers Details</div>
+  ${officers.map(o => `<div class="sg"><span class="lbl">${o}</span> ${line('', 180)} <span class="lbl">Phone</span> ${line('', 120)} <span class="lbl">Date</span> ${line('', 80)}</div>`).join('')}`
+
+// ── CRRF — Pharmacy ARV/OI ───────────────────────────────────────────────
+export function printCrrfArv(rows, ctx = {}) {
+  let n = 0
+  const body = rows.map(r => r.group
+    ? `<tr class="grp"><td></td><td class="l" colspan="11">${esc(r.group)}</td></tr>`
+    : (n++, '<tr>' + `<td>${n}</td><td class="l">${esc(r.name)}</td><td>${esc(r.unit || '')}</td>`
+      + `<td class="n">${z(r.A)}</td><td class="n">${z(r.received)}</td><td class="n">${z(r.dispensed)}</td>`
+      + `<td class="n">${z(r.adjPos)}</td><td class="n">${z(r.adjNeg)}</td><td class="n b">${z(r.E)}</td>`
+      + `<td class="n">${z(r.F)}</td><td class="n b">${z(r.G)}</td><td class="l"></td></tr>`)).join('')
+  const inner = armsHeader('COMBINED REPORT AND REQUISITION FORM (CRRF) - Antiretroviral and OIs') + crrfFields(ctx) + `
+    <table class="crrf"><thead>
+      <tr><th rowspan="3">S/No</th><th rowspan="3" style="width:22%">Drugs</th><th rowspan="3">Basic Unit</th><th colspan="6" class="rep">REPORT</th><th colspan="2" class="req">REQUISITION</th><th rowspan="3">Remarks</th></tr>
+      <tr><th rowspan="2">Beginning Balance</th><th rowspan="2">Qty Received</th><th rowspan="2">Qty Dispensed</th><th colspan="2">Losses &amp; Adjustments</th><th rowspan="2">Ending Balance (Physical Count)</th><th rowspan="2">Max Stock Qty</th><th rowspan="2">Qty to Order</th></tr>
+      <tr><th>Positive +</th><th>Negative &#8722;</th></tr>
+      <tr class="keys"><th></th><th></th><th></th><th>A</th><th>B</th><th>C</th><th>D (+)</th><th>D (&#8722;)</th><th>E</th><th>F = C&#215;2</th><th>G = F&#8722;E</th><th>H</th></tr></thead>
+      <tbody>${body}</tbody></table>`
+  openPrint('CRRF — ARVs & OIs', inner)
+}
+
+// ── CRRF — Pharmacy Condoms & Lubricants ─────────────────────────────────
+export function printCrrfCondom(rows, ctx = {}) {
+  let n = 0
+  const body = rows.map(r => r.group
+    ? `<tr class="grp"><td></td><td class="l" colspan="14">${esc(r.group)}</td></tr>`
+    : (n++, '<tr>' + `<td>${n}</td><td class="l">${esc(r.name)}</td><td>${esc(r.pack || '')}</td><td>${esc(r.unit || '')}</td>`
+      + `<td class="n">${z(r.A)}</td><td class="n">${z(r.received)}</td><td class="n">${z(r.dispensed)}</td><td class="n">${z(r.distributed)}</td>`
+      + `<td class="n">${z(r.adjPos)}</td><td class="n">${z(r.adjNeg)}</td><td class="n">${z(r.losses)}</td><td class="n b">${z(r.E)}</td>`
+      + `<td class="n">${z(r.F)}</td><td class="n b">${z(r.G)}</td><td class="l"></td></tr>`)).join('')
+  const bimonthly = `
+    <div class="sub-h">Bimonthly Summary of Usage</div>
+    <table class="mini"><thead><tr><th style="width:30%">Item</th><th>Distributed to Target Group</th><th>Quality Control</th><th>Condom Demonstration</th><th>Advocacy</th><th>TOTAL</th></tr></thead>
+      <tbody>${rows.filter(r => !r.group).map(r => `<tr><td class="l">${esc(r.name)}</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table>`
+  const inner = armsHeader('COMBINED REPORT AND REQUISITION FORM (CRRF) - CONDOM &amp; LUBRICANT', 'Condoms &amp; Lubricants') + crrfFields(ctx) + `
+    <table class="crrf sm"><thead>
+      <tr><th rowspan="3">Serial No.</th><th rowspan="3" style="width:20%">Item Description</th><th rowspan="3">Pack Size</th><th rowspan="3">Reporting Unit</th>
+          <th colspan="8">&nbsp;</th><th colspan="2" class="req">REQUISITION / ISSUE</th><th rowspan="3">Remarks</th></tr>
+      <tr><th rowspan="2">Beginning Balance</th><th rowspan="2">Qty Received</th><th rowspan="2">Qty Used</th><th rowspan="2">No. distributed</th><th colspan="2">Adjustments (+/&#8722;)</th><th rowspan="2">Losses</th><th rowspan="2">Physical Count</th><th rowspan="2">Max Stock (Qty)</th><th rowspan="2">Qty to Order</th></tr>
+      <tr><th>+</th><th>&#8722;</th></tr>
+      <tr class="keys"><th></th><th></th><th></th><th></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E+</th><th>E&#8722;</th><th>F</th><th>G</th><th>H = C&#215;2</th><th>I = H&#8722;G</th><th>J</th></tr></thead>
+      <tbody>${body}</tbody></table>
+    ${bimonthly}
+    ${expiryOfficers(['Report Prepared by (Full Name &amp; Signature):', 'Requisition Approved by (Full Name &amp; Signature):'])}`
+  openPrint('CRRF — Condoms & Lubricants', inner)
 }
