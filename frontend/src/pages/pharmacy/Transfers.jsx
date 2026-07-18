@@ -323,11 +323,17 @@ export function Transfers() {
   }
 
   async function disputeTransfer(t) {
+    // The disputing facility must give a reason (quantity short, wrong item,
+    // damaged/expired, …); it's recorded on the transfer and shown to the sender.
+    const reason = window.prompt('Reason for disputing this transfer\n(e.g. quantity short, wrong item, damaged/expired):', '')
+    if (reason === null) return                       // cancelled
+    const note = reason.trim()
+    if (!note) { toast('Please enter a reason for the dispute', 'red'); return }
     try {
       await api.transfers.dispute(t.id, {
         disputed_by: getStore().user?.email || '',
         facilityId: fid,
-        dispute_note: 'Disputed by receiver',
+        dispute_note: note,
       })
     } catch (dispErr) { toast('Error disputing transfer: ' + dispErr.message, 'red'); return }
     toast('Transfer marked as disputed', 'amber'); loadPending()
@@ -1027,6 +1033,9 @@ export function Transfers() {
                             )}
                             {t.status === 'disputed' && !isSender && (
                               <span className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5">✕ Disputed</span>
+                            )}
+                            {t.status === 'disputed' && t.dispute_note && t.dispute_note !== 'Disputed — stock restored' && (
+                              <span className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5" title="Dispute reason">Reason: {t.dispute_note}</span>
                             )}
                           </div>
                         </div>
