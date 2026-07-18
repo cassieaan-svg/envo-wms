@@ -757,6 +757,15 @@ export function Transfers() {
     printRIRV(moveRows, { facilityName: myFac?.name || '', packSize: cid => allCommodities.find(c => c.id === cid)?.pack_size || '', batches })
   }
 
+  // External move = same source + same RECEIVING FACILITY + same day. Different
+  // facilities never merge (one Transfer & Return form is to one facility).
+  const extMoveKey = r => [r.sending_facility_id, r.receiving_facility_id, String(r.initiated_at || '').slice(0, 10)].join('|')
+  async function printTransferMove(t, rows) {
+    const moveRows = rows.filter(r => extMoveKey(r) === extMoveKey(t))
+    const { printTransfer } = await import('../../utils/nationalForms')
+    printTransfer(moveRows, { facilityName: myFac?.name || '' })
+  }
+
   const HistoryTable = ({ rows, loading, emptyMsg, kind }) => {
     if (loading) return <div className="px-5 py-4 text-sm text-gray-500">Loading history…</div>
     if (!rows.length) return <div className="px-5 py-4 text-sm text-gray-500">{emptyMsg}</div>
@@ -779,9 +788,9 @@ export function Transfers() {
             <td className="px-4 py-3 text-xs text-gray-500">{t.receiving_facility_name}</td>
             <td className="px-4 py-3"><Badge type={t.dispute_note === 'Disputed — stock restored' ? 'amber' : t.status === 'accepted' ? 'ok' : 'out'}>{t.dispute_note === 'Disputed — stock restored' ? 'Stock restored' : t.status}</Badge></td>
             <td className="px-4 py-3">
-              <button onClick={() => kind === 'internal' ? printRIRVMove(t, rows) : printSlip(t)} className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
+              <button onClick={() => kind === 'internal' ? printRIRVMove(t, rows) : kind === 'external' ? printTransferMove(t, rows) : printSlip(t)} className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3"><path d="M4 5V2h8v3M4 11H2V6h12v5h-2M4 9h8v5H4z"/></svg>
-                {kind === 'internal' ? 'Print RIRV' : 'Print'}
+                {kind === 'internal' ? 'Print RIRV' : kind === 'external' ? 'Print Transfer' : 'Print'}
               </button>
             </td>
           </tr>
@@ -1428,7 +1437,7 @@ export function Transfers() {
                   <button onClick={() => loadSendHistory(extHistFrom, extHistTo)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
                 </div>
               </CardHeader>
-              <HistoryTable rows={sendHistory} loading={loadingS} emptyMsg="No external redistributions recorded." />
+              <HistoryTable rows={sendHistory} loading={loadingS} emptyMsg="No external redistributions recorded." kind="external" />
             </Card>
           )}
         </>

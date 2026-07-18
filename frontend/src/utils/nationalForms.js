@@ -38,7 +38,11 @@ const CSS = `
   .red{ color:#c0121a; font-weight:700; }
   .foot{ font-size:9px; color:#555; margin-top:8px; text-align:right; }
   .sigs{ display:grid; grid-template-columns:1fr 1fr; gap:6px 24px; margin-top:14px; font-size:10.5px; }
+  .sigs.two{ grid-template-columns:1fr 1fr 1fr; }
   .sg{ padding:3px 0; } .lbl{ color:#333; }
+  .cert{ margin-top:12px; font-size:10.5px; border-top:1px solid #999; padding-top:8px; line-height:1.9; }
+  .cert .cm{ margin-top:4px; }
+  .note{ margin-top:12px; font-size:11px; font-weight:700; text-align:center; letter-spacing:1px; }
   @page{ size:landscape; margin:8mm; }
 `
 
@@ -131,7 +135,7 @@ function moveDest(notes) {
   const sdp = rx(notes, 'SDP'); if (sdp) return `SDP — ${sdp}`
   return 'Dispensary'
 }
-const sigRow = role => `<div class="sg"><span class="lbl">${role}</span> ${line('', 150)} `
+const sigRow = (role, val = '') => `<div class="sg"><span class="lbl">${role}</span> ${line(val, 150)} `
   + `<span class="lbl">Signature</span> ${line('', 90)} <span class="lbl">Date</span> ${line('', 80)}</div>`
 
 // moveRows: the stock_transfer_log rows of ONE redistribution move (same
@@ -167,4 +171,41 @@ export function printRIRV(moveRows, ctx = {}) {
       <tbody>${lineRows}${blanks}</tbody></table>
     <div class="sigs">${sigRow('Requisition Prepared by (Full Name):')}${sigRow('Requisition Recommended by (Full Name):')}${sigRow('Requisition Approved by (Full Name):')}${sigRow('Commodities Issued by (Full Name):')}${sigRow('Commodities Received by (Full Name):')}</div>`
   openPrint(`Internal RIRV — ${to}`, inner)
+}
+
+// ── TRANSFER & RETURN ─────────────────────────────────────────────────────
+// External redistribution/return to ONE receiving facility. moveRows: the
+// transfer rows of one move (same source, same receiving facility, same day).
+// Batch/expiry are the RECORDED values from the transfer notes.
+export function printTransfer(moveRows, ctx = {}) {
+  const rows = moveRows || []
+  const first = rows[0] || {}
+  const from = first.sending_facility_name || ctx.facilityName || ''
+  const to = first.receiving_facility_name || ''
+  const reason = n => String(n || '').replace(/\[[^\]]*\]/g, '').trim()   // strip [tags] → free note
+  const lineRows = rows.map((r, i) => '<tr>' + `<td>${i + 1}</td>` + `<td class="l">${esc(r.commodity_name)}</td>`
+    + `<td>${esc(rx(r.notes, 'Batch') || '')}</td>` + `<td>${esc(rx(r.notes, 'Expiry') || '')}</td>`
+    + `<td class="n">${q(r.quantity)}</td>` + `<td class="l">${esc(reason(r.notes))}</td></tr>`).join('')
+  const pad = Math.max(0, Math.min(10, 6 - rows.length))
+  const blanks = Array.from({ length: pad }, (_, i) => `<tr><td>${rows.length + i + 1}</td>${'<td></td>'.repeat(5)}</tr>`).join('')
+  const carrier = rx(first.notes, 'Carrier') || ''
+  const approvedBy = rx(first.notes, 'Approved by') || ''
+
+  const inner = armsHeader('RECORD FOR TRANSFERRING / RETURNING COMMODITIES') + `
+    <div class="fields">
+      <div class="frow"><div class="f">Name of facility returning/transferring commodities: ${line(from, 300)}</div></div>
+      <div class="frow"><div class="f">Sent to: ${line(to, 320)}</div></div>
+    </div>
+    <table><thead><tr><th>S/No</th><th style="width:34%">Product Description</th><th>Batch No.</th><th>Expiry Date</th><th>Quantity</th><th style="width:26%">Reason for return / transfer</th></tr></thead>
+      <tbody>${lineRows}${blanks}</tbody></table>
+    <div class="sigs two">${sigRow('Record compiled by:', first.initiated_by || '')}${sigRow('Record approved by:', approvedBy)}${sigRow('Transfer / return by:')}</div>
+    <div class="cert"><b>Carrier:</b> I certify that the above quantities of transfer/return were received by me except where explained below.
+      <div class="cm">Comments: ${line('', 520)}</div>
+      <div class="sg">Name of Carrier: ${line(carrier, 160)} Designation: ${line('', 120)} Signature: ${line('', 120)} Date: ${line('', 80)}</div></div>
+    <div class="cert"><b>Receiving Facility:</b> I certify that the above quantities were received by me except where explained below (please explain the condition of items on receipt).
+      <div class="cm">Comments: ${line('', 520)}</div>
+      <div class="sg">Receiver's name: ${line('', 160)} Signature: ${line('', 120)} Date: ${line('', 80)}</div>
+      <div class="sg">Transfer approved by: ${line('', 160)} Signature: ${line('', 120)} Date: ${line('', 80)}</div></div>
+    <div class="note">NOTE: TO BE COMPLETED IN TRIPLICATES</div>`
+  openPrint(`Transfer & Return — ${to}`, inner)
 }
