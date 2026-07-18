@@ -3,6 +3,7 @@ import { api } from '../../lib/api'
 import { subscribeRealtime } from '../../lib/realtime'
 import { NavSection, NavItem } from '../../components/NavItem'
 import { useAppStore } from '../../store/appStore'
+import { rowForSite } from '../../utils/helpers'
 
 const icons = {
   dispense:  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4"><circle cx="8" cy="8" r="6"/><path d="M8 5v6M5 8h6"/></svg>,
@@ -14,24 +15,27 @@ const icons = {
 export function SdpNav() {
   const fid = useAppStore(s => s.currentFacility?.id)
   const commoditySection = useAppStore(s => s.commoditySection)
+  const sdpName = useAppStore(s => s.sdpName)
   const [pendingCount, setPendingCount] = useState(0)
 
   useEffect(() => {
     if (!fid) { setPendingCount(0); return }
     loadPendingCount()
     return subscribeRealtime(['stock_transfer_log'], loadPendingCount)
-  }, [fid, commoditySection])
+  }, [fid, commoditySection, sdpName])
 
   async function loadPendingCount() {
     if (!fid) { setPendingCount(0); return }
-    // Incoming transfers awaiting this site (pending/in_transit) plus any outgoing
-    // request it's owed an action on (admin-assigned dispatch / approval / in-transit).
+    // Outgoing requests THIS site is owed an action on (admin-assigned dispatch /
+    // approval / in-transit), scoped to this SDP site so other sites at the same
+    // facility don't inflate the badge.
     try {
       const [incoming, outgoing] = await Promise.all([
         api.transfers.list({ facility_id: fid, direction: 'incoming', status: 'pending,in_transit', section: commoditySection || undefined }),
         api.transfers.list({ facility_id: fid, direction: 'outgoing', status: 'pending,pending_approval,in_transit', section: commoditySection || undefined }),
       ])
-      setPendingCount((incoming?.length || 0) + (outgoing?.length || 0))
+      const mine = r => rowForSite(r, 'SDP', sdpName)
+      setPendingCount((incoming || []).filter(mine).length + (outgoing || []).filter(mine).length)
     } catch { setPendingCount(0) }
   }
 

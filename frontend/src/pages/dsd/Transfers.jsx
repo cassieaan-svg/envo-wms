@@ -7,7 +7,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate } from '../../utils/helpers'
+import { fmtDate, rowForSite } from '../../utils/helpers'
 
 function SubTab({ id, current, onChange, label, badge = 0 }) {
   return (
@@ -102,28 +102,28 @@ export function Transfers() {
     if (!facilityId) return
     setLoadingP(true)
     const data = await api.transfers.list({ facility_id: facilityId, direction: 'outgoing', status: 'pending_approval' }).catch(() => [])
-    setPending((data || []).filter(r => r.notes?.includes('[DSD:')))
+    setPending((data || []).filter(r => rowForSite(r, 'DSD', dsdSiteName)))
     setLoadingP(false)
   }
 
   async function loadPendingSilent(facilityId) {
     if (!facilityId) return
     const data = await api.transfers.list({ facility_id: facilityId, direction: 'outgoing', status: 'pending_approval' }).catch(() => [])
-    setPending((data || []).filter(r => r.notes?.includes('[DSD:')))
+    setPending((data || []).filter(r => rowForSite(r, 'DSD', dsdSiteName)))
   }
 
   async function loadDispatched(facilityId) {
     if (!facilityId) return
     setLoadingDispatched(true)
     const data = await api.transfers.list({ facility_id: facilityId, direction: 'outgoing', status: 'dispatched' }).catch(() => [])
-    setDispatched((data || []).filter(r => r.notes?.includes('[DSD:')))
+    setDispatched((data || []).filter(r => rowForSite(r, 'DSD', dsdSiteName)))
     setLoadingDispatched(false)
   }
 
   async function loadDispatchedSilent(facilityId) {
     if (!facilityId) return
     const data = await api.transfers.list({ facility_id: facilityId, direction: 'outgoing', status: 'dispatched' }).catch(() => [])
-    setDispatched((data || []).filter(r => r.notes?.includes('[DSD:')))
+    setDispatched((data || []).filter(r => rowForSite(r, 'DSD', dsdSiteName)))
   }
 
   async function confirmReceipt(record) {
@@ -172,7 +172,7 @@ export function Transfers() {
       facility_id: facilityId, direction: 'outgoing', status: 'accepted',
       date_field: 'initiated_at', from, to,
     }).catch(() => [])
-    setRequestHistory((data || []).filter(r => r.notes?.includes('[DSD:')))
+    setRequestHistory((data || []).filter(r => rowForSite(r, 'DSD', dsdSiteName)))
     setLoadingReqHist(false)
   }
 

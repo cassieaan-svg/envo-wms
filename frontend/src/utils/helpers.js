@@ -164,6 +164,18 @@ export function calcAMCFromTotal(total, months) {
   return months > 0 ? (total || 0) / months : 0
 }
 
+// A DSD/SDP site must only see its OWN internal redistribution rows. Those rows are
+// tagged "[DSD: <site>]" / "[SDP: <site>]" in notes and carry the site as
+// receiving_facility_name. Match case-insensitively so name-casing drift doesn't
+// leak one site's rows into another site at the same facility. Returns false when no
+// site is set, so a row never matches by accident.
+export function rowForSite(r, tag, site) {
+  const s = (site || '').trim().toLowerCase()
+  if (!s) return false
+  const m = new RegExp(`\\[${tag}:\\s*([^\\]]+)\\]`, 'i').exec(r.notes || '')?.[1]?.trim().toLowerCase()
+  return m === s || (r.receiving_facility_name || '').trim().toLowerCase() === s
+}
+
 // ── Section categories ────────────────────────────
 export const SECTION_CATEGORIES = {
   pharmacy: ['Pharmacy drugs', 'Medical supplies'],
