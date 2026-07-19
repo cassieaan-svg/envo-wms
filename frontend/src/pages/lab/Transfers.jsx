@@ -367,7 +367,10 @@ export function Transfers() {
     const f = from || reqHistFrom; const t2 = to || reqHistTo
     setLoadingReqHist(true)
     const data = await api.transfers.list({
-      facility_id: fid, direction: 'incoming', status: 'accepted,cancelled,dismissed',
+      // The requesting facility's own record of requests they made — the full
+      // lifecycle: still in transit (dispatched, awaiting their acceptance),
+      // accepted, refused (disputed) and cancelled/dismissed.
+      facility_id: fid, direction: 'incoming', status: 'accepted,cancelled,dismissed,in_transit,disputed',
       date_field: 'initiated_at', from: f, to: t2, limit: 200,
       section: commoditySection || undefined,
     }).catch(() => [])
@@ -434,7 +437,12 @@ export function Transfers() {
       date_field: 'resolved_at', from: f, to: t2, limit: 200,
       section: commoditySection || undefined,
     }).catch(() => [])
-    setSendHistory((data || []).filter(t => t.sending_facility_id !== t.receiving_facility_id && !t.notes?.includes('[Internal:') && !t.notes?.includes('[SDP:') && !t.notes?.includes('[DSD:')))
+    // External redistributions only (a real facility→facility move, both sides set
+    // and different), for BOTH directions — the transferring facility and the
+    // receiving facility each see the resolved move and can print it.
+    setSendHistory((data || []).filter(t => t.sending_facility_id && t.receiving_facility_id
+      && t.sending_facility_id !== t.receiving_facility_id
+      && !t.notes?.includes('[Internal:') && !t.notes?.includes('[SDP:') && !t.notes?.includes('[DSD:')))
     setLoadingS(false)
   }
 
@@ -855,6 +863,7 @@ export function Transfers() {
           {[
             { id: 'request',  label: 'Request',                  desc: 'Submit and track redistribution requests',          badge: totalPendingBadge },
             { id: 'internal', label: 'Internal redistribution',  desc: 'Store to service delivery point transfers', badge: allIntPendingBadge },
+            { id: 'external', label: 'External redistribution',  desc: 'Monitor and print sent & received transfers',       badge: 0 },
           ].filter(card => {
             if (isDispenser || isSDP) return ['request','internal'].includes(card.id)
             return true
@@ -1373,15 +1382,16 @@ export function Transfers() {
       {/* ══════════════════════════════════════════════════════════════════════
           EXTERNAL REDISTRIBUTION
       ══════════════════════════════════════════════════════════════════════ */}
-      {false && primary === 'external' && (
+      {primary === 'external' && (
         <>
           <BackButton />
-          <div className="flex gap-1.5 mb-4 flex-wrap border-b border-white/8 pb-3">
-            <SubTab id="form"    current={extSub} onChange={setExtSub} label="Send transfer" />
-            <SubTab id="history" current={extSub} onChange={setExtSub} label="History" />
+          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 text-sm text-blue-300 mb-4">
+            Monitoring only — external redistributions are arranged through <strong>Request</strong>. This view lists resolved transfers (both sent and received) so the transferring and receiving facilities can review the outcome and print the Transfer &amp; Return form.
           </div>
 
-          {extSub === 'form' && (
+          {/* Send form intentionally disabled: this module is view/print only and must
+              NOT be used to perform transfers. */}
+          {false && (
             <Card>
               <CardHeader><CardTitle>External redistribution</CardTitle></CardHeader>
               <CardBody>
@@ -1456,7 +1466,7 @@ export function Transfers() {
             </Card>
           )}
 
-          {extSub === 'history' && (
+          {(
             <Card>
               <CardHeader>
                 <CardTitle>External redistribution history</CardTitle>
