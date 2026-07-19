@@ -1385,10 +1385,6 @@ export function Transfers() {
       {primary === 'external' && (
         <>
           <BackButton />
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 text-sm text-blue-300 mb-4">
-            Monitoring only — external redistributions are arranged through <strong>Request</strong>. This view lists resolved transfers (both sent and received) so the transferring and receiving facilities can review the outcome and print the Transfer &amp; Return form.
-          </div>
-
           {/* Send form intentionally disabled: this module is view/print only and must
               NOT be used to perform transfers. */}
           {false && (
