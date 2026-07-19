@@ -19,6 +19,7 @@ export function Log() {
   const commoditySection = store.commoditySection
   const [typeFilter, setTypeFilter] = useState('')
   const [catFilter, setCatFilter]   = useState('')
+  const [transferScope, setTransferScope] = useState('')   // '' | external | internal — only meaningful when typeFilter==='transfer'
   const [period, setPeriod]         = useState(0)   // 0 = all time; otherwise days back
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
@@ -115,7 +116,15 @@ export function Log() {
 
   const typeBadge = { dispense:'out', intake:'ok', adjustment:'info', transfer:'low' }
   const typeLabel = { dispense:'Consumption', intake:'Intake', adjustment:'Adjustment', transfer:'Transfer' }
-  const shownRecords = catFilter ? allRecords.filter(r => (r.commodities?.category) === catFilter) : allRecords
+  // A transfer is "internal" when its notes carry a redistribution tag
+  // (store→dispensary, DSD or SDP); any other facility→facility move is external.
+  // The scope select narrows the Transfers view to one or the other.
+  const isInternalTransfer = r => /\[(Internal|DSD|SDP):/.test(r.notes || '')
+  let shownRecords = catFilter ? allRecords.filter(r => (r.commodities?.category) === catFilter) : allRecords
+  if (typeFilter === 'transfer' && transferScope) {
+    shownRecords = shownRecords.filter(r => r._type !== 'transfer'
+      || (transferScope === 'internal' ? isInternalTransfer(r) : !isInternalTransfer(r)))
+  }
 
   return (
     <div>
@@ -168,6 +177,14 @@ export function Log() {
               <option value="adjustment">Adjustments</option>
               <option value="transfer">Transfers</option>
             </select>
+            {typeFilter === 'transfer' && (
+              <select value={transferScope} onChange={e=>setTransferScope(e.target.value)}
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                <option value="">All transfers</option>
+                <option value="external">External only</option>
+                <option value="internal">Internal only</option>
+              </select>
+            )}
             <select value={catFilter} onChange={e=>setCatFilter(e.target.value)}
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
               <option value="">All categories</option>

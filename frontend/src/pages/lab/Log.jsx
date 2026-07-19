@@ -19,6 +19,7 @@ export function Log() {
   const isStoreMgr = store.isStoreManager()
   const commoditySection = store.commoditySection
   const [typeFilter, setTypeFilter] = useState('')
+  const [transferScope, setTransferScope] = useState('')   // '' | external | internal — only meaningful when typeFilter==='transfer'
   const [period, setPeriod]         = useState(0)   // 0 = all time; otherwise days back
   const [allRecords, setAllRecords] = useState([])
   const [loading, setLoading]       = useState(true)
@@ -111,6 +112,14 @@ export function Log() {
 
   const typeBadge = { dispense:'out', intake:'ok', adjustment:'info', transfer:'low' }
   const typeLabel = { dispense:'Utilization', intake:'Intake', adjustment:'Adjustment', transfer:'Transfer' }
+  // A transfer is "internal" when its notes carry a redistribution tag
+  // (store→dispensary, DSD or SDP); any other facility→facility move is external.
+  // The scope select narrows the Transfers view to one or the other.
+  const isInternalTransfer = r => /\[(Internal|DSD|SDP):/.test(r.notes || '')
+  const shownRecords = (typeFilter === 'transfer' && transferScope)
+    ? allRecords.filter(r => r._type !== 'transfer'
+        || (transferScope === 'internal' ? isInternalTransfer(r) : !isInternalTransfer(r)))
+    : allRecords
 
   return (
     <div>
@@ -162,6 +171,14 @@ export function Log() {
               <option value="adjustment">Adjustments</option>
               <option value="transfer">Transfers</option>
             </select>
+            {typeFilter === 'transfer' && (
+              <select value={transferScope} onChange={e=>setTransferScope(e.target.value)}
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                <option value="">All transfers</option>
+                <option value="external">External only</option>
+                <option value="internal">Internal only</option>
+              </select>
+            )}
             {isStoreMgr && fid && (
               <button onClick={()=>setBinCard({ fid })}
                 className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5">Bin Card</button>
@@ -171,7 +188,7 @@ export function Log() {
             </button>
           </div>
         </CardHeader>
-        {loading && allRecords.length===0 ? <LoadingState/> : allRecords.length===0 ? <EmptyState message="No activity recorded yet."/> : (
+        {loading && allRecords.length===0 ? <LoadingState/> : shownRecords.length===0 ? <EmptyState message="No activity recorded yet."/> : (
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
               {['Date','Type','Commodity',...(isAdmin?['Facility']:[]),'Qty','Details',...(canManage?['']:[''])].map((h,i)=>(
@@ -179,7 +196,7 @@ export function Log() {
               ))}
               {canManage && <th className="px-4 py-3"/>}
             </tr></thead>
-            <tbody>{allRecords.map(r=>{
+            <tbody>{shownRecords.map(r=>{
               let qty='', details=''
               if (r._type==='dispense') {
                 qty = <span className="font-mono text-sm text-red-400">-{fmtDispenseQty(r.quantity,r.commodities)}</span>
