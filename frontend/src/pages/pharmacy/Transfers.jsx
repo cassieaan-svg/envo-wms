@@ -985,6 +985,10 @@ export function Transfers() {
                     const isAdminUser     = ['overall_admin','state_admin','lga_admin'].includes(accessLevel)
                     const needsAssignment = t.sending_facility_id === null
                     if (t.status === 'disputed' && isReceiver) return null
+                    // A DSD/SDP dispute already credited the store back (note contains
+                    // "stock restored"); no action is left, so drop it from this list —
+                    // otherwise the store sees a Restore button that would double-credit.
+                    if (t.status === 'disputed' && /stock restored/i.test(t.dispute_note || '')) return null
                     const assignFacGroups = {}
                     allFacilities.filter(f => f.id !== t.receiving_facility_id).forEach(f => {
                       const s = f.state || 'Other', l = f.lga || 'Other'
