@@ -395,8 +395,11 @@ export function Transfers() {
   }
 
   async function cancelRequest(id) {
-    if (!window.confirm('Cancel this stock request?')) return
-    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '' }).catch(() => {})
+    // Cancelling / refusing a transfer captures an optional reason (e.g. out of
+    // stock, cannot fulfil) recorded on the transfer notes as [Cancelled: …].
+    const reason = window.prompt('Reason for cancelling / refusing this transfer (optional):', '')
+    if (reason === null) return
+    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '', reason: reason.trim() || undefined }).catch(() => {})
     toast('Request cancelled', 'green'); loadMyRequests(); loadPending()
   }
 
@@ -578,8 +581,9 @@ export function Transfers() {
   }
 
   async function rejectInternal(id) {
-    if (!window.confirm('Reject this transfer request?')) return
-    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '' }).catch(() => {})
+    const reason = window.prompt('Reason for rejecting this transfer request (optional):', '')
+    if (reason === null) return
+    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '', reason: reason.trim() || undefined }).catch(() => {})
     toast('Transfer request rejected', 'green'); loadIntPendingApprovals()
   }
 
@@ -685,8 +689,9 @@ export function Transfers() {
   }
 
   async function rejectDsd(id) {
-    if (!window.confirm('Reject this DSD request?')) return
-    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '' }).catch(() => {})
+    const reason = window.prompt('Reason for rejecting this DSD request (optional):', '')
+    if (reason === null) return
+    await api.transfers.cancel(id, { cancelled_by: getStore().user?.email || '', reason: reason.trim() || undefined }).catch(() => {})
     toast('DSD request rejected', 'green'); loadDsdPendingApprovals()
   }
 
