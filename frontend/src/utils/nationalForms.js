@@ -3,7 +3,6 @@
 // coat of arms. Opened via the app's Print / Save as PDF buttons. This module is
 // dynamically imported so the ~420KB coat-of-arms SVG stays out of the main bundle.
 import ncoa from '../assets/ncoa.svg?raw'
-import { toast } from '../components/ui/Toast'
 import { fmtDate } from './helpers'
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
@@ -63,23 +62,23 @@ function armsHeader(title, sub = '') {
     + `<div class="arms">${ncoa}</div></div>${band}`
 }
 
-// Open a print window with the given inner HTML, trigger the print dialog.
+// Open the form in a new tab that prints itself. Two things keep the APP tab
+// responsive: the print() call lives in a script INSIDE the new tab, and the tab
+// is opened with rel="noopener" so it gets its OWN renderer process. A synchronous
+// window.print() spins a nested event loop that would otherwise freeze every tab
+// in the same process — including the app — until the dialog is dismissed.
 function openPrint(title, inner) {
-  // No app branding on the printed output — these are official national forms.
-  // The print dialog is triggered by a script INSIDE the new tab (not by the opener
-  // calling win.print()), so the print dialog belongs to the print tab and the app
-  // tab stays responsive instead of freezing until the print tab is closed.
-  const auto = '<' + 'script>window.addEventListener("load",function(){window.focus();window.print()});'
-    + 'window.addEventListener("afterprint",function(){window.close()});<' + '/script>'
+  const auto = '<' + 'script>window.addEventListener("load",function(){window.print()});<' + '/script>'
   const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>`
     + `<style>${CSS}</style></head><body><div class="paper">${inner}</div>${auto}</body></html>`
   const url = URL.createObjectURL(new Blob([doc], { type: 'text/html' }))
-  const win = window.open(url, '_blank')
-  if (!win) {
-    URL.revokeObjectURL(url)
-    toast('Allow pop-ups to print / export PDF', 'red')
-    return
-  }
+  const a = document.createElement('a')
+  a.href = url
+  a.target = '_blank'
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
 
