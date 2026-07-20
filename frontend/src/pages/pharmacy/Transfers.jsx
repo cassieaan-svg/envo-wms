@@ -86,6 +86,11 @@ export function Transfers() {
   const [acceptingId, setAcceptingId] = useState(null)
   const [acceptReceiverName, setAcceptReceiverName] = useState('')
   const [acceptLoading, setAcceptLoading] = useState(false)
+  // Partial dispute: how much of the delivery the receiver is keeping, + reason.
+  const [disputingId, setDisputingId] = useState(null)
+  const [disputeQtyAccepted, setDisputeQtyAccepted] = useState(0)
+  const [disputeReason, setDisputeReason] = useState('')
+  const [disputeLoading, setDisputeLoading] = useState(false)
   const [dispatchingId, setDispatchingId] = useState(null)
   const [dispatchApprovedBy, setDispatchApprovedBy] = useState('')
   const [dispatchCarrier, setDispatchCarrier] = useState('')
@@ -316,21 +321,36 @@ export function Transfers() {
     await loadStock(); loadPending(); loadMyRequests()
   }
 
-  async function disputeTransfer(t) {
-    // The disputing facility must give a reason (quantity short, wrong item,
-    // damaged/expired, …); it's recorded on the transfer and shown to the sender.
-    const reason = window.prompt('Reason for disputing this transfer\n(e.g. quantity short, wrong item, damaged/expired):', '')
-    if (reason === null) return                       // cancelled
-    const note = reason.trim()
+  // A dispute can be partial: the receiver states how much of the delivery they
+  // are keeping and gives a reason. The server credits the kept quantity here and
+  // returns the rest to the sender's store, then closes the transfer as disputed.
+  function openDispute(t) {
+    setDisputingId(t.id); setDisputeQtyAccepted(0); setDisputeReason('')
+  }
+
+  async function confirmDispute(t) {
+    const note = disputeReason.trim()
     if (!note) { toast('Please enter a reason for the dispute', 'red'); return }
+    const dispatched = t.quantity || 0
+    const accepted = parseInt(disputeQtyAccepted) || 0
+    if (accepted < 0 || accepted > dispatched) {
+      toast(`Qty accepted must be between 0 and ${dispatched}`, 'red'); return
+    }
+    setDisputeLoading(true)
     try {
       await api.transfers.dispute(t.id, {
         disputed_by: getStore().user?.email || '',
         facilityId: fid,
         dispute_note: note,
+        qty_accepted: accepted,
       })
-    } catch (dispErr) { toast('Error disputing transfer: ' + dispErr.message, 'red'); return }
-    toast('Transfer marked as disputed', 'amber'); loadPending()
+    } catch (dispErr) { toast('Error disputing transfer: ' + dispErr.message, 'red'); setDisputeLoading(false); return }
+    const returned = dispatched - accepted
+    toast(accepted > 0
+      ? `Disputed — ${accepted} accepted, ${returned} returned to ${t.sending_facility_name || 'sender'}`
+      : 'Transfer disputed — stock returned to sender', 'amber')
+    setDisputingId(null); setDisputeReason(''); setDisputeQtyAccepted(0); setDisputeLoading(false)
+    await loadStock(); loadPending(); loadMyRequests()
   }
 
   function arrangeTransferFromRequest(req) {
@@ -791,7 +811,12 @@ export function Transfers() {
           <tr key={t.id} className="border-b border-white/5 hover:bg-white/2">
             <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDate(t.resolved_at)}</td>
             <td className="px-4 py-3 font-medium text-gray-100">{t.commodity_name}</td>
-            <td className="px-4 py-3 font-mono text-sm text-gray-300">{t.quantity}{commUnit(t.commodity_id) ? ` ${commUnit(t.commodity_id)}` : ''}</td>
+            <td className="px-4 py-3 font-mono text-sm text-gray-300">
+              {t.quantity}{commUnit(t.commodity_id) ? ` ${commUnit(t.commodity_id)}` : ''}
+              {t.status === 'disputed' && t.qty_accepted != null && (
+                <div className="text-xs text-gray-500 font-sans mt-0.5">{t.qty_accepted} kept · {t.qty_returned} returned</div>
+              )}
+            </td>
             <td className="px-4 py-3 text-xs font-semibold whitespace-nowrap"><span className={isOut ? 'text-red-400' : 'text-green-400'}>{isOut ? '▼ Stock out' : '▲ Stock in'}</span></td>
             <td className="px-4 py-3 text-xs text-gray-500">{t.sending_facility_name}</td>
             <td className="px-4 py-3 text-xs text-gray-500">{t.receiving_facility_name}</td>
@@ -813,6 +838,50 @@ export function Transfers() {
 
 
   const commUnit = (commodityId) => allCommodities.find(c => c.id === commodityId)?.unit || ''
+
+  // Partial-dispute panel. Deliberately a plain function called as
+  // {disputePanel(t)} rather than a nested <Component/>: a component defined in
+  // the render body is a new type every render, so the inputs would remount and
+  // the reason field would lose focus on every keystroke.
+  const disputePanel = (t) => {
+    const dispatched = t.quantity || 0
+    const accepted = Math.min(Math.max(parseInt(disputeQtyAccepted) || 0, 0), dispatched)
+    const unit = commUnit(t.commodity_id) ? ` ${commUnit(t.commodity_id)}` : ''
+    return (
+      <div className="mt-3 p-3 bg-red-500/5 border border-red-500/20 rounded-lg space-y-3">
+        <div className="text-xs text-gray-500">
+          Dispatched: <span className="text-gray-300 font-medium">{dispatched}{unit}</span> — keep what you received and the rest goes back.
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Qty accepted</label>
+            <input type="number" min="0" max={dispatched} value={disputeQtyAccepted}
+              onChange={e => setDisputeQtyAccepted(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-red-500" />
+            <p className="text-xs text-gray-600 mt-1">Leave 0 to reject the whole delivery.</p>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Qty returned</label>
+            <input type="number" value={dispatched - accepted} readOnly
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-400 opacity-60 cursor-not-allowed" />
+            <p className="text-xs text-gray-600 mt-1">Back to {t.sending_facility_name || 'the sender'}.</p>
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Reason *</label>
+          <input type="text" value={disputeReason} onChange={e => setDisputeReason(e.target.value)}
+            placeholder="e.g. quantity short, wrong item, damaged/expired"
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-red-500" />
+        </div>
+        <div className="flex gap-2">
+          <Button variant="danger" size="sm" disabled={disputeLoading} onClick={() => confirmDispute(t)}>
+            {disputeLoading ? 'Submitting…' : 'Confirm dispute'}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => { setDisputingId(null); setDisputeReason(''); setDisputeQtyAccepted(0) }}>Cancel</Button>
+        </div>
+      </div>
+    )
+  }
 
   const incomingCount = pending.filter(t => t.receiving_facility_id === fid && t.status === 'in_transit').length
   // My requests still open (awaiting admin review or the assigned source to dispatch).
@@ -1017,7 +1086,7 @@ export function Transfers() {
                             )}
                             {t.status === 'in_transit' && isReceiver && !isDispenser && (
                               <><Button variant="success" size="sm" onClick={() => { setAcceptingId(t.id); setAcceptReceiverName('') }}>✓ Accept</Button>
-                                <Button variant="danger" size="sm" onClick={() => disputeTransfer(t)}>✕ Dispute</Button></>
+                                <Button variant="danger" size="sm" onClick={() => openDispute(t)}>✕ Dispute</Button></>
                             )}
                             {t.status === 'in_transit' && isReceiver && isDispenser && (
                               <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-full px-2 py-0.5">📦 In transit</span>
@@ -1128,6 +1197,7 @@ export function Transfers() {
                             <Button variant="default" size="sm" onClick={() => { setAcceptingId(null); setAcceptReceiverName('') }}>Cancel</Button>
                           </div>
                         )}
+                        {disputingId === t.id && disputePanel(t)}
                       </div>
                     )
                   })
@@ -1170,7 +1240,7 @@ export function Transfers() {
                           <>
                             <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-full px-2 py-0.5">📦 In transit</span>
                             {!isDispenser && <Button variant="success" size="sm" onClick={() => { setAcceptingId(r.id); setAcceptReceiverName('') }}>✓ Accept</Button>}
-                            {!isDispenser && <Button variant="danger" size="sm" onClick={() => disputeTransfer(r)}>✕ Dispute</Button>}
+                            {!isDispenser && <Button variant="danger" size="sm" onClick={() => openDispute(r)}>✕ Dispute</Button>}
                           </>
                         ) : r.sending_facility_id ? (
                           <>
@@ -1198,6 +1268,7 @@ export function Transfers() {
                         <Button variant="default" size="sm" onClick={() => { setAcceptingId(null); setAcceptReceiverName('') }}>Cancel</Button>
                       </div>
                     )}
+                    {disputingId === r.id && disputePanel(r)}
                   </div>
                 )})
               )}

@@ -176,11 +176,37 @@ export function Alerts() {
   }
 
   async function disputeTransfer(req) {
-    await api.transfers.dispute(req.id, {
-      disputed_by: store.user?.email || '',
-      dispute_note: 'Disputed by receiver',
-    }).catch(() => {})
-    toast('Transfer marked as disputed','amber')
+    // A dispute can be partial: keep what actually arrived and the rest goes
+    // back to the sending facility's store. The server splits the stock and
+    // closes the transfer as disputed — a dispute is terminal, so the facility
+    // raises a fresh request for anything it still needs.
+    const dispatched = req.quantity || 0
+    const input = window.prompt(
+      `Dispute this transfer.
+
+Dispatched: ${dispatched}
+How many did you actually accept? The rest goes back to the sender.`, '0')
+    if (input === null) return                        // cancelled
+    const accepted = parseInt(input)
+    if (isNaN(accepted) || accepted < 0 || accepted > dispatched) {
+      toast(`Qty accepted must be between 0 and ${dispatched}`, 'red'); return
+    }
+    const reason = window.prompt('Reason for the dispute\n(e.g. quantity short, wrong item, damaged/expired):', '')
+    if (reason === null) return
+    const note = reason.trim()
+    if (!note) { toast('Please enter a reason for the dispute', 'red'); return }
+    // Report a real failure instead of swallowing it: this moves stock now.
+    try {
+      await api.transfers.dispute(req.id, {
+        disputed_by: store.user?.email || '',
+        facilityId: fid,
+        dispute_note: note,
+        qty_accepted: accepted,
+      })
+    } catch (err) { toast('Error disputing transfer: ' + err.message, 'red'); return }
+    toast(accepted > 0
+      ? `Disputed — ${accepted} accepted, ${dispatched - accepted} returned to the sender`
+      : 'Transfer disputed — stock returned to the sender', 'amber')
     loadFacReqAlerts()
   }
 

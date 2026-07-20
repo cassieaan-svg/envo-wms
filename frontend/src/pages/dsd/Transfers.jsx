@@ -139,18 +139,33 @@ export function Transfers() {
   }
 
   async function disputeReceipt(record) {
-    if (!window.confirm('Dispute this transfer? The stock returns to the store and you will need to request it again.')) return
-    // One transactional call: the server returns the quantity to the parent
-    // facility's store and marks the transfer disputed. A dispute is terminal —
-    // don't credit the store here too, or the stock would be added twice.
+    // A dispute can be partial: keep what actually arrived, send the rest back.
+    const dispatched = record.quantity || 0
+    const input = window.prompt(
+      `Dispute this transfer.\n\nDispatched: ${dispatched}\nHow many did you actually accept? The rest goes back to the store.`, '0')
+    if (input === null) return                        // cancelled
+    const accepted = parseInt(input)
+    if (isNaN(accepted) || accepted < 0 || accepted > dispatched) {
+      toast(`Qty accepted must be between 0 and ${dispatched}`, 'red'); return
+    }
+    const reason = window.prompt('Reason for the dispute\n(e.g. quantity short, wrong item, damaged/expired):', '')
+    if (reason === null) return
+    const note = reason.trim()
+    if (!note) { toast('Please enter a reason for the dispute', 'red'); return }
+    // One transactional call: the server credits the accepted quantity to this
+    // site, returns the rest to the parent facility's store and marks the
+    // transfer disputed. Don't touch stock here too, or it would be added twice.
     try {
       await api.transfers.dispute(record.id, {
         disputed_by: useAppStore.getState().user?.email || '',
         facilityId: fid,
-        dispute_note: 'Disputed by DSD',
+        dispute_note: note,
+        qty_accepted: accepted,
       })
     } catch (err) { toast('Error disputing transfer: ' + err.message, 'red'); return }
-    toast('Transfer disputed — stock returned to the store', 'amber')
+    toast(accepted > 0
+      ? `Disputed — ${accepted} accepted, ${dispatched - accepted} returned to the store`
+      : 'Transfer disputed — stock returned to the store', 'amber')
     await loadDispatched(fid)
   }
 
