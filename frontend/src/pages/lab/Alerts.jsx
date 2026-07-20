@@ -121,9 +121,20 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     const note = reason.trim()
     if (!note) { toast('Please enter a reason for the dispute', 'red'); return }
     // Report a real failure instead of swallowing it: this moves stock now.
+    // Record a person, never a login e-mail: this name is what shows against
+    // the dispute and, for any accepted portion, on the printed transfer form.
+    const u = store.user
+    let byName = (u?.user_metadata?.full_name || u?.user_metadata?.name || '').trim()
+    if (!byName) {
+      const typed = window.prompt('Your full name (recorded against this dispute):', '')
+      if (typed === null) return
+      byName = typed.trim()
+      if (!byName) { toast('Please enter your name', 'red'); return }
+    }
     try {
       await api.transfers.dispute(req.id, {
-        disputed_by: store.user?.email || '',
+        disputed_by: byName,
+        received_by: byName,
         facilityId: fid,
         dispute_note: note,
         qty_accepted: accepted,

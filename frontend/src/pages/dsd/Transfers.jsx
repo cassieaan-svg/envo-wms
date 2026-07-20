@@ -140,13 +140,14 @@ export function Transfers() {
 
   async function disputeReceipt(record) {
     // A dispute can be partial: keep what actually arrived, send the rest back.
-    const dispatched = record.quantity || 0
+    // dispatchedQty, not `dispatched` - that would shadow the component state array.
+    const dispatchedQty = record.quantity || 0
     const input = window.prompt(
-      `Dispute this transfer.\n\nDispatched: ${dispatched}\nHow many did you actually accept? The rest goes back to the store.`, '0')
+      `Dispute this transfer.\n\nDispatched: ${dispatchedQty}\nHow many did you actually accept? The rest goes back to the store.`, '0')
     if (input === null) return                        // cancelled
     const accepted = parseInt(input)
-    if (isNaN(accepted) || accepted < 0 || accepted > dispatched) {
-      toast(`Qty accepted must be between 0 and ${dispatched}`, 'red'); return
+    if (isNaN(accepted) || accepted < 0 || accepted > dispatchedQty) {
+      toast(`Qty accepted must be between 0 and ${dispatchedQty}`, 'red'); return
     }
     const reason = window.prompt('Reason for the dispute\n(e.g. quantity short, wrong item, damaged/expired):', '')
     if (reason === null) return
@@ -155,16 +156,27 @@ export function Transfers() {
     // One transactional call: the server credits the accepted quantity to this
     // site, returns the rest to the parent facility's store and marks the
     // transfer disputed. Don't touch stock here too, or it would be added twice.
+    // Record a person, never a login e-mail: this name is what shows against
+    // the dispute and, for any accepted portion, on the printed transfer form.
+    const u = useAppStore.getState().user
+    let byName = (u?.user_metadata?.full_name || u?.user_metadata?.name || '').trim()
+    if (!byName) {
+      const typed = window.prompt('Your full name (recorded against this dispute):', '')
+      if (typed === null) return
+      byName = typed.trim()
+      if (!byName) { toast('Please enter your name', 'red'); return }
+    }
     try {
       await api.transfers.dispute(record.id, {
-        disputed_by: useAppStore.getState().user?.email || '',
+        disputed_by: byName,
+        received_by: byName,
         facilityId: fid,
         dispute_note: note,
         qty_accepted: accepted,
       })
     } catch (err) { toast('Error disputing transfer: ' + err.message, 'red'); return }
     toast(accepted > 0
-      ? `Disputed — ${accepted} accepted, ${dispatched - accepted} returned to the store`
+      ? `Disputed — ${accepted} accepted, ${dispatchedQty - accepted} returned to the store`
       : 'Transfer disputed — stock returned to the store', 'amber')
     await loadDispatched(fid)
   }

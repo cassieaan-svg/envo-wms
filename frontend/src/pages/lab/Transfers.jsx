@@ -88,6 +88,7 @@ export function Transfers() {
   const [disputingId, setDisputingId] = useState(null)
   const [disputeQtyAccepted, setDisputeQtyAccepted] = useState(0)
   const [disputeReason, setDisputeReason] = useState('')
+  const [disputeByName, setDisputeByName] = useState('')
   const [disputeLoading, setDisputeLoading] = useState(false)
   const [dispatchingId, setDispatchingId] = useState(null)
   const [dispatchApprovedBy, setDispatchApprovedBy] = useState('')
@@ -311,7 +312,9 @@ export function Transfers() {
   // are keeping and gives a reason. The server credits the kept quantity here and
   // returns the rest to the sender's store, then closes the transfer as disputed.
   function openDispute(t) {
+    const u = getStore().user
     setDisputingId(t.id); setDisputeQtyAccepted(0); setDisputeReason('')
+    setDisputeByName(u?.user_metadata?.full_name || u?.user_metadata?.name || '')
   }
 
   async function confirmDispute(t) {
@@ -322,20 +325,26 @@ export function Transfers() {
     if (accepted < 0 || accepted > dispatched) {
       toast(`Qty accepted must be between 0 and ${dispatched}`, 'red'); return
     }
+    // Both rows record a person, never a login: the dispute is attributed to
+    // this name, and any accepted portion prints it on the national Transfer &
+    // Return form as the receiver.
+    const byName = disputeByName.trim()
+    if (!byName) { toast('Please enter your name', 'red'); return }
     setDisputeLoading(true)
     try {
       await api.transfers.dispute(t.id, {
-        disputed_by: getStore().user?.email || '',
+        disputed_by: byName,
         facilityId: fid,
         dispute_note: note,
         qty_accepted: accepted,
+        received_by: byName,
       })
     } catch (dispErr) { toast('Error disputing transfer: ' + dispErr.message, 'red'); setDisputeLoading(false); return }
     const returned = dispatched - accepted
     toast(accepted > 0
       ? `Disputed — ${accepted} accepted, ${returned} returned to ${t.sending_facility_name || 'sender'}`
       : 'Transfer disputed — stock returned to sender', 'amber')
-    setDisputingId(null); setDisputeReason(''); setDisputeQtyAccepted(0); setDisputeLoading(false)
+    setDisputingId(null); setDisputeReason(''); setDisputeQtyAccepted(0); setDisputeByName(''); setDisputeLoading(false)
     await loadStock(); loadPending(); loadMyRequests()
   }
 
@@ -864,6 +873,17 @@ export function Transfers() {
           </div>
         </div>
         <div>
+          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Disputed by *</label>
+          <input type="text" value={disputeByName} onChange={e => setDisputeByName(e.target.value)}
+            placeholder="Your full name"
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-red-500" />
+          <p className="text-xs text-gray-600 mt-1">
+            {accepted > 0
+              ? `Recorded as the receiver of the ${accepted} accepted, which prints on the transfer form.`
+              : 'Recorded against the dispute.'}
+          </p>
+        </div>
+        <div>
           <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Reason *</label>
           <input type="text" value={disputeReason} onChange={e => setDisputeReason(e.target.value)}
             placeholder="e.g. quantity short, wrong item, damaged/expired"
@@ -873,7 +893,7 @@ export function Transfers() {
           <Button variant="danger" size="sm" disabled={disputeLoading} onClick={() => confirmDispute(t)}>
             {disputeLoading ? 'Submitting…' : 'Confirm dispute'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => { setDisputingId(null); setDisputeReason(''); setDisputeQtyAccepted(0) }}>Cancel</Button>
+          <Button variant="ghost" size="sm" onClick={() => { setDisputingId(null); setDisputeReason(''); setDisputeQtyAccepted(0); setDisputeByName('') }}>Cancel</Button>
         </div>
       </div>
     )
