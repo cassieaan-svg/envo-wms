@@ -139,22 +139,18 @@ export function Transfers() {
   }
 
   async function disputeReceipt(record) {
-    if (!window.confirm('Dispute this transfer? Stock will be restored to the store.')) return
-    // No single transition for "restore to store + mark disputed", so do it in two
-    // steps: credit the parent facility's store, then flag the transfer disputed.
-    const rows = await api.stock.list({ facility_id: fid, commodity_id: record.commodity_id, location_type: 'store' }).catch(() => [])
-    const storeStk = rows && rows[0]
-    if (storeStk) {
-      await api.stock.update(storeStk.id, storeStk.quantity + record.quantity).catch(() => {})
-    } else {
-      await api.stock.create({ facility_id: fid, commodity_id: record.commodity_id, quantity: record.quantity, location_type: 'store' }).catch(() => {})
-    }
-    await api.transfers.update(record.id, {
-      status: 'disputed',
-      resolved_at: new Date().toISOString(),
-      dispute_note: 'Disputed by DSD — stock restored to store',
-    }).catch(() => {})
-    toast('Transfer disputed — stock restored to store', 'amber')
+    if (!window.confirm('Dispute this transfer? The stock returns to the store and you will need to request it again.')) return
+    // One transactional call: the server returns the quantity to the parent
+    // facility's store and marks the transfer disputed. A dispute is terminal —
+    // don't credit the store here too, or the stock would be added twice.
+    try {
+      await api.transfers.dispute(record.id, {
+        disputed_by: useAppStore.getState().user?.email || '',
+        facilityId: fid,
+        dispute_note: 'Disputed by DSD',
+      })
+    } catch (err) { toast('Error disputing transfer: ' + err.message, 'red'); return }
+    toast('Transfer disputed — stock returned to the store', 'amber')
     await loadDispatched(fid)
   }
 

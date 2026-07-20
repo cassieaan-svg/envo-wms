@@ -114,7 +114,6 @@ export const api = {
     assignSource:    (id, body) => patch(`/transfers/${id}/assign`, body),
     accept:          (id, body) => patch(`/transfers/${id}/accept`, body),
     dispute:         (id, body) => patch(`/transfers/${id}/dispute`, body),
-    restore:         (id, body) => patch(`/transfers/${id}/restore`, body),
     cancel:          (id, body) => patch(`/transfers/${id}/cancel`, body),
     approveInternal: (id, body) => patch(`/transfers/${id}/approve-internal`, body),
     approveDsd:      (id, body) => patch(`/transfers/${id}/approve-dsd`, body),

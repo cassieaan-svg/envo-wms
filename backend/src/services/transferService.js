@@ -242,43 +242,38 @@ export class TransferService {
   }
 
   /**
-   * Receiver disputes an in-transit transfer (no stock movement here — the
-   * sender later restores via restoreDisputed). Optional facilityId guard
-   * matches the frontend's receiving_facility_id check.
+   * Receiver disputes an in-transit transfer. A dispute is TERMINAL: the dispatch
+   * is reversed here — the quantity goes straight back to the sending facility's
+   * store — and the row stays 'disputed' for good. It is never flipped to
+   * 'accepted' (that used to make a failed delivery render as a completed
+   * stock-in for the receiver, contradicting their actual stock). The requesting
+   * facility raises a fresh request instead.
+   *
+   * Optional facilityId guard: the disputing party is either the receiving
+   * facility (external transfer) or the sending facility (a DSD/SDP site
+   * disputing its parent store's dispatch, where receiving_facility_id is null).
    */
   static async dispute(transferId, data) {
     const { disputed_by, facilityId, dispute_note } = data
-    const params = [transferId, disputed_by || null, dispute_note || 'Disputed by receiver']
-    let sql = `update stock_transfer_log
-               set status = 'disputed', resolved_at = now(), resolved_by = $2, dispute_note = $3
-               where id = $1`
-    if (facilityId) { params.push(facilityId); sql += ` and receiving_facility_id = $${params.length}` }
-    sql += ` returning *`
-    const { rows } = await query(sql, params)
-    return rows[0] || null
-  }
-
-  /**
-   * Sender restores stock for a disputed transfer: credit sender store stock and
-   * mark accepted with a 'stock restored' note. Optional facilityId guard
-   * (sending side).
-   */
-  static async restoreDisputed(transferId, data) {
-    const { facilityId } = data
-    const transfer = await this.getTransferById(transferId)
-    if (!transfer) return null
-    const senderId = facilityId || transfer.sending_facility_id
-    if (!senderId) throw new Error('Transfer has no sending facility')
-
     return withTransaction(async exec => {
-      await this._creditStock(exec, senderId, transfer.commodity_id, transfer.quantity, 'store', transfer.section)
-      const params = [transferId]
-      let sql = `update stock_transfer_log
-                 set status = 'accepted', resolved_at = now(), dispute_note = 'Disputed — stock restored'
-                 where id = $1`
-      if (facilityId) { params.push(facilityId); sql += ` and sending_facility_id = $${params.length}` }
-      sql += ` returning *`
-      const { rows } = await exec(sql, params)
+      // Lock the row so two disputes can't both reverse the same dispatch.
+      const { rows: cur } = await exec(`select * from stock_transfer_log where id = $1 for update`, [transferId])
+      const prev = cur[0]
+      if (!prev) return null
+      if (prev.status === 'disputed') return null       // already disputed — never credit twice
+      if (facilityId && prev.receiving_facility_id !== facilityId && prev.sending_facility_id !== facilityId) return null
+
+      const { rows } = await exec(
+        `update stock_transfer_log
+            set status = 'disputed', resolved_at = now(), resolved_by = $2, dispute_note = $3
+          where id = $1 returning *`,
+        [transferId, disputed_by || null, dispute_note || 'Disputed by receiver']
+      )
+      // Reverse only when the stock had actually left the sender's store: a
+      // dispatch decrements it, a still-pending request never did.
+      if (prev.sending_facility_id && ['in_transit', 'dispatched'].includes(prev.status)) {
+        await this._creditStock(exec, prev.sending_facility_id, prev.commodity_id, prev.quantity, 'store', prev.section)
+      }
       return rows[0] || null
     })
   }

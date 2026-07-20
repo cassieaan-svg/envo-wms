@@ -198,20 +198,6 @@ router.patch('/:id/dispute', async (req, res) => {
   }
 })
 
-/** PATCH /api/transfers/:id/restore - sender restores stock for a disputed transfer */
-router.patch('/:id/restore', async (req, res) => {
-  try {
-    await runTransition(
-      req, res,
-      () => TransferService.restoreDisputed(req.params.id, req.body || {}),
-      'Transfer not found or not owned by this facility'
-    )
-  } catch (err) {
-    console.error('Error restoring transfer stock:', err)
-    res.status(500).json({ success: false, error: err.message, code: 'RESTORE_ERROR' })
-  }
-})
-
 /** PATCH /api/transfers/:id/cancel - cancel/reject (no stock movement) */
 router.patch('/:id/cancel', async (req, res) => {
   try {

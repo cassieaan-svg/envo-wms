@@ -61,7 +61,6 @@ export function Transfers() {
   const isSDP       = accessLevel === 'facility' && facilityRole === 'sdp'
   const sdpName     = useAppStore(s => s.sdpName)
   const getStore = useAppStore.getState
-  const suppressNextPendingReload = useRef(false)
 
   // Two-level navigation
   const [primary, setPrimary] = useState(null)
@@ -205,12 +204,7 @@ export function Transfers() {
     loadAllIntHistory()
 
     return subscribeRealtime(['stock_transfer_log'], async (payload) => {
-        if (suppressNextPendingReload.current) {
-          suppressNextPendingReload.current = false
-          // skip — restoreDispatchedStock already filtered the row from state
-        } else {
-          await loadPendingSilent()
-        }
+        await loadPendingSilent()
         await loadMyRequests()
         loadSendHistory()
         loadRequestHistory()
@@ -323,24 +317,6 @@ export function Transfers() {
       })
     } catch (dispErr) { toast('Error disputing transfer: ' + dispErr.message, 'red'); return }
     toast('Transfer marked as disputed', 'amber'); loadPending()
-  }
-
-  async function restoreDispatchedStock(t) {
-    suppressNextPendingReload.current = true
-    // Server credits the sender store and marks the disputed transfer accepted (stock restored).
-    let updated
-    try {
-      updated = await api.transfers.restore(t.id, { facilityId: fid })
-    } catch (logErr) { suppressNextPendingReload.current = false; toast('Error updating transfer: ' + logErr.message, 'red'); return }
-    if (!updated) {
-      suppressNextPendingReload.current = false
-      toast('Could not restore — permission denied or record not found', 'red')
-      return
-    }
-    // Remove immediately from pending state so it stops showing
-    setPending(prev => prev.filter(p => p.id !== t.id))
-    toast('Stock restored', 'green')
-    await loadStock(); loadSendHistory()
   }
 
   function arrangeTransferFromRequest(req) {
@@ -815,7 +791,7 @@ export function Transfers() {
             <td className="px-4 py-3 text-xs font-semibold whitespace-nowrap"><span className={isOut ? 'text-red-400' : 'text-green-400'}>{isOut ? '▼ Stock out' : '▲ Stock in'}</span></td>
             <td className="px-4 py-3 text-xs text-gray-500">{t.sending_facility_name}</td>
             <td className="px-4 py-3 text-xs text-gray-500">{t.receiving_facility_name}</td>
-            <td className="px-4 py-3"><Badge type={t.dispute_note === 'Disputed — stock restored' ? 'amber' : t.status === 'accepted' ? 'ok' : 'out'}>{t.dispute_note === 'Disputed — stock restored' ? 'Stock restored' : t.status}</Badge></td>
+            <td className="px-4 py-3"><Badge type={t.status === 'accepted' ? 'ok' : 'out'}>{t.status}</Badge></td>
             <td className="px-4 py-3">
               {canPrint && (
                 <button onClick={() => kind === 'internal' ? printRIRVMove(t, rows) : kind === 'external' ? printTransferMove(t, rows) : printSlip(t)} className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
@@ -960,11 +936,10 @@ export function Transfers() {
                   const isReceiver      = fid === t.receiving_facility_id
                   const isAdminUser     = ['overall_admin','state_admin','lga_admin'].includes(accessLevel)
                   const needsAssignment = t.sending_facility_id === null
-                  if (t.status === 'disputed' && isReceiver) return null
-                  // A DSD/SDP dispute already credited the store back (note contains
-                  // "stock restored"); no action is left, so drop it from this list —
-                  // otherwise the store sees a Restore button that would double-credit.
-                  if (t.status === 'disputed' && /stock restored/i.test(t.dispute_note || '')) return null
+                  // A dispute is terminal: the server already returned the stock to
+                  // the sender and the requesting facility raises a new request, so
+                  // there is nothing to action here. It stays visible in history.
+                  if (t.status === 'disputed') return null
                   const assignFacGroups = {}
                   allFacilities.filter(f => f.id !== t.receiving_facility_id).forEach(f => {
                     const s = f.state || 'Other', l = f.lga || 'Other'
@@ -1012,9 +987,6 @@ export function Transfers() {
                           )}
                           {t.status === 'in_transit' && isAdminUser && !isSender && !isReceiver && (
                             <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-full px-2 py-0.5">📦 In transit</span>
-                          )}
-                          {t.status === 'disputed' && isSender && !isDispenser && t.dispute_note !== 'Disputed — stock restored' && (
-                            <Button variant="warning" size="sm" onClick={() => restoreDispatchedStock(t)}>↩ Restore stock</Button>
                           )}
                           {t.status === 'disputed' && !isSender && (
                             <span className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5">✕ Disputed</span>
