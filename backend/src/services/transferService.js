@@ -242,19 +242,30 @@ export class TransferService {
   }
 
   /**
-   * Receiver disputes an in-transit transfer. A dispute is TERMINAL: the dispatch
-   * is reversed here — the quantity goes straight back to the sending facility's
-   * store — and the row stays 'disputed' for good. It is never flipped to
-   * 'accepted' (that used to make a failed delivery render as a completed
-   * stock-in for the receiver, contradicting their actual stock). The requesting
-   * facility raises a fresh request instead.
+   * Receiver disputes an in-transit transfer. A dispute is TERMINAL — there is no
+   * "restore" step and the requesting facility raises a fresh request for
+   * anything it still needs.
+   *
+   * A dispute may be PARTIAL, in which case it splits into two rows, because the
+   * two halves are genuinely different events:
+   *   - what the receiver kept  → the original row, status 'accepted', quantity
+   *     cut to that amount. A real handover: it lands in the receiver's stock,
+   *     their bin card and the printable Transfer & Return form.
+   *   - what was sent back      → a new row, status 'disputed', quantity =
+   *     returned. Never counted as stock that reached the receiver, and not
+   *     printable, because no handover happened for it.
+   * Rejecting everything (accepted = 0) leaves the single original row disputed.
+   *
+   * Nothing is ever flipped to 'accepted' without the stock to match: that used
+   * to make a failed delivery render as a completed stock-in for the receiver,
+   * contradicting their actual stock.
    *
    * Optional facilityId guard: the disputing party is either the receiving
    * facility (external transfer) or the sending facility (a DSD/SDP site
    * disputing its parent store's dispatch, where receiving_facility_id is null).
    */
   static async dispute(transferId, data) {
-    const { disputed_by, facilityId, dispute_note, qty_accepted } = data
+    const { disputed_by, facilityId, dispute_note, qty_accepted, received_by } = data
     return withTransaction(async exec => {
       // Lock the row so two disputes can't both reverse the same dispatch.
       const { rows: cur } = await exec(`select * from stock_transfer_log where id = $1 for update`, [transferId])
@@ -269,23 +280,60 @@ export class TransferService {
       const dispatched = prev.quantity || 0
       const accepted = Math.min(Math.max(parseInt(qty_accepted, 10) || 0, 0), dispatched)
       const returned = dispatched - accepted
+      const note = dispute_note || 'Disputed by receiver'
+      // Stock only moves back if it had actually left the sender's store: a
+      // dispatch decrements it, a still-pending request never did.
+      const moved = ['in_transit', 'dispatched'].includes(prev.status)
 
-      const { rows } = await exec(
-        `update stock_transfer_log
-            set status = 'disputed', resolved_at = now(), resolved_by = $2, dispute_note = $3,
-                qty_accepted = $4, qty_returned = $5
-          where id = $1 returning *`,
-        [transferId, disputed_by || null, dispute_note || 'Disputed by receiver', accepted, returned]
-      )
-      // Move stock only when it had actually left the sender's store: a dispatch
-      // decrements it, a still-pending request never did.
-      if (['in_transit', 'dispatched'].includes(prev.status)) {
-        if (returned > 0 && prev.sending_facility_id) {
-          await this._creditStock(exec, prev.sending_facility_id, prev.commodity_id, returned, 'store', prev.section)
+      let result
+      if (accepted > 0) {
+        // What the receiver kept is a genuine handover, so it must end up as a
+        // real 'accepted' row: the bin card and the activity log only count
+        // status='accepted' (and read `quantity`), so leaving the whole thing
+        // 'disputed' would credit the receiver's stock while their bin card
+        // showed nothing. The original row becomes that accepted record, cut
+        // down to the kept quantity, and stays printable.
+        const { rows } = await exec(
+          `update stock_transfer_log
+              set status = 'accepted', quantity = $2, resolved_at = now(), resolved_by = $3,
+                  dispute_note = $4, qty_accepted = $2, qty_returned = $5
+            where id = $1 returning *`,
+          [transferId, accepted, received_by || disputed_by || null, note, returned]
+        )
+        result = rows[0]
+        if (moved) await this._creditDestination(exec, prev, accepted)
+
+        // The rejected remainder becomes its own terminal 'disputed' row: it
+        // never counts as stock that reached the receiver, and it is not
+        // printable — nothing was handed over for it.
+        if (returned > 0) {
+          await exec(
+            `insert into stock_transfer_log
+               (sending_facility_id, sending_facility_name, receiving_facility_id, receiving_facility_name,
+                commodity_id, commodity_name, quantity, qty_requested, status, initiated_by, initiated_at,
+                resolved_at, resolved_by, dispute_note, notes, section, qty_accepted, qty_returned)
+             values ($1,$2,$3,$4,$5,$6,$7,$7,'disputed',$8,$9, now(), $10, $11, $12, $13, 0, $7)`,
+            [prev.sending_facility_id, prev.sending_facility_name, prev.receiving_facility_id,
+             prev.receiving_facility_name, prev.commodity_id, prev.commodity_name, returned,
+             prev.initiated_by, prev.initiated_at, disputed_by || null, note, prev.notes, prev.section]
+          )
         }
-        await this._creditDestination(exec, prev, accepted)
+      } else {
+        // Nothing kept — the whole dispatch is disputed, one terminal row.
+        const { rows } = await exec(
+          `update stock_transfer_log
+              set status = 'disputed', resolved_at = now(), resolved_by = $2, dispute_note = $3,
+                  qty_accepted = 0, qty_returned = $4
+            where id = $1 returning *`,
+          [transferId, disputed_by || null, note, returned]
+        )
+        result = rows[0]
       }
-      return rows[0] || null
+
+      if (moved && returned > 0 && prev.sending_facility_id) {
+        await this._creditStock(exec, prev.sending_facility_id, prev.commodity_id, returned, 'store', prev.section)
+      }
+      return result || null
     })
   }
 
