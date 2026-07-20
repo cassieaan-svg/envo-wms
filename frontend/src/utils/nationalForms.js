@@ -123,7 +123,9 @@ export function printBinCard(card, locationLabel) {
     bodyRows.push(rowTag + `<td>${dstr(r.date)}</td><td>${esc(r.ref)}</td><td class="l">${esc(party)}</td>`
       + `<td>${esc(r.batch)}</td><td>${dstr(r.expiry)}</td>`
       + `<td class="n">${q(r.received)}</td><td class="n">${q(r.issued)}</td><td class="n">${signed(r.adjustment)}</td>`
-      + `<td class="n b">${q(r.balance)}</td><td>${esc(r.by)}</td><td class="l">${esc(r.remarks)}</td></tr>`)
+      // Signature is left blank on purpose — it is signed by hand on the printed
+      // card, never pre-filled with the recorded staff name.
+      + `<td class="n b">${q(r.balance)}</td><td></td><td class="l">${esc(r.remarks)}</td></tr>`)
   }
   flush()
 
@@ -165,7 +167,13 @@ export function printRIRV(moveRows, ctx = {}) {
   const bal = n => { const m = /balance:(\-?\d+)/.exec(n || ''); return m ? m[1] : '' }
   // Pre-fill the requester / receiver and move date so staff just sign on print.
   const requestedBy = first.initiated_by || ''
-  const receivedBy = first.resolved_by || ''
+  // resolved_by carries both parties as tags on a DSD/SDP move —
+  // "[Approved: X] [Received by: Y]" — so split them into their own signature
+  // slots instead of dumping the raw string into "Commodities Received by".
+  // A store→dispensary move stores a plain name, and that name is the approver.
+  const resolvedBy = first.resolved_by || ''
+  const approvedBy = rx(resolvedBy, 'Approved') || (resolvedBy.includes('[') ? '' : resolvedBy)
+  const receivedBy = rx(resolvedBy, 'Received by') || ''
   const moveDate = dstr(first.resolved_at || first.initiated_at)
 
   const lineRows = rows.map((r, i) => {
@@ -189,7 +197,7 @@ export function printRIRV(moveRows, ctx = {}) {
         <th>Requisition</th><th colspan="4">To be filled by storekeeper</th></tr>
       <tr><th>Stock Balance</th><th>Qty Required</th><th>Qty Issued</th><th>Batch #</th><th>Expiry Date</th><th>Remarks</th></tr></thead>
       <tbody>${lineRows}${blanks}</tbody></table>
-    <div class="sigs">${sigRow('Requisition Prepared by (Full Name):', requestedBy, moveDate)}${sigRow('Requisition Recommended by (Full Name):')}${sigRow('Requisition Approved by (Full Name):')}${sigRow('Commodities Issued by (Full Name):')}${sigRow('Commodities Received by (Full Name):', receivedBy, moveDate)}</div>`
+    <div class="sigs">${sigRow('Requisition Prepared by (Full Name):', requestedBy, moveDate)}${sigRow('Requisition Recommended by (Full Name):')}${sigRow('Requisition Approved by (Full Name):', approvedBy, approvedBy ? moveDate : '')}${sigRow('Commodities Issued by (Full Name):')}${sigRow('Commodities Received by (Full Name):', receivedBy, receivedBy ? moveDate : '')}</div>`
   openPrint(`Internal RIRV — ${to}`, inner)
 }
 
@@ -209,9 +217,13 @@ export function printTransfer(moveRows, ctx = {}) {
   const pad = Math.max(0, Math.min(10, 6 - rows.length))
   const blanks = Array.from({ length: pad }, (_, i) => `<tr><td>${rows.length + i + 1}</td>${'<td></td>'.repeat(5)}</tr>`).join('')
   const carrier = rx(first.notes, 'Carrier') || ''
+  // Every transferring-side name on this form — compiled by, approved by,
+  // transfer/return by and transfer approved by — is the one officer the
+  // transferring facility recorded when arranging the transfer.
+  // Deliberately NOT initiated_by: on a request-driven transfer that is the
+  // requester at the RECEIVING facility, which printed the wrong party here.
   const approvedBy = rx(first.notes, 'Approved by') || ''
-  // Map the parties + date onto the form so both facilities print with names filled.
-  const compiledBy = first.initiated_by || ''
+  // The receiving facility's own name, captured when it accepts the transfer.
   const receivedBy = first.resolved_by || ''
   const moveDate = dstr(first.resolved_at || first.initiated_at)
 
@@ -222,14 +234,14 @@ export function printTransfer(moveRows, ctx = {}) {
     </div>
     <table><thead><tr><th>S/No</th><th style="width:34%">Product Description</th><th>Batch No.</th><th>Expiry Date</th><th>Quantity</th><th style="width:26%">Reason for return / transfer</th></tr></thead>
       <tbody>${lineRows}${blanks}</tbody></table>
-    <div class="sigs two">${sigRow('Record compiled by:', compiledBy, moveDate)}${sigRow('Record approved by:', approvedBy, moveDate)}${sigRow('Transfer / return by:', carrier, moveDate)}</div>
+    <div class="sigs two">${sigRow('Record compiled by:', approvedBy, moveDate)}${sigRow('Record approved by:', approvedBy, moveDate)}${sigRow('Transfer / return by:', approvedBy, moveDate)}</div>
     <div class="cert"><b>Carrier:</b> I certify that the above quantities of transfer/return were received by me except where explained below.
       <div class="cm">Comments: ${line('', 520)}</div>
       <div class="sg">Name of Carrier: ${line(carrier, 160)} Designation: ${line('', 120)} Signature: ${line('', 120)} Date: ${line(moveDate, 80)}</div></div>
     <div class="cert"><b>Receiving Facility:</b> I certify that the above quantities were received by me except where explained below (please explain the condition of items on receipt).
       <div class="cm">Comments: ${line('', 520)}</div>
       <div class="sg">Receiver's name: ${line(receivedBy, 160)} Signature: ${line('', 120)} Date: ${line(moveDate, 80)}</div>
-      <div class="sg">Transfer approved by: ${line('', 160)} Signature: ${line('', 120)} Date: ${line('', 80)}</div></div>
+      <div class="sg">Transfer approved by: ${line(approvedBy, 160)} Signature: ${line('', 120)} Date: ${line(moveDate, 80)}</div></div>
     <div class="note">NOTE: TO BE COMPLETED IN TRIPLICATES</div>`
   openPrint(`Transfer & Return — ${to}`, inner)
 }
