@@ -802,6 +802,11 @@ export function Transfers() {
         </tr></thead>
         <tbody>{rows.map(t => {
           const isOut = t.sending_facility_id === fid
+          // Only a genuinely completed move has a form to print. A cancelled or
+          // disputed transfer never delivered the commodities, and a dispute that
+          // was restored sent them back — printing any of these would document a
+          // handover that did not happen.
+          const canPrint = t.status === 'accepted' && t.dispute_note !== 'Disputed — stock restored'
           return (
           <tr key={t.id} className="border-b border-white/5 hover:bg-white/2">
             <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDate(t.resolved_at)}</td>
@@ -812,10 +817,12 @@ export function Transfers() {
             <td className="px-4 py-3 text-xs text-gray-500">{t.receiving_facility_name}</td>
             <td className="px-4 py-3"><Badge type={t.dispute_note === 'Disputed — stock restored' ? 'amber' : t.status === 'accepted' ? 'ok' : 'out'}>{t.dispute_note === 'Disputed — stock restored' ? 'Stock restored' : t.status}</Badge></td>
             <td className="px-4 py-3">
-              <button onClick={() => kind === 'internal' ? printRIRVMove(t, rows) : kind === 'external' ? printTransferMove(t, rows) : printSlip(t)} className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3"><path d="M4 5V2h8v3M4 11H2V6h12v5h-2M4 9h8v5H4z"/></svg>
-                {kind === 'internal' ? 'Print RIRV' : kind === 'external' ? 'Print Transfer' : 'Print'}
-              </button>
+              {canPrint && (
+                <button onClick={() => kind === 'internal' ? printRIRVMove(t, rows) : kind === 'external' ? printTransferMove(t, rows) : printSlip(t)} className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3"><path d="M4 5V2h8v3M4 11H2V6h12v5h-2M4 9h8v5H4z"/></svg>
+                  {kind === 'internal' ? 'Print RIRV' : kind === 'external' ? 'Print Transfer' : 'Print'}
+                </button>
+              )}
             </td>
           </tr>
           )
@@ -1220,7 +1227,7 @@ export function Transfers() {
                         <td className={`px-4 py-3 text-xs font-semibold ${sc}`}>{r.status}</td>
                         <td className="px-4 py-3 text-xs text-gray-500">{r.initiated_by || '—'}</td>
                         <td className="px-4 py-3">
-                          {r.status === 'accepted' && (
+                          {r.status === 'accepted' && r.dispute_note !== 'Disputed — stock restored' && (
                             <button onClick={() => printTransferMove(r, requestHistory)} title="Transfer & Return form"
                               className="text-xs text-gray-500 hover:text-gray-200 border border-white/10 rounded px-2 py-1 flex items-center gap-1">
                               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3"><path d="M4 5V2h8v3M4 11H2V6h12v5h-2M4 9h8v5H4z"/></svg>
