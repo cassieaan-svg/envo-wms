@@ -47,6 +47,10 @@ export function Alerts() {
   const [assignFacPool, setAssignFacPool]       = useState([])
   const [reqHistory, setReqHistory]   = useState([])
   const [loadingHist, setLoadingHist] = useState(false)
+  // Admin: requests already assigned to a source but not yet completed —
+  // either awaiting dispatch by the source, or in transit awaiting receipt.
+  const [inflightReqs, setInflightReqs]     = useState([])
+  const [loadingInflight, setLoadingInflight] = useState(false)
   const [histFrom, setHistFrom] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10))
   const [histTo, setHistTo]     = useState(() => new Date().toISOString().slice(0, 10))
 
@@ -63,10 +67,11 @@ export function Alerts() {
     loadAll()
     // Overall admin doesn't handle redistribution requests — skip loading them.
     if (!store.isOverallAdmin()) loadFacReqAlerts()
+    if (store.isAdmin() && !store.isOverallAdmin()) loadInflight()
     if (store.isStateAdmin()) api.facilities.list({}).then(setAssignFacPool).catch(() => setAssignFacPool([]))
     return subscribeRealtime(['stock_transfer_log'], (payload) => {
       if (store.isOverallAdmin()) return
-      if (store.isAdmin()) { loadFacReqAlerts(); return }
+      if (store.isAdmin()) { loadFacReqAlerts(); loadInflight(); return }
       const row = payload.new?.receiving_facility_id ? payload.new : (payload.old || {})
       if ((row.receiving_facility_id === fid || row.sending_facility_id === fid) && fid) loadFacReqAlerts()
     })
@@ -161,6 +166,22 @@ export function Alerts() {
     // (e.g. "[SDP: Main Lab]") — so only real facility→facility redistributions show.
     setReqHistory((data || []).filter(t => !t.notes?.includes('[Internal:') && !t.notes?.includes('[DSD:') && !t.notes?.includes('[SDP:')))
     setLoadingHist(false)
+  }
+
+  // Assigned-but-not-completed facility→facility redistributions within the
+  // admin's jurisdiction: pending with a source assigned (awaiting dispatch), or
+  // in_transit (dispatched, awaiting receipt). Excludes internal Store→Dispensary
+  // and DSD/SDP site moves, matching the history view.
+  async function loadInflight() {
+    setLoadingInflight(true)
+    const data = await api.transfers.list({
+      status: 'pending,in_transit', section: commoditySection || undefined,
+    }).catch(() => [])
+    const rows = (data || []).filter(t =>
+      !t.notes?.includes('[Internal:') && !t.notes?.includes('[DSD:') && !t.notes?.includes('[SDP:') &&
+      (t.status === 'in_transit' || (t.status === 'pending' && t.sending_facility_id)))
+    setInflightReqs(rows)
+    setLoadingInflight(false)
   }
 
   async function confirmAccept(req) {
@@ -301,6 +322,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   // Recompute the out/low/over aggregates when the overall admin picks a state.
   useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
   useEffect(()=>{ if(store.isAdmin() && reqView==='history') loadHistory() },[reqView, histFrom, histTo])
+  useEffect(()=>{ if(store.isAdmin() && reqView==='inflight') loadInflight() },[reqView])
 
   // Drill-in: load per-facility SDP/DSD site stock for the selected commodity so
   // the facility breakdown total matches the Dashboard (store + dispensary + site).
@@ -334,8 +356,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     (!filterComm || r.commodity_id === filterComm) &&
     (!filterLga  || facLgaById[r.receiving_facility_id] === filterLga) &&
     (!filterCat  || (r.commodities?.category) === filterCat))
-  const activeReqs = applyReqFilters(facReqAlerts)
-  const histReqs   = applyReqFilters(reqHistory)
+  const activeReqs   = applyReqFilters(facReqAlerts)
+  const histReqs     = applyReqFilters(reqHistory)
+  const inflightList = applyReqFilters(inflightReqs)
 
   // Category + State narrowing for the expiry / out / low / overstock tables.
   // Out/low/over are per-commodity aggregates already scoped to the picked state
@@ -397,7 +420,8 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       <FacilityPicker />
 
       <MetricGrid>
-        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" onClick={()=>setTab('fac-requests')} active={tab==='fac-requests'}/>}
+        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" onClick={()=>{setTab('fac-requests');setReqView('active')}} active={tab==='fac-requests'&&reqView==='active'}/>}
+        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="In progress" value={inflightReqs.length} color="blue" onClick={()=>{setTab('fac-requests');setReqView('inflight')}} active={tab==='fac-requests'&&reqView==='inflight'}/>}
         <Metric label="Out of stock"   value={stockRows.out.length}   color="red"   onClick={()=>setTab('out')}       active={tab==='out'}/>
         <Metric label="Low stock"      value={stockRows.low.length}   color="amber" onClick={()=>setTab('low')}       active={tab==='low'}/>
         <Metric label="Overstock"      value={stockRows.over.length}  color="blue"  onClick={()=>setTab('overstock')} active={tab==='overstock'}/>
@@ -602,12 +626,21 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       {tab==='fac-requests' && (
         <Card>
           <CardHeader>
-            <CardTitle>{store.isAdmin() ? (reqView==='history' ? 'Redistribution request history' : 'Facility redistribution requests') : 'Requests & dispatch tasks'}</CardTitle>
-            <div className="flex gap-2">
+            <CardTitle>{store.isAdmin() ? (reqView==='history' ? 'Redistribution request history' : reqView==='inflight' ? 'Requests in progress' : 'Facility redistribution requests') : 'Requests & dispatch tasks'}</CardTitle>
+            <div className="flex gap-2 flex-wrap">
               {store.isAdmin() ? (
                 <>
-                  <button onClick={reqView==='history' ? loadHistory : loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
-                  <Button variant="primary" size="sm" onClick={()=>{ setReqView(reqView==='history'?'active':'history'); setAssigningId(null) }}>{reqView==='history' ? '← Active requests' : 'History'}</Button>
+                  {[
+                    { id:'active',   label:`Awaiting review (${activeReqs.length})` },
+                    { id:'inflight', label:`In progress (${inflightList.length})` },
+                    { id:'history',  label:'History' },
+                  ].map(v => (
+                    <button key={v.id} onClick={()=>{ setReqView(v.id); setAssigningId(null) }}
+                      className={`text-xs rounded-lg border px-3 py-1.5 transition-colors ${reqView===v.id ? 'bg-white/8 border-white/15 text-gray-100 font-medium' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+                      {v.label}
+                    </button>
+                  ))}
+                  <button onClick={reqView==='history' ? loadHistory : reqView==='inflight' ? loadInflight : loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
                 </>
               ) : (
                 <>
@@ -679,6 +712,36 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                       <td className="px-4 py-3"><Badge type={r.status==='accepted'?'ok':r.status==='disputed'?'out':'amber'}>{r.status}</Badge></td>
                     </tr>
                   ))}</tbody>
+                </table></div>
+              )
+            ) : reqView==='inflight' ? (
+              loadingInflight ? <LoadingState/> : inflightList.length===0 ? <EmptyState message="No requests in progress — nothing awaiting dispatch or receipt ✓"/> : (
+                <div className="table-wrap"><table className="w-full text-sm">
+                  <thead><tr className="border-b border-white/8 bg-white/2">
+                    {['Requested','Commodity','Qty','Requesting facility','LGA','Source facility','Stage','Waiting'].map(h=>(
+                      <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{inflightList.map(r=>{
+                    const daysWaiting = Math.max(0, Math.round((today - new Date(r.initiated_at))/86400000))
+                    const inTransit = r.status === 'in_transit'
+                    return (
+                      <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r.initiated_at)}</td>
+                        <td className="px-4 py-3 font-medium text-gray-100">{r.commodity_name}</td>
+                        <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity}</td>
+                        <td className="px-4 py-3 text-xs text-gray-400">{r.receiving_facility_name||'—'}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500">{facLgaById[r.receiving_facility_id]||'—'}</td>
+                        <td className="px-4 py-3 text-xs text-gray-400">{r.sending_facility_name||'—'}</td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs font-medium rounded-full px-2 py-0.5 border ${inTransit ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' : 'text-amber-400 bg-amber-500/10 border-amber-500/20'}`}>
+                            {inTransit ? '📦 In transit — awaiting receipt' : '⏳ Awaiting dispatch by source'}
+                          </span>
+                        </td>
+                        <td className={`px-4 py-3 font-mono text-xs ${daysWaiting>=7?'text-red-400':daysWaiting>=3?'text-amber-400':'text-gray-500'}`}>{daysWaiting}d</td>
+                      </tr>
+                    )
+                  })}</tbody>
                 </table></div>
               )
             ) : activeReqs.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
