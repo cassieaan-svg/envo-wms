@@ -9,7 +9,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, todayLagos, entryTimestamp } from '../../utils/helpers'
+import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, pluralizeUnit, todayLagos, entryTimestamp } from '../../utils/helpers'
 
 export function RecordStock() {
   const store = useAppStore()
@@ -25,6 +25,7 @@ export function RecordStock() {
 
   const [commId, setCommId]     = useState('')
   const qtyRef                  = useRef(1)
+  const [items, setItems]       = useState([])   // staged commodities to record together
   const [by, setBy]             = useState('')
   const [date, setDate]         = useState(todayLagos())
   const [notes, setNotes]       = useState('')
@@ -80,111 +81,107 @@ export function RecordStock() {
   const dispUnit     = getCommodityDispenseUnit(selectedComm)
   const stockRow     = isSDP ? sdpStockRow : isDSD ? dsdStockRow : recordSdpStockRow
 
+  // Resolve current stock-on-hand for a commodity in this mode. Returns a number, or null if no record.
+  async function resolveStock(commodityId) {
+    if (isSDP) {
+      const rows = await api.stock.sdp.list({ facility_id: fid, sdp_name: sdpName, commodity_id: commodityId }).catch(() => [])
+      return rows && rows[0] ? rows[0].quantity : null
+    }
+    if (isDSD) {
+      const rows = await api.stock.dsd.list({ facility_id: fid, dsd_site_name: dsdSiteName, commodity_id: commodityId }).catch(() => [])
+      return rows && rows[0] ? rows[0].quantity : null
+    }
+    if (!effectiveSdp) return null
+    const rows = await api.stock.sdp.list({ facility_id: fid, sdp_name: effectiveSdp, commodity_id: commodityId }).catch(() => [])
+    return rows && rows[0] ? rows[0].quantity : null
+  }
+
+  // The service delivery point each record is booked against (fixed for SDP/DSD users).
+  const batchSdp = isSDP ? sdpName : isDSD ? dsdSiteName : effectiveSdp
+
+  // Validate the current commodity + quantity and stage it for recording.
+  async function addItem() {
+    setMsg(null)
+    if (!fid)   { setMsg({ type:'error', text:'No facility assigned.' }); return }
+    if (!isSDP && !isDSD && !effectiveSdp) {
+      setMsg({ type:'error', text: recordSdp === 'CT' ? 'Enter the CT name.' : 'Select a service delivery point.' }); return
+    }
+    if (!commId){ setMsg({ type:'error', text:'Select a commodity.' }); return }
+    const qty = parseInt(qtyRef.current?.value || 0)
+    if (qty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
+    const comm = store.allCommodities.find(c => c.id === commId)
+    if (items.some(i => i.commodityId === commId)) {
+      setMsg({ type:'error', text:`${comm?.name || 'Commodity'} is already in the list — remove it first to change the quantity.` }); return
+    }
+    const avail = await resolveStock(commId)
+    if (avail == null || avail === 0) {
+      setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}${batchSdp ? ` at ${batchSdp}` : ''}.` }); return
+    }
+    if (avail < qty) {
+      setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+    }
+    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail }])
+    setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'
+  }
+
+  function removeItem(commodityId) {
+    setItems(prev => prev.filter(i => i.commodityId !== commodityId))
+  }
+
+  function buildPayload(item) {
+    const base = {
+      facility_id:  fid,
+      commodity_id: item.commodityId,
+      quantity:     item.quantity,
+      dispensed_by: by || null,
+      dispensed_at: entryTimestamp(date),
+      section:      commoditySection,
+    }
+    if (isSDP)  return { ...base, notes: `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`, sdp_name: sdpName }
+    if (isDSD)  return { ...base, notes: `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`, dsd_site_name: dsdSiteName }
+    return { ...base, notes: `[SDP: ${effectiveSdp}]${notes ? ' ' + notes : ''}`, sdp_name: effectiveSdp }
+  }
+
   async function handleSubmit(e) {
     e?.preventDefault()
     setMsg(null)
     if (!fid)   { setMsg({ type:'error', text:'No facility assigned.' }); return }
-    if (!commId){ setMsg({ type:'error', text:'Select a commodity.' }); return }
-    const parsedQty = parseInt(qtyRef.current?.value || 0)
-    if (parsedQty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
     if (!by)    { setMsg({ type:'error', text:'Recorded by is required.' }); return }
     if (date && date > todayLagos()) { setMsg({ type:'error', text:'Date cannot be in the future.' }); return }
-
-    if (isSDP) {
-      // Validate against sdp_stock
-      if (!sdpStockRow || sdpStockRow.quantity === 0) {
-        setMsg({ type:'error', text:`No stock available for ${selectedComm?.name || 'commodity'}.` }); return
-      }
-      if (sdpStockRow.quantity < parsedQty) {
-        setMsg({ type:'error', text:`Insufficient stock. Available: ${sdpStockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return
-      }
-      setSaving(true)
-      // One call logs the dispense AND decrements the SDP site stock (server-side).
-      try {
-        await api.dispense.record({
-          facility_id:  fid,
-          commodity_id: commId,
-          quantity:     parsedQty,
-          dispensed_by: by || null,
-          dispensed_at: entryTimestamp(date),
-          notes:        `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`,
-          sdp_name:     sdpName,
-          section:      commoditySection,
-        })
-      } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-      setSdpStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
-      toast('Stock recorded', 'green')
-      setMsg({ type:'success', text:'Stock saved successfully.' })
-      setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
-      setDate(todayLagos())
-      loadRecent()
-      setSaving(false)
-      return
-    }
-
-    if (isDSD) {
-      if (!dsdStockRow || dsdStockRow.quantity === 0) {
-        setMsg({ type:'error', text:`No stock available for ${selectedComm?.name || 'commodity'}.` }); return
-      }
-      if (dsdStockRow.quantity < parsedQty) {
-        setMsg({ type:'error', text:`Insufficient stock. Available: ${dsdStockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return
-      }
-      setSaving(true)
-      // One call logs the dispense AND decrements the DSD site stock (server-side).
-      try {
-        await api.dispense.record({
-          facility_id:   fid,
-          commodity_id:  commId,
-          quantity:      parsedQty,
-          dispensed_by:  by || null,
-          dispensed_at:  entryTimestamp(date),
-          notes:         `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`,
-          dsd_site_name: dsdSiteName,
-          section:       commoditySection,
-        })
-      } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-      setDsdStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
-      toast('Stock recorded', 'green')
-      setMsg({ type:'success', text:'Stock saved successfully.' })
-      setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
-      setDate(todayLagos())
-      loadRecent()
-      setSaving(false)
-      return
-    }
-
-    // Non-SDP / Non-DSD flow — record utilization against a chosen Service Delivery Point
-    if (!effectiveSdp) {
+    if (!isSDP && !isDSD && !effectiveSdp) {
       setMsg({ type:'error', text: recordSdp === 'CT' ? 'Enter the CT name.' : 'Select a service delivery point.' }); return
     }
-    if (!recordSdpStockRow || recordSdpStockRow.quantity === 0) {
-      setMsg({ type:'error', text:`No stock available for ${selectedComm?.name || 'commodity'} at ${effectiveSdp}.` }); return
-    }
-    if (recordSdpStockRow.quantity < parsedQty) {
-      setMsg({ type:'error', text:`Insufficient stock at ${effectiveSdp}. Available: ${recordSdpStockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return
+
+    // Record the staged list; if nothing was staged, fall back to the current picker selection.
+    let batch = items
+    if (batch.length === 0) {
+      if (!commId){ setMsg({ type:'error', text:'Add at least one commodity.' }); return }
+      const qty = parseInt(qtyRef.current?.value || 0)
+      if (qty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
+      const comm  = store.allCommodities.find(c => c.id === commId)
+      const avail = await resolveStock(commId)
+      if (avail == null || avail === 0) {
+        setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}${batchSdp ? ` at ${batchSdp}` : ''}.` }); return
+      }
+      if (avail < qty) {
+        setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+      }
+      batch = [{ commodityId: commId, quantity: qty, comm, avail }]
     }
 
     setSaving(true)
-    // One call logs the dispense AND decrements the chosen SDP's stock (server-side).
-    try {
-      await api.dispense.record({
-        facility_id:  fid,
-        commodity_id: commId,
-        quantity:     parsedQty,
-        dispensed_by: by || null,
-        dispensed_at: entryTimestamp(date),
-        notes:        `[SDP: ${effectiveSdp}]${notes ? ' ' + notes : ''}`,
-        sdp_name:     effectiveSdp,
-        section:      commoditySection,
-      })
-    } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
-    setRecordSdpStockRow(prev => prev ? { ...prev, quantity: Math.max(0, prev.quantity - parsedQty) } : null)
+    // One call per commodity — each becomes its own dispense record for the day.
+    for (const item of batch) {
+      try {
+        await api.dispense.record(buildPayload(item))
+      } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
+    }
 
-    toast('Stock recorded', 'green')
-    setMsg({ type:'success', text:`Stock saved successfully for ${effectiveSdp}.` })
-    setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
+    toast(`Stock recorded — ${batch.length} item(s)`, 'green')
+    setMsg({ type:'success', text:`Stock saved successfully${batchSdp ? ` for ${batchSdp}` : ''} — ${batch.length} record(s).` })
+    setItems([]); setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
     setDate(todayLagos())
-    await loadStock()
+    if (!isSDP && !isDSD) await loadStock()
     loadRecent()
     setSaving(false)
   }
@@ -277,6 +274,41 @@ export function RecordStock() {
               </div>
             )}
 
+            {/* Add-to-list */}
+            <div className="flex justify-end">
+              <Button type="button" variant="default" size="md" onClick={addItem}>
+                + Add commodity
+              </Button>
+            </div>
+
+            {/* Staged commodities to record together */}
+            {items.length > 0 && (
+              <div className="rounded-lg border border-white/10 divide-y divide-white/5">
+                <div className="px-4 py-2 text-xs text-gray-500 uppercase tracking-widest">
+                  {items.length} commodit{items.length === 1 ? 'y' : 'ies'}{batchSdp ? ` for ${batchSdp}` : ''} to record
+                </div>
+                {items.map(it => {
+                  const packSize = getCommodityPackSize(it.comm)
+                  const dispUnit = getCommodityDispenseUnit(it.comm)
+                  return (
+                    <div key={it.commodityId} className="flex items-center justify-between px-4 py-2.5 gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-gray-100 truncate">{it.comm?.name || '—'}</div>
+                        <div className="text-xs text-gray-500">
+                          {it.quantity} {pluralizeUnit(it.quantity, it.comm?.unit || dispUnit)}
+                          {packSize ? ` = ${(it.quantity * packSize).toLocaleString()} ${dispUnit}` : ''}
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => removeItem(it.commodityId)}
+                        className="text-xs text-gray-500 hover:text-red-400 border border-white/10 rounded px-2 py-1 transition-colors shrink-0">
+                        Remove
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Recorded by *</label>
@@ -304,7 +336,7 @@ export function RecordStock() {
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <Button type="submit" variant="success" size="lg" disabled={saving}>
-                {saving ? 'Saving…' : 'Record stock'}
+                {saving ? 'Saving…' : items.length > 1 ? `Record stock (${items.length} items)` : 'Record stock'}
               </Button>
               {!isSDP && !isDSD && (
                 <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('dispense'); store.setPendingReportsTab(true); store.setCurrentPage('log') }}>
