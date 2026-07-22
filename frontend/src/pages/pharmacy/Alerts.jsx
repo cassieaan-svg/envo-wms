@@ -10,6 +10,7 @@ import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, isLabCategory, capExpiryBatchesToStock } from '../../utils/helpers'
+import { exportCsv, exportPdf } from '../../utils/download'
 
 export function Alerts() {
   const store = useAppStore()
@@ -359,6 +360,52 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const activeReqs   = applyReqFilters(facReqAlerts)
   const histReqs     = applyReqFilters(reqHistory)
   const inflightList = applyReqFilters(inflightReqs)
+  const reqRowCount  = reqView==='inflight' ? inflightList.length : reqView==='history' ? histReqs.length : activeReqs.length
+
+  // Export payload for whichever request view is on screen, honouring the active
+  // commodity / category / LGA filters (so you download exactly what you see).
+  function buildReqExport() {
+    const lgaOf = r => facLgaById[r.receiving_facility_id] || '—'
+    const stamp = new Date().toISOString().slice(0,10)
+    if (reqView === 'inflight') return {
+      title: 'Redistribution requests in progress',
+      subtitle: `${inflightList.length} request(s) awaiting dispatch or receipt`,
+      filename: `redistribution-requests_in-progress_${stamp}.csv`,
+      headers: ['Date requested','Commodity','Qty','Requesting facility','LGA','Source facility','Stage','Days waiting'],
+      rightCols: new Set([2,7]),
+      rows: inflightList.map(r => [
+        fmtDateTime(r.initiated_at), r.commodity_name, r.quantity,
+        r.receiving_facility_name || '—', lgaOf(r), r.sending_facility_name || '—',
+        r.status === 'in_transit' ? 'In transit — awaiting receipt' : 'Awaiting dispatch by source',
+        Math.max(0, Math.round((today - new Date(r.initiated_at))/86400000)),
+      ]),
+    }
+    if (reqView === 'history') return {
+      title: 'Redistribution request history',
+      subtitle: `${histReqs.length} resolved request(s) · ${histFrom} to ${histTo}`,
+      filename: `redistribution-requests_history_${histFrom}_to_${histTo}.csv`,
+      headers: ['Date requested','Commodity','Qty','Requesting facility','LGA','Source facility','Status'],
+      rightCols: new Set([2]),
+      rows: histReqs.map(r => [
+        fmtDateTime(r.initiated_at), r.commodity_name, r.quantity,
+        r.receiving_facility_name || '—', lgaOf(r), r.sending_facility_name || '—', r.status,
+      ]),
+    }
+    return {
+      title: 'Redistribution requests awaiting review',
+      subtitle: `${activeReqs.length} request(s) awaiting a source facility`,
+      filename: `redistribution-requests_awaiting-review_${stamp}.csv`,
+      headers: ['Date submitted','Commodity','Category','Qty requested','Requesting facility','LGA','Submitted by','Notes'],
+      rightCols: new Set([3]),
+      rows: activeReqs.map(r => [
+        fmtDateTime(r.initiated_at), r.commodity_name, r.commodities?.category || '—',
+        r.qty_requested ?? r.quantity, r.receiving_facility_name || '—', lgaOf(r),
+        r.initiated_by || '—', r.notes || '',
+      ]),
+    }
+  }
+  function downloadReqCsv() { const e = buildReqExport(); exportCsv(e.filename, e.headers, e.rows) }
+  function downloadReqPdf() { const e = buildReqExport(); exportPdf(e.title, e.subtitle, e.headers, e.rows, e.rightCols) }
 
   // Category + State narrowing for the expiry / out / low / overstock tables.
   // Out/low/over are per-commodity aggregates already scoped to the picked state
@@ -640,6 +687,14 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                       {v.label}
                     </button>
                   ))}
+                  <button onClick={downloadReqCsv} disabled={reqRowCount===0}
+                    className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 disabled:opacity-40 disabled:hover:text-gray-400">
+                    ↓ CSV
+                  </button>
+                  <button onClick={downloadReqPdf} disabled={reqRowCount===0}
+                    className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 disabled:opacity-40 disabled:hover:text-gray-400">
+                    ↓ PDF
+                  </button>
                   <button onClick={reqView==='history' ? loadHistory : reqView==='inflight' ? loadInflight : loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
                 </>
               ) : (
@@ -697,7 +752,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
               loadingHist ? <LoadingState/> : histReqs.length===0 ? <EmptyState message="No matching resolved requests"/> : (
                 <div className="table-wrap"><table className="w-full text-sm">
                   <thead><tr className="border-b border-white/8 bg-white/2">
-                    {['Date','Commodity','Qty','Requesting facility','LGA','Source facility','Status'].map(h=>(
+                    {['Date requested','Commodity','Qty','Requesting facility','LGA','Source facility','Status'].map(h=>(
                       <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                     ))}
                   </tr></thead>
@@ -718,7 +773,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
               loadingInflight ? <LoadingState/> : inflightList.length===0 ? <EmptyState message="No requests in progress — nothing awaiting dispatch or receipt ✓"/> : (
                 <div className="table-wrap"><table className="w-full text-sm">
                   <thead><tr className="border-b border-white/8 bg-white/2">
-                    {['Requested','Commodity','Qty','Requesting facility','LGA','Source facility','Stage','Waiting'].map(h=>(
+                    {['Date requested','Commodity','Qty','Requesting facility','LGA','Source facility','Stage','Waiting'].map(h=>(
                       <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                     ))}
                   </tr></thead>
