@@ -21,14 +21,9 @@
 
 import { pool, query, withTransaction } from '../src/db.js'
 import { BinCardService } from '../src/services/binCardService.js'
+import { ymd } from '../src/services/lotService.js'
 
 const fmt = n => Number(n || 0).toLocaleString()
-
-// Normalize an expiry to an explicit Lagos calendar date (YYYY-MM-DD) so the
-// stored DATE never drifts a day on a DB session that isn't Africa/Lagos. pg
-// returns a DATE as a JS Date at the session's local midnight; converting back
-// through a fixed timezone pins the intended calendar day regardless of session.
-const ymd = d => d ? new Date(d).toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' }) : null
 
 // Every bin with stock, as { facility_id, commodity_id, location_type, site_name,
 // section, location(for residualLots), qty }.

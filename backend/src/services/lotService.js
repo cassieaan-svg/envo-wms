@@ -1,8 +1,19 @@
 import { query } from '../db.js'
 
 // Pin an expiry to its Lagos calendar day (YYYY-MM-DD) so it stays stable through
-// JSON round-trips and re-credits regardless of DB session timezone.
-const ymd = d => d ? new Date(d).toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' }) : null
+// JSON round-trips and re-credits regardless of DB session timezone. Returns null
+// for anything unparseable (a malformed free-typed note expiry) or implausible (a
+// 2-digit-year typo that lands in year 0028, etc.) — those become unknown-expiry
+// lots rather than crashing an insert into a date column.
+export const ymd = d => {
+  if (!d) return null
+  const t = new Date(d)
+  if (isNaN(t.getTime())) return null
+  const s = t.toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' })
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const year = +s.slice(0, 4)
+  return year >= 2000 && year <= 2100 ? s : null
+}
 
 // Split a drawn-lots array into the first `keepQty` units (soonest-expiry first,
 // as returned by debit) and the remainder. Used by a partial dispute to divide
@@ -46,7 +57,9 @@ export class LotService {
        on conflict (facility_id, commodity_id, location_type,
                     coalesce(site_name,''), coalesce(batch_number,''), coalesce(expiry_date,'0001-01-01'::date))
        do update set quantity = stock_lot.quantity + excluded.quantity, updated_at = now()`,
-      [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null, batch, expiry || null, n, section]
+      // ymd() guards against a malformed/implausible expiry (e.g. free-typed in a
+      // transfer note) reaching the date column — it becomes an unknown-expiry lot.
+      [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null, batch, ymd(expiry), n, section]
     )
   }
 
