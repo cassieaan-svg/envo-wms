@@ -25,6 +25,9 @@ export function Dashboard() {
   const [stsFilter, setSts]   = useState('')
   const [drill, setDrill]     = useState(null)
   const [loading, setLoading] = useState(true)
+  // Stock-derived status counts are meaningless until the stock payload lands —
+  // an empty stockData makes every commodity look out-of-stock.
+  const stockPending = loading || !store.stockLoaded
 
   const fid = store.getEffectiveFacilityId()
 
@@ -147,10 +150,10 @@ export function Dashboard() {
 
       <MetricGrid>
         <Metric label="Commodities tracked" value={groupedAll.length} color="blue" onClick={()=>setSts('')} active={stsFilter===''} />
-        <Metric label="Optimal stock"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" onClick={()=>setSts(s=>s==='ok'?'':'ok')}     active={stsFilter==='ok'} />
-        <Metric label="Low stock"     value={groupedAll.filter(r=>getStatus(r)==='low').length}  color="amber" onClick={()=>setSts(s=>s==='low'?'':'low')}   active={stsFilter==='low'} />
-        <Metric label="Out of stock"  value={groupedAll.filter(r=>getStatus(r)==='out').length}  color="red"   onClick={()=>setSts(s=>s==='out'?'':'out')}   active={stsFilter==='out'} />
-        <Metric label="Overstock"     value={groupedAll.filter(r=>getStatus(r)==='over').length} color="blue"  onClick={()=>setSts(s=>s==='over'?'':'over')} active={stsFilter==='over'} />
+        <Metric label="Optimal stock"  value={groupedAll.filter(r=>getStatus(r)==='ok').length}   color="green" loading={stockPending} onClick={()=>setSts(s=>s==='ok'?'':'ok')}     active={stsFilter==='ok'} />
+        <Metric label="Low stock"     value={groupedAll.filter(r=>getStatus(r)==='low').length}  color="amber" loading={stockPending} onClick={()=>setSts(s=>s==='low'?'':'low')}   active={stsFilter==='low'} />
+        <Metric label="Out of stock"  value={groupedAll.filter(r=>getStatus(r)==='out').length}  color="red"   loading={stockPending} onClick={()=>setSts(s=>s==='out'?'':'out')}   active={stsFilter==='out'} />
+        <Metric label="Overstock"     value={groupedAll.filter(r=>getStatus(r)==='over').length} color="blue"  loading={stockPending} onClick={()=>setSts(s=>s==='over'?'':'over')} active={stsFilter==='over'} />
       </MetricGrid>
 
       <Card className="mb-4">

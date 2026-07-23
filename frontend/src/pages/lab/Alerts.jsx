@@ -218,6 +218,10 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   // Recompute the out/low/over aggregates when an admin narrows the location scope.
   useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
+  // The stock payload lands well after mount; until it does stockData is empty
+  // and every commodity derives as out-of-stock. Recompute once it arrives
+  // (the false→true flip fires once, so realtime updates don't re-query).
+  useEffect(()=>{ if(store.stockLoaded) loadAll() },[store.stockLoaded])
 
   // Admin scope narrows the expiry batch list client-side (rows carry facility_id).
   const shownExpiry = expiryRows.filter(r => inScope(r.facility_id))
@@ -237,7 +241,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     </button>
   )
 
-  const StockTable = ({rows,emptyMsg,qtyClass}) => rows.length===0 ? <EmptyState message={emptyMsg}/> : (
+  const stockPending = loading || !store.stockLoaded
+
+  const StockTable = ({rows,emptyMsg,qtyClass}) => stockPending ? <LoadingState/> : rows.length===0 ? <EmptyState message={emptyMsg}/> : (
     <div className="table-wrap"><table className="w-full text-sm">
       <thead><tr className="border-b border-white/8 bg-white/2">
         {['Commodity','Category','Unit','Stock on hand','AMC','MOS'].map(h=>(
@@ -272,9 +278,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
 
       <MetricGrid>
         {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber"/>}
-        <Metric label="Out of stock"   value={stockRows.out.length}   color="red"/>
-        <Metric label="Low stock"      value={stockRows.low.length}   color="amber"/>
-        <Metric label="Overstock"      value={stockRows.over.length}  color="blue"/>
+        <Metric label="Out of stock"   value={stockRows.out.length}   color="red"   loading={stockPending}/>
+        <Metric label="Low stock"      value={stockRows.low.length}   color="amber" loading={stockPending}/>
+        <Metric label="Overstock"      value={stockRows.over.length}  color="blue"  loading={stockPending}/>
         <Metric label="Expiry alerts"  value={shownExpiry.filter(r=>(new Date(r.expiry_date)-today)/86400000<=30).length} color="red"/>
       </MetricGrid>
 

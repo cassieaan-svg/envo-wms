@@ -20,8 +20,10 @@ export function Alerts() {
   const [expiryRows, setExpiry] = useState([])
   const [stockRows, setStock]   = useState({ out:[], low:[], over:[] })
   const [loading, setLoading]   = useState(true)
+  const stockLoaded             = useAppStore(s => s.stockLoaded)
   // Facility request alerts — own pending redistribution requests
   const [facReqAlerts, setFacReqAlerts] = useState([])
+  const [loadingFacReq, setLoadingFacReq] = useState(true)
   const [acceptingId, setAcceptingId]       = useState(null)
   const [acceptReceiverName, setAcceptReceiverName] = useState('')
   const [acceptLoading, setAcceptLoading]   = useState(false)
@@ -51,7 +53,7 @@ export function Alerts() {
   // Admin: requests already assigned to a source but not yet completed —
   // either awaiting dispatch by the source, or in transit awaiting receipt.
   const [inflightReqs, setInflightReqs]     = useState([])
-  const [loadingInflight, setLoadingInflight] = useState(false)
+  const [loadingInflight, setLoadingInflight] = useState(true)
   const [histFrom, setHistFrom] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10))
   const [histTo, setHistTo]     = useState(() => new Date().toISOString().slice(0, 10))
 
@@ -108,6 +110,7 @@ export function Alerts() {
       data = [...tagged, ...(incoming || [])]
     }
     setFacReqAlerts(data || [])
+    setLoadingFacReq(false)
   }
 
   async function cancelFacRequest(id) {
@@ -322,6 +325,12 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   // Recompute the out/low/over aggregates when the overall admin picks a state.
   useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
+  // The /api/stock payload is large (~4.5 MB for an admin) and lands well after
+  // mount. Until it does, stockData is empty and every commodity derives as
+  // out-of-stock, so recompute once it arrives. Keyed on the false→true flip
+  // (once per session) rather than on stockData itself, so routine realtime
+  // stock updates don't re-fire these queries.
+  useEffect(()=>{ if(stockLoaded) loadAll() },[stockLoaded])
   useEffect(()=>{ if(store.isAdmin() && reqView==='history') loadHistory() },[reqView, histFrom, histTo])
   useEffect(()=>{ if(store.isAdmin() && reqView==='inflight') loadInflight() },[reqView])
 
@@ -417,6 +426,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const shownLow    = stockRows.low.filter(inStockCat)
   const shownOver   = stockRows.over.filter(inStockCat)
 
+  // Stock-derived counts are only meaningful once the stock payload has landed.
+  const stockPending = loading || !stockLoaded
+
   const today = new Date()
   const urgency = r => {
     const d=(new Date(r.expiry_date)-today)/86400000
@@ -432,7 +444,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     </button>
   )
 
-  const StockTable = ({rows,emptyMsg,qtyClass,onRowClick}) => rows.length===0 ? <EmptyState message={emptyMsg}/> : (
+  const StockTable = ({rows,emptyMsg,qtyClass,onRowClick}) => stockPending ? <LoadingState/> : rows.length===0 ? <EmptyState message={emptyMsg}/> : (
     <div className="table-wrap"><table className="w-full text-sm">
       <thead><tr className="border-b border-white/8 bg-white/2">
         {['Commodity','Category','Unit','Stock on hand','AMC','MOS'].map(h=>(
@@ -467,19 +479,19 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       <FacilityPicker />
 
       <MetricGrid>
-        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" onClick={()=>{setTab('fac-requests');setReqView('active')}} active={tab==='fac-requests'&&reqView==='active'}/>}
-        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="In progress" value={inflightReqs.length} color="blue" onClick={()=>{setTab('fac-requests');setReqView('inflight')}} active={tab==='fac-requests'&&reqView==='inflight'}/>}
-        <Metric label="Out of stock"   value={stockRows.out.length}   color="red"   onClick={()=>setTab('out')}       active={tab==='out'}/>
-        <Metric label="Low stock"      value={stockRows.low.length}   color="amber" onClick={()=>setTab('low')}       active={tab==='low'}/>
-        <Metric label="Overstock"      value={stockRows.over.length}  color="blue"  onClick={()=>setTab('overstock')} active={tab==='overstock'}/>
-        <Metric label="Expiry alerts"  value={expiryRows.filter(r=>(new Date(r.expiry_date)-today)/86400000<=30).length} color="red" onClick={()=>setTab('expiry')} active={tab==='expiry'}/>
+        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" loading={loadingFacReq} onClick={()=>{setTab('fac-requests');setReqView('active')}} active={tab==='fac-requests'&&reqView==='active'}/>}
+        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="In progress" value={inflightReqs.length} color="blue" loading={loadingInflight} onClick={()=>{setTab('fac-requests');setReqView('inflight')}} active={tab==='fac-requests'&&reqView==='inflight'}/>}
+        <Metric label="Out of stock"   value={stockRows.out.length}   color="red"   loading={stockPending} onClick={()=>setTab('out')}       active={tab==='out'}/>
+        <Metric label="Low stock"      value={stockRows.low.length}   color="amber" loading={stockPending} onClick={()=>setTab('low')}       active={tab==='low'}/>
+        <Metric label="Overstock"      value={stockRows.over.length}  color="blue"  loading={stockPending} onClick={()=>setTab('overstock')} active={tab==='overstock'}/>
+        <Metric label="Expiry alerts"  value={expiryRows.filter(r=>(new Date(r.expiry_date)-today)/86400000<=30).length} color="red" loading={stockPending} onClick={()=>setTab('expiry')} active={tab==='expiry'}/>
       </MetricGrid>
 
       <div className="flex gap-2 mb-4 flex-wrap">
         <TabBtn id="expiry"    label="Expiry alerts"/>
-        <TabBtn id="out"       label={`Out of stock (${stockRows.out.length})`}/>
-        <TabBtn id="low"       label={`Low stock (${stockRows.low.length})`}/>
-        <TabBtn id="overstock" label={`Overstock (${stockRows.over.length})`}/>
+        <TabBtn id="out"       label={`Out of stock${stockPending ? '' : ` (${stockRows.out.length})`}`}/>
+        <TabBtn id="low"       label={`Low stock${stockPending ? '' : ` (${stockRows.low.length})`}`}/>
+        <TabBtn id="overstock" label={`Overstock${stockPending ? '' : ` (${stockRows.over.length})`}`}/>
         {!store.isOverallAdmin() && (
           <button onClick={()=>setTab('fac-requests')}
             className={`px-4 py-2 text-sm rounded-lg border transition-colors flex items-center gap-2 ${tab==='fac-requests'?'bg-white/8 border-white/15 text-gray-100 font-medium':'border-white/10 text-gray-400 hover:text-gray-200'}`}>

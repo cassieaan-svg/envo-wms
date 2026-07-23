@@ -12,7 +12,10 @@ export function MetricGrid({ children }) {
   )
 }
 
-export function Metric({ label, value, color = '', onClick, active = false }) {
+// `loading` shows a placeholder instead of `value`. Use it whenever the number
+// would otherwise render before its data arrives — a premature 0 (or a count
+// derived from empty data) reads as a real figure and misleads.
+export function Metric({ label, value, color = '', onClick, active = false, loading = false }) {
   const colors = {
     green: 'text-green-400',
     red:   'text-red-400',
@@ -32,7 +35,9 @@ export function Metric({ label, value, color = '', onClick, active = false }) {
       } ${clickable ? 'cursor-pointer hover:border-white/20' : ''}`}
     >
       <div className="text-xs text-gray-500 uppercase tracking-widest mb-2">{label}</div>
-      <div className={`text-2xl font-medium font-mono ${colors[color] || 'text-gray-100'}`}>{value}</div>
+      {loading
+        ? <div className="h-8 w-12 rounded bg-white/10 animate-pulse" aria-label={`${label} loading`}/>
+        : <div className={`text-2xl font-medium font-mono ${colors[color] || 'text-gray-100'}`}>{value}</div>}
     </div>
   )
 }

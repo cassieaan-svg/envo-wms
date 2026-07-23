@@ -26,6 +26,10 @@ export const useAppStore = create((set, get) => ({
   allFacilities:  [],
   allCommodities: [],
   stockData:      [],
+  // False until the first /api/stock response lands. Pages must not derive
+  // stock alerts from an empty stockData — every commodity would look
+  // out-of-stock — so they gate on this instead of on stockData.length.
+  stockLoaded:    false,
   dsdFacilities:  [],
   amcWindows:     {},   // facility_id → { months: ['YYYY-MM', ...] } | absent = default window
 
@@ -50,7 +54,7 @@ export const useAppStore = create((set, get) => ({
   setCurrentFacility:  (currentFacility)  => set({ currentFacility }),
   setAllFacilities:    (allFacilities)    => set({ allFacilities }),
   setAllCommodities:   (allCommodities)   => set({ allCommodities }),
-  setStockData:        (stockData)        => set({ stockData }),
+  setStockData:        (stockData)        => set({ stockData, stockLoaded: true }),
   setDsdFacilities:    (dsdFacilities)    => set({ dsdFacilities }),
   setSidebarOpen:      (sidebarOpen)      => set({ sidebarOpen }),
   setCurrentPage:      (page)             => {
@@ -175,7 +179,7 @@ export const useAppStore = create((set, get) => ({
     user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, dsdType:null, commoditySection:null,
     adminState:null, adminLGA:null, adminCluster:null, currentFacility:null,
     adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
-    allFacilities:[], allCommodities:[], stockData:[], dsdFacilities:[], amcWindows:{},
+    allFacilities:[], allCommodities:[], stockData:[], stockLoaded:false, dsdFacilities:[], amcWindows:{},
     currentPage:'dashboard', currentReportCategory:'all', pendingReportsTab:false
   }),
 }))
