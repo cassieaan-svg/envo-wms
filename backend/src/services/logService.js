@@ -115,7 +115,8 @@ export class LogService {
   static async recordDispense(dispenseData) {
     const {
       facility_id, commodity_id, quantity, dispensed_by, dispensed_at,
-      notes, dsd_site_name, sdp_name, section, location_type
+      notes, dsd_site_name, sdp_name, section, location_type,
+      batch_number, expiry_date
     } = dispenseData
 
     if (!facility_id || !commodity_id || !quantity || !dispensed_by) {
@@ -129,11 +130,12 @@ export class LogService {
       const resolvedSection = await resolveSection(section, commodity_id, exec)
       const { rows } = await exec(
         `insert into dispense_log
-           (facility_id, commodity_id, quantity, dispensed_by, dispensed_at, notes, section)
-         values ($1, $2, $3, $4, $5, $6, $7)
+           (facility_id, commodity_id, quantity, dispensed_by, dispensed_at, notes, section, batch_number, expiry_date)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          returning *`,
         [facility_id, commodity_id, qty, dispensed_by,
-         dispensed_at || new Date().toISOString(), notes || '', resolvedSection]
+         dispensed_at || new Date().toISOString(), notes || '', resolvedSection,
+         batch_number || null, expiry_date || null]
       )
       const dispenseLog = rows[0] || null
 

@@ -26,7 +26,9 @@ router.post('/', async (req, res) => {
       dsd_site_name,
       sdp_name,
       section,
-      location_type
+      location_type,
+      batch_number,
+      expiry_date
     } = req.body
 
     // Validate required fields
@@ -82,7 +84,9 @@ router.post('/', async (req, res) => {
       dsd_site_name,
       sdp_name,
       section,
-      location_type
+      location_type,
+      batch_number,
+      expiry_date
     })
 
     res.status(201).json({

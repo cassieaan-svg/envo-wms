@@ -86,6 +86,13 @@ function makeLots() {
       }
       return taken
     },
+    // What's left after all movements — the lots physically on hand, soonest-expiry
+    // first. This is exactly the opening balance for the lot ledger seed.
+    residuals() {
+      return pool.filter(l => l.rem > 1e-9)
+        .sort((a, b) => new Date(a.expiry || '9999-12-31') - new Date(b.expiry || '9999-12-31'))
+        .map(l => ({ batch: l.batch || null, expiry: l.expiry || null, qty: Math.round(l.rem) }))
+    },
   }
 }
 
@@ -95,7 +102,10 @@ function makeLots() {
 // consume that exact batch and keep it displayed; issues with none are set to
 // what FEFO drew. Returns Map(transferId → drawn lots) so sub-bins can inherit
 // which batch each redistribution carried. Never overrides a recorded batch.
-function fefoAttribute(rows) {
+// `out` (optional) receives the lots pool as out.lots, so a caller can read the
+// residual holdings after attribution (used to seed the lot ledger) without
+// changing the return value existing callers rely on.
+function fefoAttribute(rows, out) {
   const lots = makeLots()
   const order = [...rows].sort((a, b) => (new Date(a.date) - new Date(b.date)) || (recvOf(b) - recvOf(a)))
   const drawnByTid = new Map()
@@ -115,6 +125,7 @@ function fefoAttribute(rows) {
       if (r._tid) drawnByTid.set(r._tid, taken)
     }
   }
+  if (out) out.lots = lots
   return drawnByTid
 }
 
@@ -227,6 +238,40 @@ export class BinCardService {
     return out
   }
 
+  // The lots physically remaining in ONE bin (store / dispensary / a DSD or SDP
+  // site), reconstructed with the same FEFO engine that drives the bin card:
+  // receipts seed lots, issues draw them (honouring any recorded batch), and what
+  // is left is the on-hand holding by batch+expiry. This is the opening balance
+  // the lot ledger seeds from — no new estimation logic, so the seed matches what
+  // the bin card already shows. Returns [{ batch, expiry, qty }], soonest-expiry
+  // first. The caller reconciles the total to the bin's actual stock quantity.
+  static async residualLots(facilityId, commodityId, location) {
+    const { kind, site } = parseLocation(location)
+    const storeRows = await BinCardService._storeRows(facilityId, commodityId)
+    const storeOut = {}
+    const redistBatches = fefoAttribute(storeRows, storeOut)   // also attributes storeRows
+    if (kind === 'store') return storeOut.lots.residuals()
+
+    const rows = kind === 'dispensary'
+      ? await BinCardService._dispensaryRows(facilityId, commodityId)
+      : await BinCardService._siteRows(facilityId, commodityId, kind.toUpperCase(), site)
+    // Each redistribution INTO this bin carries whatever batch(es) FEFO drew from
+    // the store for that transfer (same seeding getBinCard does before attributing).
+    for (const r of rows) {
+      if (r._tid && recvOf(r) > 0 && !r.batch && !r.expiry) {
+        const taken = redistBatches.get(r._tid)
+        if (taken?.length) {
+          r._seedLots = taken
+          r.batch = [...new Set(taken.map(t => t.batch).filter(Boolean))].join(', ')
+          r.expiry = taken.length === 1 ? taken[0].expiry : ''
+        }
+      }
+    }
+    const out = {}
+    fefoAttribute(rows, out)
+    return out.lots.residuals()
+  }
+
   // ---- Main Store ledger --------------------------------------------------
   static async _storeRows(facilityId, commodityId) {
     const rows = []
@@ -332,14 +377,18 @@ export class BinCardService {
 
   static async _dispenses(facilityId, commodityId) {
     return (await query(
-      `select dispensed_at "date", quantity, dispensed_to, dispensed_by, regimen_name, notes
+      `select dispensed_at "date", quantity, dispensed_to, dispensed_by, regimen_name, notes, batch_number, expiry_date
        from dispense_log where facility_id = $1 and commodity_id = $2`, [facilityId, commodityId])).rows
   }
 
   static _dispenseRow(r) {
+    // Prefer the batch the user actually chose at dispense (recorded columns);
+    // fall back to a legacy notes-encoded batch; leave blank so FEFO estimates
+    // when neither exists.
     return {
       date: r.date, type: 'Dispense', ref: '', party: r.dispensed_to || '',
-      batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
+      batch: r.batch_number || rx(r.notes, 'Batch') || '',
+      expiry: r.expiry_date || rx(r.notes, 'Expiry') || '',
       received: 0, issued: r.quantity, adjustment: 0, by: r.dispensed_by || '',
       remarks: freeNote(r.notes),
     }
