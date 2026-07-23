@@ -6,6 +6,7 @@ import { toast } from '../../components/ui/Toast'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
+import { BatchSelect } from '../../components/ui/BatchSelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
@@ -22,6 +23,9 @@ export function RecordStock() {
   const isDSD = accessLevel === 'facility' && facilityRole === 'dsd'
 
   const [commId, setCommId]     = useState('')
+  // The batch the user chose for the commodity currently in the picker. Facility
+  // dispensing only (DSD site stock carries no batch), reported by BatchSelect.
+  const [pickerBatch, setPickerBatch] = useState(null)
   const qtyRef                  = useRef(1)
   const [items, setItems]       = useState([])   // staged commodities to record together
   const [by, setBy]             = useState('')
@@ -82,8 +86,8 @@ export function RecordStock() {
     if (avail < qty) {
       setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
     }
-    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail }])
-    setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'
+    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail, batch: isDSD ? null : pickerBatch }])
+    setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'
   }
 
   function removeItem(commodityId) {
@@ -111,7 +115,7 @@ export function RecordStock() {
       if (avail < qty) {
         setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
       }
-      batch = [{ commodityId: commId, quantity: qty, comm, avail }]
+      batch = [{ commodityId: commId, quantity: qty, comm, avail, batch: isDSD ? null : pickerBatch }]
     }
 
     setSaving(true)
@@ -126,7 +130,9 @@ export function RecordStock() {
           dispensed_at:  entryTimestamp(date),
           ...(isDSD
             ? { notes: `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`, dsd_site_name: dsdSiteName }
-            : { notes: notes || null, location_type: 'dispensary' }),
+            : { notes: notes || null, location_type: 'dispensary',
+                batch_number: item.batch?.batch_number || undefined,
+                expiry_date:  item.batch?.expiry_date  || undefined }),
           section:       commoditySection,
         })
       } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
@@ -203,6 +209,16 @@ export function RecordStock() {
               </div>
             )}
 
+            {/* Batch to consume (facility dispensing only — DSD site stock has no
+                batch). Defaults to the FEFO lot; override to consume another. */}
+            {!isDSD && commId && stockRow && stockRow.quantity > 0 && (
+              <div>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch to consume</label>
+                <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType="dispensary"
+                  value={pickerBatch?.key} onSelect={setPickerBatch} />
+              </div>
+            )}
+
             {/* Add-to-list */}
             <div className="flex justify-end">
               <Button type="button" variant="default" size="md" onClick={addItem}>
@@ -226,6 +242,9 @@ export function RecordStock() {
                         <div className="text-xs text-gray-500">
                           {it.quantity} {pluralizeUnit(it.quantity, it.comm?.unit || dispUnit)}
                           {packSize ? ` = ${(it.quantity * packSize).toLocaleString()} ${dispUnit}` : ''}
+                          {it.batch?.batch_number && (
+                            <span className="text-gray-400"> · batch {it.batch.batch_number}{it.batch.expiry_date ? ` · exp ${fmtDate(it.batch.expiry_date)}` : ''}</span>
+                          )}
                         </div>
                       </div>
                       <button type="button" onClick={() => removeItem(it.commodityId)}

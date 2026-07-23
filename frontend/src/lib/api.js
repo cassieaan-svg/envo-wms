@@ -85,6 +85,9 @@ export const api = {
     // / aggregate views). Other params: commodity_id, commodity_ids, location_type,
     // limit, offset.
     list:   (params)        => get('/stock', params),
+    // On-hand lots of one bin (batch/expiry balances) for the dispense picker.
+    // params: facility_id, commodity_id, location_type, site_name (dsd/sdp).
+    lots:   (params)        => get('/stock/lots', params),
     get:    (id)            => get(`/stock/${id}`),
     create: (body)         => post('/stock', body),
     update: (id, quantity) => patch(`/stock/${id}`, { quantity }),

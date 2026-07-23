@@ -89,6 +89,31 @@ router.get('/', async (req, res) => {
 })
 
 /**
+ * GET /api/stock/lots - on-hand lots (per-batch balances) of ONE bin, from the
+ * lot ledger, soonest-expiry first. Powers the dispense batch picker.
+ * Query: facility_id, commodity_id, location_type (store|dispensary|dsd|sdp),
+ * site_name (required for dsd/sdp). Declared before '/:id' so it isn't shadowed.
+ */
+router.get('/lots', async (req, res) => {
+  try {
+    const { facility_id, commodity_id, location_type, site_name } = req.query
+    if (!facility_id || !commodity_id || !location_type) {
+      return sendValidationError(res, 'facility_id, commodity_id and location_type are required', 'facility_id')
+    }
+    if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+    if (!['store', 'dispensary', 'dsd', 'sdp'].includes(location_type)) {
+      return sendValidationError(res, 'location_type must be store, dispensary, dsd or sdp', 'location_type')
+    }
+    if (!(await enforceFacilityRead(req, res, facility_id, 'stock'))) return
+    const lots = await StockService.getBinLots({ facility_id, commodity_id, location_type, site_name: site_name || null })
+    res.json({ success: true, data: lots, count: lots.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching bin lots:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
+  }
+})
+
+/**
  * GET /api/stock/dsd - Get DSD stock for a facility
  * Query params: facility_id (required), dsd_site_name (optional)
  */

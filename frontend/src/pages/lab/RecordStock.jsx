@@ -6,6 +6,7 @@ import { toast } from '../../components/ui/Toast'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
+import { BatchSelect } from '../../components/ui/BatchSelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
@@ -24,6 +25,8 @@ export function RecordStock() {
   const isDSD = accessLevel === 'facility' && facilityRole === 'dsd'
 
   const [commId, setCommId]     = useState('')
+  // The batch chosen for the commodity in the picker (from the site's lot ledger).
+  const [pickerBatch, setPickerBatch] = useState(null)
   const qtyRef                  = useRef(1)
   const [items, setItems]       = useState([])   // staged commodities to record together
   const [by, setBy]             = useState('')
@@ -98,6 +101,8 @@ export function RecordStock() {
 
   // The service delivery point each record is booked against (fixed for SDP/DSD users).
   const batchSdp = isSDP ? sdpName : isDSD ? dsdSiteName : effectiveSdp
+  // The ledger bin the chosen batch is drawn from: a DSD or (default) SDP site.
+  const batchLocationType = isDSD ? 'dsd' : 'sdp'
 
   // Validate the current commodity + quantity and stage it for recording.
   async function addItem() {
@@ -120,8 +125,8 @@ export function RecordStock() {
     if (avail < qty) {
       setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
     }
-    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail }])
-    setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'
+    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail, batch: pickerBatch }])
+    setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'
   }
 
   function removeItem(commodityId) {
@@ -136,6 +141,8 @@ export function RecordStock() {
       dispensed_by: by || null,
       dispensed_at: entryTimestamp(date),
       section:      commoditySection,
+      batch_number: item.batch?.batch_number || undefined,
+      expiry_date:  item.batch?.expiry_date  || undefined,
     }
     if (isSDP)  return { ...base, notes: `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`, sdp_name: sdpName }
     if (isDSD)  return { ...base, notes: `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`, dsd_site_name: dsdSiteName }
@@ -166,7 +173,7 @@ export function RecordStock() {
       if (avail < qty) {
         setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
       }
-      batch = [{ commodityId: commId, quantity: qty, comm, avail }]
+      batch = [{ commodityId: commId, quantity: qty, comm, avail, batch: pickerBatch }]
     }
 
     setSaving(true)
@@ -179,7 +186,7 @@ export function RecordStock() {
 
     toast(`Stock recorded — ${batch.length} item(s)`, 'green')
     setMsg({ type:'success', text:`Stock saved successfully${batchSdp ? ` for ${batchSdp}` : ''} — ${batch.length} record(s).` })
-    setItems([]); setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
+    setItems([]); setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
     setDate(todayLagos())
     if (!isSDP && !isDSD) await loadStock()
     loadRecent()
@@ -274,6 +281,17 @@ export function RecordStock() {
               </div>
             )}
 
+            {/* Batch to consume — from the site's lot ledger. Defaults to the FEFO
+                lot; override to consume another. */}
+            {commId && batchSdp && stockQty > 0 && (
+              <div>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch to consume</label>
+                <BatchSelect key={`${commId}|${batchSdp}`} facilityId={fid} commodityId={commId}
+                  locationType={batchLocationType} siteName={batchSdp}
+                  value={pickerBatch?.key} onSelect={setPickerBatch} />
+              </div>
+            )}
+
             {/* Add-to-list */}
             <div className="flex justify-end">
               <Button type="button" variant="default" size="md" onClick={addItem}>
@@ -297,6 +315,9 @@ export function RecordStock() {
                         <div className="text-xs text-gray-500">
                           {it.quantity} {pluralizeUnit(it.quantity, it.comm?.unit || dispUnit)}
                           {packSize ? ` = ${(it.quantity * packSize).toLocaleString()} ${dispUnit}` : ''}
+                          {it.batch?.batch_number && (
+                            <span className="text-gray-400"> · batch {it.batch.batch_number}{it.batch.expiry_date ? ` · exp ${fmtDate(it.batch.expiry_date)}` : ''}</span>
+                          )}
                         </div>
                       </div>
                       <button type="button" onClick={() => removeItem(it.commodityId)}

@@ -169,6 +169,20 @@ export class StockService {
   // unknown-expiry lot; a decrease draws FEFO. Movement paths do NOT go through
   // here — they call LotService explicitly alongside increment/decrement, so this
   // never double-counts.
+  // The on-hand lots of one bin (store / dispensary / a DSD or SDP site), from the
+  // lot ledger, soonest-expiry first. Powers the dispense batch picker.
+  static async getBinLots({ facility_id, commodity_id, location_type, site_name }) {
+    const { rows } = await query(
+      `select batch_number, expiry_date, quantity
+         from stock_lot
+        where facility_id = $1 and commodity_id = $2 and location_type = $3
+          and coalesce(site_name,'') = coalesce($4,'') and quantity > 0
+        order by expiry_date asc nulls last, batch_number`,
+      [facility_id, commodity_id, location_type, site_name || null]
+    )
+    return rows
+  }
+
   static async _reconcileLots(exec, bin, oldQty, newQty) {
     const delta = Math.round(Number(newQty) || 0) - Math.round(Number(oldQty) || 0)
     if (delta > 0) await LotService.credit(exec, bin, { qty: delta })
