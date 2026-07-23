@@ -1,4 +1,5 @@
-import { query } from '../db.js'
+import { query, withTransaction } from '../db.js'
+import { LotService } from './lotService.js'
 
 // Embedded-object SQL fragments. The frontend (and the other services) expect
 // stock rows to carry nested `facilities` / `commodities` objects, the same
@@ -163,15 +164,33 @@ export class StockService {
   /**
    * Update stock quantity (absolute set).
    */
+  // Keep the lot ledger consistent with a DIRECT (absolute) quantity set on a bin
+  // — a manual admin edit / upsert that carries no batch. An increase goes to an
+  // unknown-expiry lot; a decrease draws FEFO. Movement paths do NOT go through
+  // here — they call LotService explicitly alongside increment/decrement, so this
+  // never double-counts.
+  static async _reconcileLots(exec, bin, oldQty, newQty) {
+    const delta = Math.round(Number(newQty) || 0) - Math.round(Number(oldQty) || 0)
+    if (delta > 0) await LotService.credit(exec, bin, { qty: delta })
+    else if (delta < 0) await LotService.debit(exec, bin, -delta)
+  }
+
   static async updateStock(stockId, updateData) {
     const { quantity } = updateData
     if (quantity === undefined) throw new Error('Missing required field: quantity')
 
-    const { rows } = await query(
-      `update stock set quantity = $2, updated_at = now() where id = $1 returning *`,
-      [stockId, parseInt(quantity)]
-    )
-    return rows[0] || null
+    return await withTransaction(async exec => {
+      const { rows: cur } = await exec('select facility_id, commodity_id, location_type, quantity from stock where id = $1', [stockId])
+      const old = cur[0]
+      const { rows } = await exec(
+        `update stock set quantity = $2, updated_at = now() where id = $1 returning *`,
+        [stockId, parseInt(quantity)]
+      )
+      if (old) await StockService._reconcileLots(exec,
+        { facility_id: old.facility_id, commodity_id: old.commodity_id, location_type: old.location_type, site_name: null },
+        old.quantity, quantity)
+      return rows[0] || null
+    })
   }
 
   /**
@@ -185,6 +204,7 @@ export class StockService {
     if (!facility_id || !commodity_id || !location_type || quantity === undefined) {
       throw new Error('Missing required fields: facility_id, commodity_id, location_type, quantity')
     }
+    const existing = await StockService.getStockByFacilityAndCommodity(facility_id, commodity_id, location_type, exec)
     const { rows } = await exec(
       `insert into stock (facility_id, commodity_id, location_type, quantity, updated_at)
        values ($1, $2, $3, $4, now())
@@ -193,6 +213,8 @@ export class StockService {
        returning *`,
       [facility_id, commodity_id, location_type, parseInt(quantity)]
     )
+    await StockService._reconcileLots(exec,
+      { facility_id, commodity_id, location_type, site_name: null }, existing?.quantity || 0, quantity)
     return rows[0] || null
   }
 
@@ -208,6 +230,8 @@ export class StockService {
     // so a re-cased dispatch doesn't fork the site into a duplicate partition.
     const existing = await StockService.getDsdStockByFacilitySiteCommodity(facility_id, dsd_site_name, commodity_id, exec)
     if (existing) return await StockService.updateDsdStock(existing.id, quantity, exec)
+    await StockService._reconcileLots(exec,
+      { facility_id, commodity_id, location_type: 'dsd', site_name: dsd_site_name }, 0, quantity)
     const { rows } = await exec(
       `insert into dsd_stock (facility_id, dsd_site_name, commodity_id, quantity, updated_at)
        values ($1, $2, $3, $4, now())
@@ -231,6 +255,8 @@ export class StockService {
     // so a re-cased dispatch doesn't fork the site into a duplicate partition.
     const existing = await StockService.getSdpStockByFacilitySiteCommodity(facility_id, sdp_name, commodity_id, exec)
     if (existing) return await StockService.updateSdpStock(existing.id, quantity, exec)
+    await StockService._reconcileLots(exec,
+      { facility_id, commodity_id, location_type: 'sdp', site_name: sdp_name }, 0, quantity)
     const { rows } = await exec(
       `insert into sdp_stock (facility_id, sdp_name, commodity_id, quantity, updated_at)
        values ($1, $2, $3, $4, now())
@@ -247,10 +273,15 @@ export class StockService {
    */
   static async updateDsdStock(id, quantity, exec = query) {
     if (quantity === undefined) throw new Error('Missing required field: quantity')
+    const { rows: cur } = await exec('select facility_id, commodity_id, dsd_site_name, quantity from dsd_stock where id = $1', [id])
+    const old = cur[0]
     const { rows } = await exec(
       `update dsd_stock set quantity = $2, updated_at = now() where id = $1 returning *`,
       [id, parseInt(quantity)]
     )
+    if (old) await StockService._reconcileLots(exec,
+      { facility_id: old.facility_id, commodity_id: old.commodity_id, location_type: 'dsd', site_name: old.dsd_site_name },
+      old.quantity, quantity)
     return rows[0] || null
   }
 
@@ -259,10 +290,15 @@ export class StockService {
    */
   static async updateSdpStock(id, quantity, exec = query) {
     if (quantity === undefined) throw new Error('Missing required field: quantity')
+    const { rows: cur } = await exec('select facility_id, commodity_id, sdp_name, quantity from sdp_stock where id = $1', [id])
+    const old = cur[0]
     const { rows } = await exec(
       `update sdp_stock set quantity = $2, updated_at = now() where id = $1 returning *`,
       [id, parseInt(quantity)]
     )
+    if (old) await StockService._reconcileLots(exec,
+      { facility_id: old.facility_id, commodity_id: old.commodity_id, location_type: 'sdp', site_name: old.sdp_name },
+      old.quantity, quantity)
     return rows[0] || null
   }
 

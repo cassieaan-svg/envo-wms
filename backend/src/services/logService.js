@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
+import { LotService } from './lotService.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -139,24 +140,30 @@ export class LogService {
       )
       const dispenseLog = rows[0] || null
 
-      // Decrement the right stock bucket.
+      // Decrement the right stock bucket, and debit the matching lot ledger by the
+      // same amount — the batch the user chose first, then FEFO for any remainder.
+      let bin
       if (dsd_site_name) {
         const dsdStock = await StockService.getDsdStockByFacilitySiteCommodity(facility_id, dsd_site_name, commodity_id, exec)
         if (dsdStock) {
           await exec('update dsd_stock set quantity = greatest(0, quantity - $2), updated_at = now() where id = $1', [dsdStock.id, qty])
         }
+        bin = { facility_id, commodity_id, location_type: 'dsd', site_name: dsd_site_name }
       } else if (sdp_name) {
         const sdpStock = await StockService.getSdpStockByFacilitySiteCommodity(facility_id, sdp_name, commodity_id, exec)
         if (sdpStock) {
           await exec('update sdp_stock set quantity = greatest(0, quantity - $2), updated_at = now() where id = $1', [sdpStock.id, qty])
         }
+        bin = { facility_id, commodity_id, location_type: 'sdp', site_name: sdp_name }
       } else {
         // Facility consumption deducts the given location (the frontend dispenses
         // from the dispensary); defaults to store when unspecified.
         const loc = location_type || 'store'
         const stock = await StockService.getStockByFacilityAndCommodity(facility_id, commodity_id, loc, exec)
         if (stock) await StockService.decrementStock(stock.id, qty, exec)
+        bin = { facility_id, commodity_id, location_type: loc, site_name: null }
       }
+      await LotService.debit(exec, bin, qty, { batch: batch_number || null })
 
       return dispenseLog
     })
@@ -259,6 +266,9 @@ export class LogService {
       } else {
         await StockService.createStock({ facility_id, commodity_id, quantity: qty, location_type: 'store' }, exec)
       }
+      // An intake is a new store lot with its recorded batch/expiry.
+      await LotService.credit(exec, { facility_id, commodity_id, location_type: 'store', site_name: null },
+        { batch: batch_number || null, expiry: expiry_date || null, qty, section: resolvedSection })
 
       return intakeLog
     })
@@ -332,12 +342,20 @@ export class LogService {
       )
       const adjustmentLog = rows[0] || null
 
+      const bin = { facility_id, commodity_id, location_type: 'store', site_name: null }
       const stock = await StockService.getStockByFacilityAndCommodity(facility_id, commodity_id, 'store', exec)
       if (stock) {
         if (adjustment_type === 'Increase') await StockService.incrementStock(stock.id, qty, exec)
         else await StockService.decrementStock(stock.id, qty, exec)
       } else if (adjustment_type === 'Increase') {
         await StockService.createStock({ facility_id, commodity_id, quantity: qty, location_type: 'store' }, exec)
+      }
+      // Mirror the store change on the lot ledger: an increase is a lot with its
+      // recorded batch/expiry; a decrease draws FEFO (soonest-expiry first).
+      if (adjustment_type === 'Increase') {
+        await LotService.credit(exec, bin, { batch: batch_number || null, expiry: expiry_date || null, qty, section: resolvedSection })
+      } else {
+        await LotService.debit(exec, bin, qty, { batch: batch_number || null })
       }
 
       return adjustmentLog

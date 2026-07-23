@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
+import { LotService, splitLots } from './lotService.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -182,12 +183,21 @@ export class TransferService {
         }
         await StockService.decrementStock(stk.id, qty, exec)
       }
+      // Draw the lots from the sender's store (the entered batch first, then FEFO)
+      // and record them on the transfer so accept credits the receiver with exactly
+      // what shipped.
+      let drawn = []
+      if (transfer.sending_facility_id) {
+        ;({ drawn } = await LotService.debit(exec,
+          { facility_id: transfer.sending_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
+          qty, { batch: batch || null }))
+      }
       const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${expiry || ''}] [Batch: ${batch || ''}]`
       const newNotes = transfer.notes ? `${transfer.notes} ${meta}` : meta
       const { rows } = await exec(
-        `update stock_transfer_log set status = 'in_transit', quantity = $2, notes = $3
+        `update stock_transfer_log set status = 'in_transit', quantity = $2, notes = $3, lots = $4
          where id = $1 returning *`,
-        [transferId, qty, newNotes]
+        [transferId, qty, newNotes, JSON.stringify(drawn)]
       )
       return rows[0] || null
     })
@@ -231,6 +241,12 @@ export class TransferService {
 
     return withTransaction(async exec => {
       await this._creditStock(exec, transfer.receiving_facility_id, transfer.commodity_id, transfer.quantity, 'store', transfer.section)
+      // Credit the receiver's store lots with exactly the batch/expiry lots the
+      // sender dispatched (fall back to the transfer's recorded batch/expiry, then
+      // to a single unknown lot, so the totals always reconcile).
+      await this._creditLotsFromTransfer(exec, transfer,
+        { facility_id: transfer.receiving_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
+        transfer.quantity)
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2
@@ -239,6 +255,23 @@ export class TransferService {
       )
       return rows[0] || null
     })
+  }
+
+  // Credit `bin` with the lots a transfer carried (transfer.lots). Falls back to
+  // the batch/expiry recorded in the transfer notes, then to a single unknown lot,
+  // so the credited units always equal `qty` and the invariant holds.
+  static async _creditLotsFromTransfer(exec, transfer, bin, qty) {
+    let lots = Array.isArray(transfer.lots) ? transfer.lots : null
+    if (!lots || !lots.length) {
+      const batch = this._rxNote(transfer.notes, 'Batch')
+      const expiry = this._rxNote(transfer.notes, 'Expiry')
+      lots = [{ batch: batch || null, expiry: expiry || null, qty }]
+    }
+    await LotService.creditMany(exec, bin, lots, transfer.section)
+  }
+
+  static _rxNote(notes, tag) {
+    return new RegExp(`\\[${tag}:\\s*([^\\]]+)\\]`, 'i').exec(notes || '')?.[1]?.trim() || null
   }
 
   /**
@@ -284,6 +317,13 @@ export class TransferService {
       // Stock only moves back if it had actually left the sender's store: a
       // dispatch decrements it, a still-pending request never did.
       const moved = ['in_transit', 'dispatched'].includes(prev.status)
+      // The lots drawn at dispatch travel on the transfer; split them the same way
+      // as the quantity so the accepted lots reach the destination and the returned
+      // lots go back to the sender — batch/expiry intact on both sides.
+      const dispatchedLots = (Array.isArray(prev.lots) && prev.lots.length)
+        ? prev.lots
+        : [{ batch: this._rxNote(prev.notes, 'Batch'), expiry: this._rxNote(prev.notes, 'Expiry'), qty: dispatched }]
+      const { kept: keptLots, rest: returnedLots } = splitLots(dispatchedLots, accepted)
 
       let result
       if (accepted > 0) {
@@ -301,7 +341,7 @@ export class TransferService {
           [transferId, accepted, received_by || disputed_by || null, note, returned]
         )
         result = rows[0]
-        if (moved) await this._creditDestination(exec, prev, accepted)
+        if (moved) await this._creditDestination(exec, prev, accepted, keptLots)
 
         // The rejected remainder becomes its own terminal 'disputed' row: it
         // never counts as stock that reached the receiver, and it is not
@@ -332,6 +372,9 @@ export class TransferService {
 
       if (moved && returned > 0 && prev.sending_facility_id) {
         await this._creditStock(exec, prev.sending_facility_id, prev.commodity_id, returned, 'store', prev.section)
+        await LotService.creditMany(exec,
+          { facility_id: prev.sending_facility_id, commodity_id: prev.commodity_id, location_type: 'store', site_name: null },
+          returnedLots, prev.section)
       }
       return result || null
     })
@@ -342,7 +385,7 @@ export class TransferService {
    * table for a site dispatch (receiving_facility_id is null there, the site
    * lives in the notes tag), otherwise the receiving facility's store.
    */
-  static async _creditDestination(exec, transfer, qty) {
+  static async _creditDestination(exec, transfer, qty, lots = null) {
     if (!qty || qty <= 0) return
     const isDsd = /\[DSD:/i.test(transfer.notes || '')
     const isSdp = /\[SDP:/i.test(transfer.notes || '')
@@ -351,11 +394,15 @@ export class TransferService {
       // than silently dropping the quantity the receiver said they kept.
       if (!transfer.receiving_facility_id) throw new Error('Transfer has no destination facility to credit')
       await this._creditStock(exec, transfer.receiving_facility_id, transfer.commodity_id, qty, 'store', transfer.section)
+      if (lots) await LotService.creditMany(exec,
+        { facility_id: transfer.receiving_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }, lots, transfer.section)
       return
     }
     const fid = transfer.sending_facility_id
     const site = this._siteFromNotes(transfer.notes) || transfer.receiving_facility_name
     if (!fid || !site) throw new Error('Could not resolve the destination site name')
+    if (lots) await LotService.creditMany(exec,
+      { facility_id: fid, commodity_id: transfer.commodity_id, location_type: isDsd ? 'dsd' : 'sdp', site_name: site }, lots, transfer.section)
     if (isDsd) {
       const existing = await StockService.getDsdStockByFacilitySiteCommodity(fid, site, transfer.commodity_id, exec)
       if (existing) {
@@ -411,6 +458,12 @@ export class TransferService {
       }
       await StockService.decrementStock(storeStk.id, qty, exec)
       await this._creditStock(exec, fid, transfer.commodity_id, qty, 'dispensary', transfer.section)
+      // Move the same qty store→dispensary on the lot ledger (FEFO), so the
+      // dispensary inherits the store's batch/expiry.
+      await LotService.move(exec,
+        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
+        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'dispensary', site_name: null },
+        qty, {}, transfer.section)
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'accepted', quantity = $2, resolved_at = now(), resolved_by = $3
@@ -438,11 +491,15 @@ export class TransferService {
         { const e = new Error(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`); e.status = 409; throw e }
       }
       await StockService.decrementStock(storeStk.id, qty, exec)
+      // Draw the lots from the store now; the site is credited with them when the
+      // site user confirms receipt (receive()).
+      const { drawn } = await LotService.debit(exec,
+        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }, qty, {})
 
       const { rows } = await exec(
-        `update stock_transfer_log set status = 'dispatched', quantity = $2, resolved_by = $3
+        `update stock_transfer_log set status = 'dispatched', quantity = $2, resolved_by = $3, lots = $4
          where id = $1 returning *`,
-        [transferId, qty, `[Approved: ${approved_by || ''}]`]
+        [transferId, qty, `[Approved: ${approved_by || ''}]`, JSON.stringify(drawn)]
       )
       return rows[0] || null
     })
@@ -482,6 +539,9 @@ export class TransferService {
                       values ($1,$2,$3,$4, now())`, [fid, site, transfer.commodity_id, qty])
         }
       }
+      // Credit the site's lot ledger with the lots drawn from the store at approve.
+      await this._creditLotsFromTransfer(exec, transfer,
+        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: isDsd ? 'dsd' : 'sdp', site_name: site }, qty)
 
       const resolvedBy = `${transfer.resolved_by || ''} [Received by: ${received_by || ''}]`.trim()
       const { rows } = await exec(
