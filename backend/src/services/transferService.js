@@ -183,14 +183,16 @@ export class TransferService {
         }
         await StockService.decrementStock(stk.id, qty, exec)
       }
-      // Draw the lots from the sender's store (the entered batch first, then FEFO)
-      // and record them on the transfer so accept credits the receiver with exactly
-      // what shipped.
+      // Draw the lots from the sender's store FEFO (skipping expired, enforced) and
+      // record them on the transfer so accept credits the receiver with exactly what
+      // shipped. The typed batch/expiry stay in notes as paper-form metadata; the
+      // real drawn lots are what travel and enforce is what blocks an expired/short
+      // dispatch.
       let drawn = []
       if (transfer.sending_facility_id) {
         ;({ drawn } = await LotService.debit(exec,
           { facility_id: transfer.sending_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
-          qty, { batch: batch || null }))
+          qty, { enforce: true }))
       }
       const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${expiry || ''}] [Batch: ${batch || ''}]`
       const newNotes = transfer.notes ? `${transfer.notes} ${meta}` : meta
@@ -463,7 +465,7 @@ export class TransferService {
       await LotService.move(exec,
         { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
         { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'dispensary', site_name: null },
-        qty, {}, transfer.section)
+        qty, { enforce: true }, transfer.section)
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'accepted', quantity = $2, resolved_at = now(), resolved_by = $3
@@ -491,10 +493,10 @@ export class TransferService {
         { const e = new Error(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`); e.status = 409; throw e }
       }
       await StockService.decrementStock(storeStk.id, qty, exec)
-      // Draw the lots from the store now; the site is credited with them when the
-      // site user confirms receipt (receive()).
+      // Draw the lots from the store now (FEFO, skip expired, enforced); the site is
+      // credited with them when the site user confirms receipt (receive()).
       const { drawn } = await LotService.debit(exec,
-        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }, qty, {})
+        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }, qty, { enforce: true })
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'dispatched', quantity = $2, resolved_by = $3, lots = $4

@@ -57,25 +57,53 @@ export class LotService {
     }
   }
 
-  // Remove qty from a bin. If `prefer.batch` is given, draw that batch first, then
-  // FEFO (soonest-expiry first, unknown-expiry last) for any remainder; otherwise
-  // pure FEFO. Returns the lots actually drawn — [{ batch, expiry, qty }] — so a
-  // transfer can carry them to the destination, plus `shortfall` if the bin's lots
-  // couldn't cover qty (should be 0 post-seed).
-  static async debit(exec, bin, qty, prefer = {}) {
+  // Remove qty from a bin.
+  //   opts.batch    — draw only this batch (an explicit pick); otherwise FEFO.
+  //   opts.enforce  — phase-3 hard block: never draw EXPIRED lots, and throw (409)
+  //                   if the eligible lots can't cover qty. Off by default so the
+  //                   seed/reconcile/dispute paths still move stock unconditionally.
+  // Draw order: soonest-expiry first, unknown-expiry (null) last. Returns the lots
+  // actually drawn — [{ batch, expiry, qty }] — so a transfer can carry them, plus
+  // `shortfall` (0 unless a non-enforced bin was short).
+  static async debit(exec, bin, qty, opts = {}) {
+    const { batch = null, enforce = false } = opts
     let need = Math.round(qty)
     const drawn = []
     if (need <= 0) return { drawn, shortfall: 0 }
+
+    const today = ymd(new Date())
+    const isExpired = l => { const e = ymd(l.expiry_date); return e != null && e < today }
     const { rows } = await exec(
       `select id, batch_number, expiry_date, quantity
          from stock_lot
         where facility_id=$1 and commodity_id=$2 and location_type=$3
-          and coalesce(site_name,'') = coalesce($4,'') and quantity > 0
-        order by (case when $5::text is not null and coalesce(batch_number,'') = coalesce($5,'') then 0 else 1 end),
-                 expiry_date asc nulls last, id`,
-      [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null, prefer.batch || null]
+          and coalesce(site_name,'') = coalesce($4,'') and quantity > 0`,
+      [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
     )
-    for (const l of rows) {
+
+    // Eligible pool: the picked batch only (if any); expired lots excluded when
+    // enforcing (never auto-dispensed — they stay for disposal via adjustment).
+    let pool = batch != null ? rows.filter(l => (l.batch_number || '') === (batch || '')) : rows.slice()
+    if (enforce) pool = pool.filter(l => !isExpired(l))
+    // FEFO: soonest real expiry first; unknown-expiry (null) last.
+    pool.sort((a, b) => {
+      const ea = ymd(a.expiry_date), eb = ymd(b.expiry_date)
+      if (ea && eb) return ea < eb ? -1 : ea > eb ? 1 : 0
+      return ea ? -1 : eb ? 1 : 0
+    })
+
+    if (enforce) {
+      const eligible = pool.reduce((s, l) => s + l.quantity, 0)
+      if (eligible < need) {
+        const e = new Error(batch != null
+          ? `Only ${eligible} of batch ${batch || '(unbatched)'} available to dispense (non-expired). Requested ${need}.`
+          : `Only ${eligible} non-expired unit(s) available. Requested ${need}. Adjust out expired stock or record a shortage.`)
+        e.status = 409
+        throw e
+      }
+    }
+
+    for (const l of pool) {
       if (need <= 0) break
       const take = Math.min(l.quantity, need)
       await exec('update stock_lot set quantity = quantity - $2, updated_at = now() where id = $1', [l.id, take])
@@ -95,8 +123,8 @@ export class LotService {
   // Move qty between two bins in the same transaction, preserving batch/expiry:
   // FEFO-debit the source, credit the destination with exactly what was drawn.
   // Returns the lots moved. Used by internal / DSD / SDP redistribution.
-  static async move(exec, fromBin, toBin, qty, prefer = {}, section = null) {
-    const { drawn } = await this.debit(exec, fromBin, qty, prefer)
+  static async move(exec, fromBin, toBin, qty, opts = {}, section = null) {
+    const { drawn } = await this.debit(exec, fromBin, qty, opts)
     await this.creditMany(exec, toBin, drawn, section)
     return drawn
   }

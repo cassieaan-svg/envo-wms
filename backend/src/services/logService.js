@@ -163,7 +163,9 @@ export class LogService {
         if (stock) await StockService.decrementStock(stock.id, qty, exec)
         bin = { facility_id, commodity_id, location_type: loc, site_name: null }
       }
-      await LotService.debit(exec, bin, qty, { batch: batch_number || null })
+      // Enforce (phase 3): a chosen batch must cover qty and not be expired; with
+      // no batch, FEFO skips expired lots. Blocks (409) if eligible stock is short.
+      await LotService.debit(exec, bin, qty, { batch: batch_number || null, enforce: true })
 
       return dispenseLog
     })
