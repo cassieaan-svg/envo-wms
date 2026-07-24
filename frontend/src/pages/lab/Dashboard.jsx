@@ -179,16 +179,19 @@ export function Dashboard() {
           (tracked network-wide, so its zero is not a shortage). Disappears as
           soon as another status card is picked. */}
       {stsFilter === 'out' && (
-        <div className="mb-4">
-          <MetricGrid>
+        <div className="mb-6">
+          {/* Plain (non-sticky) grid: this detail row sits under the sticky metric
+              bar, so it must not be a second MetricGrid — two sticky bars would
+              overlap at the same top offset. */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <Metric label="Out of stock · in use" value={groupedAll.filter(r=>getStatus(r)==='out' && r.inUse).length}
               color="red" loading={stockPending}
               onClick={()=>setUseFilter(v=>v==='inuse'?'':'inuse')} active={useFilter==='inuse'} />
-            <Metric label="Out of stock · never used here" value={groupedAll.filter(r=>getStatus(r)==='out' && !r.inUse).length}
+            <Metric label="Out of stock · not in use" value={groupedAll.filter(r=>getStatus(r)==='out' && !r.inUse).length}
               loading={stockPending}
               onClick={()=>setUseFilter(v=>v==='unused'?'':'unused')} active={useFilter==='unused'} />
-          </MetricGrid>
-          <p className="text-xs text-gray-600 -mt-2">
+          </div>
+          <p className="text-xs text-gray-600 mt-2">
             “In use” = this facility has ever received or consumed it, or holds stock of it.
           </p>
         </div>
