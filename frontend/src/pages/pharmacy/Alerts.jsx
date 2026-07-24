@@ -16,6 +16,8 @@ export function Alerts() {
   const store = useAppStore()
   const commoditySection = useAppStore(s => s.commoditySection)
   const [tab, setTab]           = useState('expiry')
+  // Sub-filter of the Out-of-stock tab only: '' | 'inuse' | 'unused'.
+  const [useFilter, setUseFilter] = useState('')
   const [expiryDays, setDays]   = useState(180)
   const [expiryRows, setExpiry] = useState([])
   const [stockRows, setStock]   = useState({ out:[], low:[], over:[] })
@@ -302,6 +304,11 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       ;(sdpData||[]).forEach(d=>{ sdpMap[d.commodity_id]=(sdpMap[d.commodity_id]||0)+d.quantity })
     }
 
+    // Commodity ids this scope has ever transacted (any intake/dispense, however
+    // old) — one of the "in use here" signals, mirroring the Dashboard.
+    const everUsed = await api.commodities.transacted(store.getAdminScopeParams()).catch(() => [])
+    const transacted = new Set(everUsed || [])
+
     // Overall admin can narrow the aggregate to one state (from the stock-tab
     // State filter); everyone else sees their whole scope.
     const scopedStock = scopeSet ? store.stockData.filter(r => scopeSet.has(r.facility_id)) : store.stockData
@@ -320,7 +327,10 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       const lab           = isLabCategory(comm?.category)
       const quantity      = lab ? (storeQty + (sdpMap[c.id]||0)) : (storeQty + dispensaryQty + (dsdMap[c.id]||0))
       const amc           = amcMap[c.id]&&amcMap[c.id]>0?amcMap[c.id]:(g.baseline_amc||0)
-      return { id:c.id, commodity_id:c.id, commodities:comm, storeQty, dispensaryQty, quantity,
+      // "In use here" = a stock row exists (holds/once held stock), or there is
+      // AMC-window consumption, or it was ever transacted. Same rule as the Dashboard.
+      const inUse         = !!gMap[c.id] || (amcMap[c.id]||0) > 0 || transacted.has(c.id)
+      return { id:c.id, commodity_id:c.id, commodities:comm, storeQty, dispensaryQty, quantity, inUse,
                _amc:amc, _mos:getMOS(quantity,amc), _status:getStockStatus(quantity,amc) }
     })
     setStock({
@@ -331,6 +341,8 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   }
 
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
+  // The in-use split belongs to the Out-of-stock tab; drop it when the tab moves.
+  useEffect(()=>{ if(tab!=='out') setUseFilter('') },[tab])
   // Recompute the out/low/over aggregates when the overall admin picks a state.
   useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
   // The /api/stock payload is large (~4.5 MB for an admin) and lands well after
@@ -433,6 +445,8 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const shownOut    = stockRows.out.filter(inStockCat)
   const shownLow    = stockRows.low.filter(inStockCat)
   const shownOver   = stockRows.over.filter(inStockCat)
+  // Out-of-stock rows further narrowed by the in-use / not-in-use sub-filter.
+  const shownOutUse = shownOut.filter(r => !useFilter || (useFilter === 'inuse' ? r.inUse : !r.inUse))
 
   // Stock-derived counts are only meaningful once the stock payload has landed.
   const stockPending = loading || !stockLoaded
@@ -684,7 +698,27 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
         )
       })() : (
         <>
-          {tab==='out'       && <Card><CardHeader><CardTitle>Out of stock — quantity is zero</CardTitle></CardHeader><StockTable rows={shownOut}  emptyMsg="No commodities out of stock ✓" qtyClass="text-red-400"   onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
+          {tab==='out' && (
+            <>
+              {/* Split the zero balances into ones this facility actually uses (a
+                  real stockout) and ones it has never used/reported. Click a card
+                  to filter the table below. */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                <Metric label="Out of stock · in use" value={shownOut.filter(r=>r.inUse).length}
+                  color="red" loading={stockPending}
+                  onClick={()=>setUseFilter(v=>v==='inuse'?'':'inuse')} active={useFilter==='inuse'} />
+                <Metric label="Out of stock · not in use" value={shownOut.filter(r=>!r.inUse).length}
+                  loading={stockPending}
+                  onClick={()=>setUseFilter(v=>v==='unused'?'':'unused')} active={useFilter==='unused'} />
+              </div>
+              <p className="text-xs text-gray-600 mb-4">
+                “In use” = this facility has ever received or consumed it, or holds stock of it.
+              </p>
+              <Card><CardHeader><CardTitle>Out of stock — quantity is zero</CardTitle></CardHeader>
+                <StockTable rows={shownOutUse} emptyMsg="No commodities out of stock ✓" qtyClass="text-red-400"
+                  onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
+            </>
+          )}
           {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable rows={shownLow}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400" onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
           {tab==='overstock' && <Card><CardHeader><CardTitle>Overstock — above 4 months AMC</CardTitle></CardHeader><StockTable rows={shownOver} emptyMsg="No commodities overstocked ✓" qtyClass="text-blue-400"  onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
         </>
