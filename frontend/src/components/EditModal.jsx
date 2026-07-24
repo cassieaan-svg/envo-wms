@@ -13,6 +13,7 @@ export function EditModal({ record, onClose, onSave }) {
   const [date, setDate]         = useState(record.dispensed_at?.slice(0,10)||record.received_at?.slice(0,10)||record.adjusted_at?.slice(0,10)||'')
   const [notes, setNotes]       = useState(record.notes||'')
   const [expiry, setExpiry]     = useState(record.expiry_date||'')
+  const [batch, setBatch]       = useState(record.batch_number||'')
   const [supplier, setSupplier] = useState(knownSuppliers.includes(normalizedSupplier) ? normalizedSupplier : (normalizedSupplier ? 'Other' : ''))
   const [supplierOther, setSupplierOther] = useState(knownSuppliers.includes(normalizedSupplier) ? '' : normalizedSupplier)
   const [condition, setCondition]= useState(record.condition_on_arrival||'Good')
@@ -66,7 +67,7 @@ export function EditModal({ record, onClose, onSave }) {
       const supplierSource = supplier === 'Other' ? supplierOther.trim() : supplier
       if (!supplierSource) { setErr('Supplier is required.'); setSaving(false); return }
       table = 'intake_log'
-      updateData = { quantity:newQty, expiry_date:expiry||null, supplier_source:supplierSource||null, condition_on_arrival:condition, edited_by:editedBy||null }
+      updateData = { quantity:newQty, batch_number:batch.trim()||null, expiry_date:expiry||null, supplier_source:supplierSource||null, condition_on_arrival:condition, edited_by:editedBy||null }
       // Intake adds to the store. Increasing intake adds more, decreasing removes.
       await adjustStockLocation('store', newQty - oldQty)
     } else {
@@ -131,6 +132,10 @@ export function EditModal({ record, onClose, onSave }) {
             </div>
           </>}
           {record._type==='intake' && <>
+            <div>
+              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch / lot number</label>
+              <input type="text" value={batch} onChange={e=>setBatch(e.target.value)} placeholder="e.g. LOT2024A001" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+            </div>
             <div>
               <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date</label>
               <input type="date" value={expiry} onChange={e=>setExpiry(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>

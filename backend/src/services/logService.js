@@ -71,7 +71,7 @@ function applyLogFilters({ conds, params, dateField, facilityId, facilityIds, co
 const LOG_TABLES = { dispense: 'dispense_log', intake: 'intake_log', adjustment: 'stock_adjustment_log' }
 const LOG_EDIT_FIELDS = {
   dispense:   ['quantity', 'dispensed_at', 'notes', 'edited_by'],
-  intake:     ['quantity', 'expiry_date', 'supplier_source', 'condition_on_arrival', 'edited_by'],
+  intake:     ['quantity', 'batch_number', 'expiry_date', 'supplier_source', 'condition_on_arrival', 'edited_by'],
   adjustment: ['quantity', 'reason', 'notes', 'edited_by'],
 }
 
