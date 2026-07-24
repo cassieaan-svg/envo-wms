@@ -9,7 +9,7 @@ import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, SECTION_CATEGORIES } from '../../utils/helpers'
+import { fmtDate, SECTION_CATEGORIES, transferReason } from '../../utils/helpers'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
 
@@ -1330,7 +1330,10 @@ export function Transfers() {
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-500">{r.sending_facility_name || '—'}</td>
                         <td className="px-4 py-3 text-xs text-gray-500">{r.receiving_facility_name || '—'}</td>
-                        <td className={`px-4 py-3 text-xs font-semibold ${sc}`}>{r.status}</td>
+                        <td className={`px-4 py-3 text-xs font-semibold ${sc}`}>
+                          {r.status}
+                          {transferReason(r) && <div className="text-red-300 font-normal normal-case mt-0.5 max-w-[240px] whitespace-normal">Reason: {transferReason(r)}</div>}
+                        </td>
                         <td className="px-4 py-3 text-xs text-gray-500">{r.initiated_by || '—'}</td>
                         <td className="px-4 py-3">
                           {r.status === 'accepted' && r.dispute_note !== 'Disputed — stock restored' && (

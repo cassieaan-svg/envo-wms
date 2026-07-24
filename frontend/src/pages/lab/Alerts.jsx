@@ -79,10 +79,14 @@ export function Alerts() {
   }
 
   async function cancelFacRequest(id) {
-    const confirmed = window.confirm('Cancel this redistribution request?')
-    if (!confirmed) return
+    // Reason is recorded on the request (notes "[Cancelled: …]") so the requesting
+    // facility can see why the admin cancelled it.
+    const reason = window.prompt('Reason for cancelling this redistribution request:', '')
+    if (reason === null) return
+    const note = reason.trim()
+    if (!note) { toast('Please enter a reason', 'red'); return }
     try {
-      await api.transfers.cancel(id, { cancelled_by: store.user?.email || '' })
+      await api.transfers.cancel(id, { cancelled_by: store.user?.email || '', reason: note })
     } catch { toast('Error cancelling request','red'); return }
     toast('Request cancelled','green')
     loadFacReqAlerts()

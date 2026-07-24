@@ -9,7 +9,7 @@ import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, isLabCategory, capExpiryBatchesToStock } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, isLabCategory, capExpiryBatchesToStock, transferReason } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
 
 export function Alerts() {
@@ -114,21 +114,29 @@ export function Alerts() {
   }
 
   async function cancelFacRequest(id) {
-    const confirmed = window.confirm('Cancel this redistribution request?')
-    if (!confirmed) return
+    // Reason is recorded on the request (notes "[Cancelled: …]") so the requesting
+    // facility can see why the admin cancelled it.
+    const reason = window.prompt('Reason for cancelling this redistribution request:', '')
+    if (reason === null) return
+    const note = reason.trim()
+    if (!note) { toast('Please enter a reason', 'red'); return }
     try {
-      await api.transfers.cancel(id, { cancelled_by: store.user?.email || '' })
+      await api.transfers.cancel(id, { cancelled_by: store.user?.email || '', reason: note })
     } catch { toast('Error cancelling request','red'); return }
     toast('Request cancelled','green')
     loadFacReqAlerts()
   }
 
   // State admin dismisses a facility request that shouldn't be fulfilled. Same
-  // transition the requester's cancel uses — no stock moves.
+  // transition the requester's cancel uses — no stock moves. The reason is
+  // recorded so the requesting facility sees why it was rejected.
   async function rejectFacRequest(req) {
-    if (!window.confirm(`Reject the request for ${req.commodity_name || 'this commodity'} from ${req.receiving_facility_name || 'the facility'}? No transfer will be made.`)) return
+    const reason = window.prompt(`Reason for rejecting the request for ${req.commodity_name || 'this commodity'} from ${req.receiving_facility_name || 'the facility'}:`, '')
+    if (reason === null) return
+    const note = reason.trim()
+    if (!note) { toast('Please enter a reason', 'red'); return }
     try {
-      await api.transfers.cancel(req.id, { cancelled_by: store.user?.email || '' })
+      await api.transfers.cancel(req.id, { cancelled_by: store.user?.email || '', reason: note })
     } catch { toast('Error rejecting request','red'); return }
     toast('Request rejected','green')
     loadFacReqAlerts()
@@ -393,11 +401,11 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       title: 'Redistribution request history',
       subtitle: `${histReqs.length} resolved request(s) · ${histFrom} to ${histTo}`,
       filename: `redistribution-requests_history_${histFrom}_to_${histTo}.csv`,
-      headers: ['Date requested','Commodity','Qty','Requesting facility','LGA','Source facility','Status'],
+      headers: ['Date requested','Commodity','Qty','Requesting facility','LGA','Source facility','Status','Reason'],
       rightCols: new Set([2]),
       rows: histReqs.map(r => [
         fmtDateTime(r.initiated_at), r.commodity_name, r.quantity,
-        r.receiving_facility_name || '—', lgaOf(r), r.sending_facility_name || '—', r.status,
+        r.receiving_facility_name || '—', lgaOf(r), r.sending_facility_name || '—', r.status, transferReason(r) || '—',
       ]),
     }
     return {
@@ -776,7 +784,10 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                       <td className="px-4 py-3 text-xs text-gray-400">{r.receiving_facility_name||'—'}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">{facLgaById[r.receiving_facility_id]||'—'}</td>
                       <td className="px-4 py-3 text-xs text-gray-400">{r.sending_facility_name||'—'}</td>
-                      <td className="px-4 py-3"><Badge type={r.status==='accepted'?'ok':r.status==='disputed'?'out':'amber'}>{r.status}</Badge></td>
+                      <td className="px-4 py-3">
+                        <Badge type={r.status==='accepted'?'ok':r.status==='disputed'?'out':'amber'}>{r.status}</Badge>
+                        {transferReason(r) && <div className="text-xs text-red-300 mt-1 max-w-[240px] whitespace-normal">Reason: {transferReason(r)}</div>}
+                      </td>
                     </tr>
                   ))}</tbody>
                 </table></div>

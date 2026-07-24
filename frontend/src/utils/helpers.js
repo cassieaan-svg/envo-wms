@@ -176,6 +176,17 @@ export function rowForSite(r, tag, site) {
   return m === s || (r.receiving_facility_name || '').trim().toLowerCase() === s
 }
 
+// The human reason a transfer was cancelled/rejected or disputed, shown to the
+// other parties in the request lifecycle. Cancel/reject reasons are appended to the
+// notes as "[Cancelled: …]"; dispute reasons live in dispute_note (the automatic
+// "stock restored" markers are not reasons, so they're ignored). Empty when none.
+export function transferReason(t) {
+  const d = (t?.dispute_note || '').trim()
+  if (d && !/stock restored/i.test(d)) return d
+  const m = /\[Cancelled:\s*([^\]]+)\]/i.exec(t?.notes || '')
+  return m ? m[1].trim() : ''
+}
+
 // ── Section categories ────────────────────────────
 export const SECTION_CATEGORIES = {
   pharmacy: ['Pharmacy drugs', 'Medical supplies'],
