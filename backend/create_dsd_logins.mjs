@@ -16,7 +16,7 @@ import pg from 'pg'
 import bcrypt from 'bcryptjs'
 
 // The hub these spokes hang off. Matched by exact name — must already exist.
-const HUB_NAME = 'Cottage Hospital Ibeno'
+const HUB_NAME = 'Ibeno Cottage Hospital'
 
 // dsd_type must match the values the Transfers dropdown uses exactly:
 //   'Decentralized Hub & Spoke' | 'Community Pharmacy' | 'Fast Track'
