@@ -131,6 +131,12 @@ export function Dashboard() {
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
   })
 
+  // Out-of-stock view is arranged by usage instead of category: in-use (real
+  // stockouts, all categories) on top, not-in-use below. stockRows is already
+  // narrowed by the in-use/not-in-use card filter, so an unpicked side is empty.
+  const outInUse    = stockRows.filter(r => r.inUse)
+  const outNotInUse = stockRows.filter(r => !r.inUse)
+
   // Export mirrors the filtered table (WYSIWYG). Active filters are recorded in
   // the file name + PDF subtitle so each download is self-documenting.
   const activeFilters = [
@@ -223,7 +229,33 @@ export function Dashboard() {
         </div>
       </Card>
 
-      {loading ? <LoadingState message="Loading stock…" /> : stockRows.length === 0 ? <EmptyState message="No stock records yet." /> : (
+      {loading ? <LoadingState message="Loading stock…" /> : stockRows.length === 0 ? <EmptyState message="No stock records yet." /> : stsFilter === 'out' ? (
+        // Out-of-stock: two usage divisions across all categories, in-use first.
+        <>
+          {outInUse.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>In use — out of stock</CardTitle>
+                <span className="text-xs text-gray-500">{outInUse.length} commodities</span>
+              </CardHeader>
+              <div className="table-wrap">
+                <StockLevelsTable items={outInUse} onDrill={(row, kind) => setDrill({ row, kind })} />
+              </div>
+            </Card>
+          )}
+          {outNotInUse.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Not in use here — out of stock</CardTitle>
+                <span className="text-xs text-gray-500">{outNotInUse.length} commodities</span>
+              </CardHeader>
+              <div className="table-wrap">
+                <StockLevelsTable items={outNotInUse} onDrill={(row, kind) => setDrill({ row, kind })} />
+              </div>
+            </Card>
+          )}
+        </>
+      ) : (
         orderedCats.map(cat => (
           <Card key={cat}>
             <CardHeader>
