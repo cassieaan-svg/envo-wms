@@ -400,7 +400,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
               <StockTable rows={outInUse} emptyMsg="Nothing in use is out of stock ✓" qtyClass="text-red-400"/></Card>
           )}
           {useFilter !== 'inuse' && (
-            <Card><CardHeader><CardTitle>Not in use here — out of stock ({outNotInUse.length})</CardTitle></CardHeader>
+            <Card><CardHeader><CardTitle>Not in use — out of stock ({outNotInUse.length})</CardTitle></CardHeader>
               <StockTable rows={outNotInUse} emptyMsg="Nothing not-in-use is out of stock" qtyClass="text-red-400"/></Card>
           )}
         </>

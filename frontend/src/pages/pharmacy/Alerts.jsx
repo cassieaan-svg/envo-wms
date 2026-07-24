@@ -723,7 +723,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                     onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
               )}
               {useFilter !== 'inuse' && (
-                <Card><CardHeader><CardTitle>Not in use here — out of stock ({outNotInUse.length})</CardTitle></CardHeader>
+                <Card><CardHeader><CardTitle>Not in use — out of stock ({outNotInUse.length})</CardTitle></CardHeader>
                   <StockTable rows={outNotInUse} emptyMsg="Nothing not-in-use is out of stock" qtyClass="text-red-400"
                     onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
               )}

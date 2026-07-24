@@ -246,7 +246,7 @@ export function Dashboard() {
           {outNotInUse.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle>Not in use here — out of stock</CardTitle>
+                <CardTitle>Not in use — out of stock</CardTitle>
                 <span className="text-xs text-gray-500">{outNotInUse.length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
