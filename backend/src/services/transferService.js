@@ -447,7 +447,7 @@ export class TransferService {
    * `quantity` from store to dispensary stock and mark accepted.
    */
   static async approveInternal(transferId, data) {
-    const { approved_by, quantity } = data
+    const { approved_by, quantity, batch_number } = data
     const transfer = await this.getTransferById(transferId)
     if (!transfer) return null
     const fid = transfer.sending_facility_id
@@ -460,12 +460,14 @@ export class TransferService {
       }
       await StockService.decrementStock(storeStk.id, qty, exec)
       await this._creditStock(exec, fid, transfer.commodity_id, qty, 'dispensary', transfer.section)
-      // Move the same qty store→dispensary on the lot ledger (FEFO), so the
-      // dispensary inherits the store's batch/expiry.
+      // Move the same qty store→dispensary on the lot ledger, so the dispensary
+      // inherits the store's batch/expiry. The store manager may name the batch
+      // they are issuing; without one it draws FEFO. Enforced either way, so an
+      // expired or short batch is refused rather than silently spilling.
       await LotService.move(exec,
         { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
         { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'dispensary', site_name: null },
-        qty, { enforce: true }, transfer.section)
+        qty, { batch: batch_number || null, enforce: true }, transfer.section)
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'accepted', quantity = $2, resolved_at = now(), resolved_by = $3
@@ -481,7 +483,7 @@ export class TransferService {
    * dispatched (the site user confirms receipt later via receive()).
    */
   static async approveDsd(transferId, data) {
-    const { approved_by, quantity } = data
+    const { approved_by, quantity, batch_number } = data
     const transfer = await this.getTransferById(transferId)
     if (!transfer) return null
     const fid = transfer.sending_facility_id
@@ -493,10 +495,12 @@ export class TransferService {
         { const e = new Error(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`); e.status = 409; throw e }
       }
       await StockService.decrementStock(storeStk.id, qty, exec)
-      // Draw the lots from the store now (FEFO, skip expired, enforced); the site is
-      // credited with them when the site user confirms receipt (receive()).
+      // Draw the lots from the store now; the site is credited with them when the
+      // site user confirms receipt (receive()). The store manager may name the
+      // batch being issued; without one it draws FEFO. Enforced either way.
       const { drawn } = await LotService.debit(exec,
-        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }, qty, { enforce: true })
+        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
+        qty, { batch: batch_number || null, enforce: true })
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'dispatched', quantity = $2, resolved_by = $3, lots = $4
