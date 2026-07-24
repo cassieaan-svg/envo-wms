@@ -280,8 +280,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
 
   const stockPending = loading || !store.stockLoaded
 
-  // Out-of-stock rows narrowed by the in-use / not-in-use sub-filter.
-  const outRows = stockRows.out.filter(r => !useFilter || (useFilter === 'inuse' ? r.inUse : !r.inUse))
+  // Out-of-stock rows divided into in-use (a real stockout) and not-in-use.
+  const outInUse    = stockRows.out.filter(r => r.inUse)
+  const outNotInUse = stockRows.out.filter(r => !r.inUse)
 
   const StockTable = ({rows,emptyMsg,qtyClass}) => stockPending ? <LoadingState/> : rows.length===0 ? <EmptyState message={emptyMsg}/> : (
     <div className="table-wrap"><table className="w-full text-sm">
@@ -392,8 +393,16 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
           <p className="text-xs text-gray-600 mb-4">
             “In use” = this facility has ever received or consumed it, or holds stock of it.
           </p>
-          <Card><CardHeader><CardTitle>Out of stock — quantity is zero</CardTitle></CardHeader>
-            <StockTable rows={outRows} emptyMsg="No commodities out of stock ✓" qtyClass="text-red-400"/></Card>
+          {/* Two divisions: in-use (real stockouts) on top, not-in-use below. The
+              cards above focus one division; with no card selected, both show. */}
+          {useFilter !== 'unused' && (
+            <Card className="mb-4"><CardHeader><CardTitle>In use — out of stock ({outInUse.length})</CardTitle></CardHeader>
+              <StockTable rows={outInUse} emptyMsg="Nothing in use is out of stock ✓" qtyClass="text-red-400"/></Card>
+          )}
+          {useFilter !== 'inuse' && (
+            <Card><CardHeader><CardTitle>Not in use here — out of stock ({outNotInUse.length})</CardTitle></CardHeader>
+              <StockTable rows={outNotInUse} emptyMsg="Nothing not-in-use is out of stock" qtyClass="text-red-400"/></Card>
+          )}
         </>
       )}
       {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable rows={stockRows.low}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400"/></Card>}

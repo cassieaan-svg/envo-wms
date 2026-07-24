@@ -445,8 +445,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const shownOut    = stockRows.out.filter(inStockCat)
   const shownLow    = stockRows.low.filter(inStockCat)
   const shownOver   = stockRows.over.filter(inStockCat)
-  // Out-of-stock rows further narrowed by the in-use / not-in-use sub-filter.
-  const shownOutUse = shownOut.filter(r => !useFilter || (useFilter === 'inuse' ? r.inUse : !r.inUse))
+  // Out-of-stock rows divided into in-use (a real stockout) and not-in-use.
+  const outInUse    = shownOut.filter(r => r.inUse)
+  const outNotInUse = shownOut.filter(r => !r.inUse)
 
   // Stock-derived counts are only meaningful once the stock payload has landed.
   const stockPending = loading || !stockLoaded
@@ -714,9 +715,18 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
               <p className="text-xs text-gray-600 mb-4">
                 “In use” = this facility has ever received or consumed it, or holds stock of it.
               </p>
-              <Card><CardHeader><CardTitle>Out of stock — quantity is zero</CardTitle></CardHeader>
-                <StockTable rows={shownOutUse} emptyMsg="No commodities out of stock ✓" qtyClass="text-red-400"
-                  onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
+              {/* Two divisions: in-use (real stockouts) on top, not-in-use below.
+                  The cards above focus one division; with none selected, both show. */}
+              {useFilter !== 'unused' && (
+                <Card className="mb-4"><CardHeader><CardTitle>In use — out of stock ({outInUse.length})</CardTitle></CardHeader>
+                  <StockTable rows={outInUse} emptyMsg="Nothing in use is out of stock ✓" qtyClass="text-red-400"
+                    onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
+              )}
+              {useFilter !== 'inuse' && (
+                <Card><CardHeader><CardTitle>Not in use here — out of stock ({outNotInUse.length})</CardTitle></CardHeader>
+                  <StockTable rows={outNotInUse} emptyMsg="Nothing not-in-use is out of stock" qtyClass="text-red-400"
+                    onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
+              )}
             </>
           )}
           {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable rows={shownLow}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400" onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
