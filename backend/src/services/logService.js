@@ -312,6 +312,32 @@ export class LogService {
   }
 
   /**
+   * Commodity ids this facility (or scope) has EVER transacted — any intake or
+   * dispense record, however old. Used to tell a real stockout from a commodity
+   * the facility simply never handles: current stock and the AMC window both miss
+   * something last touched long ago. Ids only, so it stays cheap.
+   */
+  static async getTransactedCommodityIds(facilityId, { facilityIds } = {}) {
+    const params = []
+    let cond = 'true'
+    if (facilityId) {
+      params.push(facilityId); cond = `facility_id = $${params.length}`
+    } else if (Array.isArray(facilityIds)) {
+      if (!facilityIds.length) return []
+      params.push(facilityIds); cond = `facility_id = any($${params.length})`
+    }
+    // Filter inside each branch so the facility_id index is used, then union
+    // (which de-duplicates) rather than scanning a combined set.
+    const { rows } = await query(
+      `select commodity_id from intake_log   where ${cond} and commodity_id is not null
+       union
+       select commodity_id from dispense_log where ${cond} and commodity_id is not null`,
+      params
+    )
+    return rows.map(r => r.commodity_id)
+  }
+
+  /**
    * Record a stock adjustment and apply it to the facility store stock.
    */
   static async recordAdjustment(adjustmentData) {

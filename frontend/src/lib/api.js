@@ -141,7 +141,12 @@ export const api = {
   },
 
   facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
-  commodities: { list: () => get('/commodities') },
+  commodities: {
+    list: () => get('/commodities'),
+    // Ids ever transacted (any intake/dispense, however old) in the given scope.
+    // params: { facility_id } | { state, lga } | { facility_ids }
+    transacted: (params) => get('/commodities/transacted', params),
+  },
   binCard:     (params) => get('/bincard', params),
   binCardBins: (params) => get('/bincard/bins', params),
   binCardRedistBatches: (params) => get('/bincard/redist-batches', params),

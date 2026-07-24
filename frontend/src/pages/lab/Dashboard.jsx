@@ -19,6 +19,9 @@ export function Dashboard() {
   const { loadStock }    = useStock()
   const commoditySection = store.commoditySection
   const [amcMap, setAmcMap]   = useState({})
+  // Commodity ids ever transacted here (any intake/dispense, however old) — the
+  // widest signal that a facility actually handles a commodity.
+  const [transacted, setTransacted] = useState(new Set())
   const [sdpMap, setSdpMap]   = useState({})
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
@@ -65,6 +68,8 @@ export function Dashboard() {
     const commIds = store.allCommodities.map(c => c.id)
     const amc = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
     setAmcMap(amc)
+    const everUsed = await api.commodities.transacted(store.getAdminScopeParams()).catch(() => [])
+    setTransacted(new Set(everUsed || []))
     setLoading(false)
   }
 
@@ -86,10 +91,11 @@ export function Dashboard() {
     return {
       id: c.id, commodity_id: c.id, commodities: comm,
       storeQty, sdpQty, quantity, baseline_amc: g.baseline_amc || 0,
-      // "In use here" = this facility holds (or once held) a stock row for it, or
-      // has recorded consumption. Anything else is tracked network-wide but never
-      // used or reported here, so its zero balance is not a real stockout.
-      inUse: !!gMap[c.id] || (amcMap[c.id] || 0) > 0,
+      // "In use here" = this facility has ever handled the commodity: any intake
+      // or dispense record however old, or it holds (or once held) stock, or has
+      // consumption in the AMC window. Anything else is tracked network-wide but
+      // never used or reported here, so its zero balance is not a real stockout.
+      inUse: !!gMap[c.id] || (amcMap[c.id] || 0) > 0 || transacted.has(c.id),
     }
   })
   const stockRows = groupedAll
@@ -183,7 +189,7 @@ export function Dashboard() {
               onClick={()=>setUseFilter(v=>v==='unused'?'':'unused')} active={useFilter==='unused'} />
           </MetricGrid>
           <p className="text-xs text-gray-600 -mt-2">
-            “In use” = this facility holds or has held stock of it, or has recorded consumption.
+            “In use” = this facility has ever received or consumed it, or holds stock of it.
           </p>
         </div>
       )}
