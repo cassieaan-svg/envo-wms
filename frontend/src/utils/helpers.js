@@ -41,10 +41,19 @@ export function getCommodityDispenseUnit(comm) {
   return comm?.dispensing_unit || comm?.unit || 'units'
 }
 
+// Agree the unit with the quantity: singular for exactly 1, plural otherwise. The
+// stored unit may be written either way ("pieces"/"piece", "bottles"/"bottle"), so
+// first reduce it to a singular base, then re-pluralise. Handles the regular "+s"
+// units (piece, bottle, roll, kit, vial, tab, card, dose…) and the "+es" ones
+// (box, patch, glass); genuinely irregular plurals aren't used here.
 export function pluralizeUnit(qty, unit) {
   if (!unit) return ''
-  if (qty === 1) return unit
-  return unit.endsWith('s') ? unit : unit + 's'
+  const n = Math.abs(Number(qty) || 0)
+  const singular = /(xes|ches|shes|sses)$/i.test(unit)
+    ? unit.slice(0, -2)          // boxes→box, patches→patch, glasses→glass
+    : unit.replace(/s$/i, '')    // bottles→bottle, rolls→roll, doses→dose, pieces→piece
+  if (n === 1) return singular
+  return /(x|ch|sh|ss)$/i.test(singular) ? singular + 'es' : singular + 's'
 }
 
 export function fmtStockQty(qty, comm) {
@@ -55,7 +64,7 @@ export function fmtStockQty(qty, comm) {
 
 export function fmtDispenseQty(qty, comm) {
   const unit = comm?.unit || getCommodityDispenseUnit(comm)
-  return `${qty?.toLocaleString()} ${unit}`
+  return `${qty?.toLocaleString()} ${pluralizeUnit(qty, unit)}`
 }
 
 // ── Stock status ──────────────────────────────────
@@ -193,23 +202,26 @@ export const SECTION_CATEGORIES = {
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
 }
 
-// Categories only the per-state "State Office Store" facilities handle. Not part of
-// any section list, so regular section-pinned facilities never see them; only a
-// state office (or an admin who sees everything) does. Mirror of the backend copy in
+// The new "General Consumables" category — not part of any section list, so a
+// regular section-pinned facility never sees it.
+export const GENERAL_CONSUMABLES = 'General Consumables'
+
+// The COMPLETE category set a per-state "State Office Store" sees — it REPLACES the
+// account's normal section list (a state office handles only lab consumables and
+// general consumables, not RTKs or reagents). Mirror of the backend copy in
 // constants/sections.js — keep the two in sync.
-export const STATE_OFFICE_CATEGORIES = ['General Consumables']
+export const STATE_OFFICE_CATEGORIES = ['Lab consumables', GENERAL_CONSUMABLES]
 
 // A facility is a per-state office store when its name reads "… State Office Store".
 export const isStateOfficeName = (name) => /state office store/i.test(name || '')
 
-// The categories a section-pinned account may see: its section's list, plus the
-// state-office-only categories when the account belongs to a State Office Store.
-// Returns null (= all) when there is no section restriction (admins).
+// The categories a section-pinned account may see. A State Office Store gets its
+// bespoke set; everyone else gets their section's list. Returns null (= all) when
+// there is no section restriction (admins).
 export function allowedCategoriesFor(commoditySection, facilityName) {
   if (!commoditySection) return null
-  const cats = [...(SECTION_CATEGORIES[commoditySection] || [])]
-  if (isStateOfficeName(facilityName)) cats.push(...STATE_OFFICE_CATEGORIES)
-  return cats
+  if (isStateOfficeName(facilityName)) return [...STATE_OFFICE_CATEGORIES]
+  return [...(SECTION_CATEGORIES[commoditySection] || [])]
 }
 
 // A commodity category belongs to the lab section (uses SDP, no dispensary/DSD).

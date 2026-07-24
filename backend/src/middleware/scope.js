@@ -73,12 +73,12 @@ export function attachScope(req, res, next) {
     ['overall_admin', 'state_admin'].includes(accessLevel)
   const section = bothSections ? null : (meta.commodity_section || null)
 
-  // Section include-list. State Office Store facilities additionally handle the
-  // state-office-only categories (General Consumables), so append those for a
-  // section-pinned state-office caller. Null-section admins already see everything.
+  // Section include-list. A State Office Store handles a bespoke set (lab consumables
+  // + general consumables), which REPLACES its normal section list — not RTKs or
+  // reagents. Null-section admins already see everything.
   let sectionCategories = categoriesForSection(section) // null = all, or [categories]
   if (sectionCategories && isStateOfficeName(meta.facility_name)) {
-    sectionCategories = [...sectionCategories, ...STATE_OFFICE_CATEGORIES]
+    sectionCategories = [...STATE_OFFICE_CATEGORIES]
   }
 
   req.scope = {

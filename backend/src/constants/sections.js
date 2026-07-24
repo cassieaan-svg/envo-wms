@@ -8,13 +8,15 @@ export const SECTION_CATEGORIES = {
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
 }
 
-// Categories that only the per-state "State Office Store" facilities handle. These
-// are deliberately NOT part of any section's list above, so a section-pinned caller
-// (a regular pharmacy/lab facility, a cluster/LGA viewer, an HQ section viewer) has
-// them excluded automatically by the include-list filter. Only state-office callers
-// get them appended (see attachScope) — and null-section admins see everything, so
-// they see these too. Keep in sync with the frontend copy in src/utils/helpers.js.
-export const STATE_OFFICE_CATEGORIES = ['General Consumables']
+// The new "General Consumables" category — not part of any section list, so a
+// regular section-pinned caller never sees it (excluded by the include-list filter).
+export const GENERAL_CONSUMABLES = 'General Consumables'
+
+// The COMPLETE category set a per-state "State Office Store" sees — it replaces the
+// caller's normal section list (it is NOT the lab section): a state office handles
+// only lab consumables and general consumables, not RTKs or reagents. Null-section
+// admins still see everything. Keep in sync with the frontend copy in helpers.js.
+export const STATE_OFFICE_CATEGORIES = ['Lab consumables', GENERAL_CONSUMABLES]
 
 // A facility is a per-state office store when its name reads "… State Office Store"
 // (the naming convention set by create_state_offices.mjs — state-tier, no LGA/cluster).
