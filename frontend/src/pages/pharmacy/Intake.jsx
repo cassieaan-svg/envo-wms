@@ -38,7 +38,10 @@ export function Intake() {
   const [editRecord, setEditRecord] = useState(null)
   const [historyRecord, setHistoryRecord] = useState(null)
 
-  // Dispensing unit fields (optional — updates commodity record on submit)
+  // Dispensing unit / pack size. Only the state office may see or set these: a
+  // commodity's pack definition has to be uniform network-wide, so it is not left
+  // to each facility to type its own.
+  const canEditDispensing = store.isStateAdmin()
   const [dispUnitInput, setDispUnitInput] = useState('')
   const [packSzInput,   setPackSzInput]   = useState('')
   const [showDispDetails, setShowDispDetails] = useState(false)
@@ -178,8 +181,8 @@ export function Intake() {
               </div>
             </div>
 
-            {/* Edit dispensing details — small toggle button, expands inline */}
-            {commId && (
+            {/* Edit dispensing details — state office only (see canEditDispensing) */}
+            {commId && canEditDispensing && (
               <div>
                 <button type="button" onClick={() => setShowDispDetails(v => !v)}
                   className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 transition-colors">
