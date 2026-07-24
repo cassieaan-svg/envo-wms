@@ -38,13 +38,6 @@ export function Intake() {
   const [editRecord, setEditRecord] = useState(null)
   const [historyRecord, setHistoryRecord] = useState(null)
 
-  // Dispensing unit / pack size. Only the state office may see or set these: a
-  // commodity's pack definition has to be uniform network-wide, so it is not left
-  // to each facility to type its own.
-  const canEditDispensing = store.isStateAdmin()
-  const [dispUnitInput, setDispUnitInput] = useState('')
-  const [packSzInput,   setPackSzInput]   = useState('')
-  const [showDispDetails, setShowDispDetails] = useState(false)
 
   const fid = store.currentFacility?.id
 
@@ -180,35 +173,6 @@ export function Intake() {
                 <input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} required className={inputCls}/>
               </div>
             </div>
-
-            {/* Edit dispensing details — state office only (see canEditDispensing) */}
-            {commId && canEditDispensing && (
-              <div>
-                <button type="button" onClick={() => setShowDispDetails(v => !v)}
-                  className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 transition-colors">
-                  {showDispDetails ? 'Hide details' : 'Edit details'}
-                </button>
-                {showDispDetails && (
-                  <div className="mt-3 rounded-lg border border-white/8 bg-white/2 p-4 space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-1.5">Dispensing unit</label>
-                        <input value={dispUnitInput} onChange={e=>setDispUnitInput(e.target.value)}
-                          placeholder={selectedComm?.dispensing_unit || 'e.g. tablets, tests'}
-                          className={inputCls} />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-1.5">Pack size</label>
-                        <input type="number" min="1" value={packSzInput} onChange={e=>setPackSzInput(e.target.value)}
-                          placeholder={selectedComm?.pack_size ? String(selectedComm.pack_size) : 'e.g. 100'}
-                          className={inputCls} />
-                      </div>
-                    </div>
-                    <p className="text-xs text-gray-600">If filled, updates this commodity's dispensing definition.</p>
-                  </div>
-                )}
-              </div>
-            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
