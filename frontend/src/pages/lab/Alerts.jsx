@@ -9,7 +9,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, capExpiryBatchesToStock } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, capExpiryBatchesToStock, transferReason } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -24,6 +24,12 @@ export function Alerts() {
   const [acceptingId, setAcceptingId]             = useState(null)
   const [acceptReceiverName, setAcceptReceiverName] = useState('')
   const [acceptLoading, setAcceptLoading]         = useState(false)
+  // Admin resolved-request history (pending | history sub-view).
+  const [reqSubView, setReqSubView] = useState('pending')
+  const [reqHistory, setReqHistory] = useState([])
+  const [loadingHist, setLoadingHist] = useState(false)
+  const [histFrom, setHistFrom] = useState(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))
+  const [histTo, setHistTo]     = useState(new Date().toISOString().slice(0, 10))
 
   const fid     = store.currentFacility?.id
   // Admin location scope (State → LGA → Facility via the shared FacilityPicker,
@@ -90,6 +96,19 @@ export function Alerts() {
     } catch { toast('Error cancelling request','red'); return }
     toast('Request cancelled','green')
     loadFacReqAlerts()
+  }
+
+  // Resolved facility→facility redistribution requests in the admin's jurisdiction
+  // (excludes internal Store→Dispensary and SDP/DSD site dispatches).
+  async function loadHistory() {
+    setLoadingHist(true)
+    const data = await api.transfers.list({
+      status: 'accepted,cancelled,disputed',
+      date_field: 'initiated_at', from: histFrom, to: histTo, limit: 300,
+      section: commoditySection || undefined,
+    }).catch(() => [])
+    setReqHistory((data || []).filter(t => !t.notes?.includes('[Internal:') && !t.notes?.includes('[DSD:') && !t.notes?.includes('[SDP:')))
+    setLoadingHist(false)
   }
 
   async function confirmAccept(req) {
@@ -226,6 +245,8 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   // and every commodity derives as out-of-stock. Recompute once it arrives
   // (the false→true flip fires once, so realtime updates don't re-query).
   useEffect(()=>{ if(store.stockLoaded) loadAll() },[store.stockLoaded])
+  // Load resolved request history when the admin opens that sub-view.
+  useEffect(()=>{ if(store.isAdmin() && tab==='fac-requests' && reqSubView==='history') loadHistory() },[tab, reqSubView, histFrom, histTo])
 
   // Admin scope narrows the expiry batch list client-side (rows carry facility_id).
   const shownExpiry = expiryRows.filter(r => inScope(r.facility_id))
@@ -348,28 +369,72 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
         <Card>
           <CardHeader>
             <CardTitle>Facility redistribution requests</CardTitle>
-            <button onClick={loadFacReqAlerts} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
+            <div className="flex gap-2 items-center flex-wrap">
+              {['pending','history'].map(v => (
+                <button key={v} onClick={()=>setReqSubView(v)}
+                  className={`text-xs px-3 py-1.5 rounded border transition-colors ${reqSubView===v?'bg-white/8 border-white/15 text-gray-100 font-medium':'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+                  {v==='pending'?'Pending':'History'}
+                </button>
+              ))}
+              <button onClick={()=> reqSubView==='history' ? loadHistory() : loadFacReqAlerts()} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
+            </div>
           </CardHeader>
-          {facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
-            <div className="table-wrap"><table className="w-full text-sm">
-              <thead><tr className="border-b border-white/8 bg-white/2">
-                {['Date','Commodity','Qty requested','Requesting facility','LGA'].map(h=>(
-                  <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                ))}
-              </tr></thead>
-              <tbody>{facReqAlerts.map(req => {
-                const rf = store.allFacilities.find(f => f.id === req.receiving_facility_id)
-                return (
-                  <tr key={req.id} className="border-b border-white/5 hover:bg-white/2">
-                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(req.initiated_at)}</td>
-                    <td className="px-4 py-3 font-medium text-gray-100">{req.commodity_name||'—'}</td>
-                    <td className="px-4 py-3 font-mono text-sm text-gray-300">{req.qty_requested ?? req.quantity}</td>
-                    <td className="px-4 py-3 text-xs text-gray-400">{req.receiving_facility_name||'—'}</td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{rf?.lga||'—'}</td>
-                  </tr>
-                )
-              })}</tbody>
-            </table></div>
+          {reqSubView==='pending' ? (
+            facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
+              <div className="table-wrap"><table className="w-full text-sm">
+                <thead><tr className="border-b border-white/8 bg-white/2">
+                  {['Date','Commodity','Qty requested','Requesting facility','LGA'].map(h=>(
+                    <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>{facReqAlerts.map(req => {
+                  const rf = store.allFacilities.find(f => f.id === req.receiving_facility_id)
+                  return (
+                    <tr key={req.id} className="border-b border-white/5 hover:bg-white/2">
+                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(req.initiated_at)}</td>
+                      <td className="px-4 py-3 font-medium text-gray-100">{req.commodity_name||'—'}</td>
+                      <td className="px-4 py-3 font-mono text-sm text-gray-300">{req.qty_requested ?? req.quantity}</td>
+                      <td className="px-4 py-3 text-xs text-gray-400">{req.receiving_facility_name||'—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{rf?.lga||'—'}</td>
+                    </tr>
+                  )
+                })}</tbody>
+              </table></div>
+            )
+          ) : (
+            <>
+              <div className="px-5 pb-3 flex items-center gap-2 flex-wrap">
+                <input type="date" value={histFrom} onChange={e=>setHistFrom(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"/>
+                <span className="text-xs text-gray-600">to</span>
+                <input type="date" value={histTo} onChange={e=>setHistTo(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500"/>
+              </div>
+              {loadingHist ? <LoadingState/> : reqHistory.length===0 ? <EmptyState message="No matching resolved requests"/> : (
+                <div className="table-wrap"><table className="w-full text-sm">
+                  <thead><tr className="border-b border-white/8 bg-white/2">
+                    {['Date requested','Commodity','Qty','Requesting facility','LGA','Source facility','Status'].map(h=>(
+                      <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{reqHistory.map(r=>{
+                    const rf = store.allFacilities.find(f => f.id === r.receiving_facility_id)
+                    return (
+                      <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r.initiated_at)}</td>
+                        <td className="px-4 py-3 font-medium text-gray-100">{r.commodity_name||'—'}</td>
+                        <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity}</td>
+                        <td className="px-4 py-3 text-xs text-gray-400">{r.receiving_facility_name||'—'}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500">{rf?.lga||'—'}</td>
+                        <td className="px-4 py-3 text-xs text-gray-400">{r.sending_facility_name||'—'}</td>
+                        <td className="px-4 py-3">
+                          <Badge type={r.status==='accepted'?'ok':r.status==='disputed'?'out':'amber'}>{r.status}</Badge>
+                          {transferReason(r) && <div className="text-xs text-red-300 mt-1 max-w-[240px] whitespace-normal">Reason: {transferReason(r)}</div>}
+                        </td>
+                      </tr>
+                    )
+                  })}</tbody>
+                </table></div>
+              )}
+            </>
           )}
         </Card>
       )}
