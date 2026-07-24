@@ -22,6 +22,9 @@ export function Dashboard() {
   const [search, setSearch]   = useState('')
   const [catFilter, setCat]   = useState('')
   const [stsFilter, setSts]   = useState('')
+  // Sub-filter of the Out-of-stock view only: '' | 'inuse' | 'unused'. Cleared
+  // whenever the status filter moves off 'out', so the two cards disappear with it.
+  const [useFilter, setUseFilter] = useState('')
   const [sdpMap, setSdpMap]   = useState({})
   const [dsdMap, setDsdMap]   = useState({})
   const [drill, setDrill]     = useState(null)
@@ -37,6 +40,10 @@ export function Dashboard() {
   useEffect(() => {
     loadData()
   }, [fid, store.adminFilterState, store.adminFilterLGA])
+
+  // The in-use split belongs to the Out-of-stock view; drop it the moment the
+  // status filter moves elsewhere, so the cards and their filter go together.
+  useEffect(() => { if (stsFilter !== 'out') setUseFilter('') }, [stsFilter])
 
   async function loadData() {
     setLoading(true)
@@ -98,13 +105,19 @@ export function Dashboard() {
       id: c.id, commodity_id: c.id, commodities: comm,
       storeQty, dispensaryQty, dsdQty, sdpQty, _isLab: lab,
       quantity, amc, mos: getMOS(quantity, amc), status: getStockStatus(quantity, amc),
+      // "In use here" = this facility has actually handled the commodity: it holds
+      // (or once held) a stock row for it, or has recorded consumption. Everything
+      // else is tracked network-wide but never used or reported here, so its
+      // zero balance is not a real stockout.
+      inUse: !!gMap[c.id] || (amcMap[c.id] || 0) > 0,
     }
   })
 
   const stockRows = enrichedAll
     .filter(r => (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase()))
               && (!catFilter || r.commodities?.category === catFilter)
-              && (!stsFilter || r.status === stsFilter))
+              && (!stsFilter || r.status === stsFilter)
+              && (stsFilter !== 'out' || !useFilter || (useFilter === 'inuse' ? r.inUse : !r.inUse)))
     .sort((a, b) => {
       // In-stock commodities before out-of-stock ones, then by name
       const aOut = a.quantity === 0, bOut = b.quantity === 0
@@ -174,6 +187,26 @@ export function Dashboard() {
         <Metric label="Out of stock"  value={enrichedAll.filter(r=>r.status==='out').length}  color="red"   loading={stockPending} onClick={()=>setSts(s=>s==='out'?'':'out')}   active={stsFilter==='out'} />
         <Metric label="Overstock"     value={enrichedAll.filter(r=>r.status==='over').length} color="blue"  loading={stockPending} onClick={()=>setSts(s=>s==='over'?'':'over')} active={stsFilter==='over'} />
       </MetricGrid>
+
+      {/* Out-of-stock only: split the zero balances into ones this facility
+          actually uses (a real stockout) and ones it has never used or reported
+          (tracked network-wide, so its zero is not a shortage). Disappears as
+          soon as another status card is picked. */}
+      {stsFilter === 'out' && (
+        <div className="mb-4">
+          <MetricGrid>
+            <Metric label="Out of stock · in use" value={enrichedAll.filter(r=>r.status==='out' && r.inUse).length}
+              color="red" loading={stockPending}
+              onClick={()=>setUseFilter(v=>v==='inuse'?'':'inuse')} active={useFilter==='inuse'} />
+            <Metric label="Out of stock · never used here" value={enrichedAll.filter(r=>r.status==='out' && !r.inUse).length}
+              loading={stockPending}
+              onClick={()=>setUseFilter(v=>v==='unused'?'':'unused')} active={useFilter==='unused'} />
+          </MetricGrid>
+          <p className="text-xs text-gray-600 -mt-2">
+            “In use” = this facility holds or has held stock of it, or has recorded consumption.
+          </p>
+        </div>
+      )}
 
       <Card className="mb-4">
         <div className="px-4 py-3 flex gap-2 flex-wrap items-center">
