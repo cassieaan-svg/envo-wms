@@ -20,10 +20,14 @@ const HUB_NAME = 'Ibeno Cottage Hospital'
 
 // dsd_type must match the values the Transfers dropdown uses exactly:
 //   'Decentralized Hub & Spoke' | 'Community Pharmacy' | 'Fast Track'
+// email = login identity (the app appends @envo.ng to the typed Username, so the
+// username is the local part, e.g. "ibeno.iwuokpum"). `oldEmail` is the address
+// the account was first created under; when present the script RENAMES that
+// account in place rather than creating a duplicate.
 const SITES = [
-  { site: 'Iwuokpum Opolom HC', dsd_type: 'Decentralized Hub & Spoke', email: 'iwuokpum.opolom.dsd@envo.ng', pwEnv: 'DSD_PW_IWUOKPUM' },
-  { site: 'Atabrikang HC',      dsd_type: 'Decentralized Hub & Spoke', email: 'atabrikang.dsd@envo.ng',      pwEnv: 'DSD_PW_ATABRIKANG' },
-  { site: 'Uzard pharmacy Eket', dsd_type: 'Community Pharmacy',       email: 'uzard.eket.dsd@envo.ng',       pwEnv: 'DSD_PW_UZARD' },
+  { site: 'Iwuokpum Opolom HC', dsd_type: 'Decentralized Hub & Spoke', email: 'ibeno.iwuokpum@envo.ng',  oldEmail: 'iwuokpum.opolom.dsd@envo.ng', pwEnv: 'DSD_PW_IWUOKPUM' },
+  { site: 'Atabrikang HC',      dsd_type: 'Decentralized Hub & Spoke', email: 'ibeno.atabrikang@envo.ng', oldEmail: 'atabrikang.dsd@envo.ng',      pwEnv: 'DSD_PW_ATABRIKANG' },
+  { site: 'Uzard pharmacy Eket', dsd_type: 'Community Pharmacy',       email: 'ibeno.uzard@envo.ng',      oldEmail: 'uzard.eket.dsd@envo.ng',       pwEnv: 'DSD_PW_UZARD' },
 ]
 
 const SECTION = 'pharmacy' // these spokes dispense ARVs
@@ -62,11 +66,20 @@ async function run() {
       email_verified: true,
     }
     const hash = await bcrypt.hash(password, 10)
-    const existing = (await pool.query('select id from users where lower(email) = lower($1)', [s.email])).rows[0]
-    if (existing) {
+    const byNew = (await pool.query('select id from users where lower(email) = lower($1)', [s.email])).rows[0]
+    const byOld = !byNew && s.oldEmail
+      ? (await pool.query('select id from users where lower(email) = lower($1)', [s.oldEmail])).rows[0]
+      : null
+    if (byNew) {
       await pool.query('update users set encrypted_password = $1, raw_user_meta_data = $2 where id = $3',
-        [hash, meta, existing.id])
+        [hash, meta, byNew.id])
       console.log(`= account updated  : ${s.email}  (${s.site} / ${s.dsd_type})`)
+    } else if (byOld) {
+      // Rename the existing account in place — keeps the same user id (and any
+      // stock/activity already tied to it), just switches the login identity.
+      await pool.query('update users set email = $1, encrypted_password = $2, raw_user_meta_data = $3 where id = $4',
+        [s.email, hash, meta, byOld.id])
+      console.log(`~ account renamed  : ${s.oldEmail} -> ${s.email}  (${s.site} / ${s.dsd_type})`)
     } else {
       await pool.query(
         `insert into users (id, email, encrypted_password, raw_user_meta_data)
