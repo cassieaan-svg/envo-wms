@@ -5,10 +5,10 @@ import { fmtDate } from '../../utils/helpers'
 // Batch picker for dispensing, sourced from the LOT LEDGER — the real per-batch
 // balances of one bin (dispensary, or a DSD/SDP site), not an estimate.
 //
-// The default is "FEFO (automatic)": leaving it alone lets the server draw
-// soonest-expiry-first across lots (skipping expired), exactly like today. Picking
-// a specific batch makes it a hard constraint — the server dispenses only that
-// batch and blocks if it's short. Expired lots are not offered (they can't be
+// The default option ("Select batch") means no explicit choice: the server draws
+// FEFO — soonest-expiry-first across lots, skipping expired — exactly like today.
+// Picking a specific batch makes it a hard constraint: the server dispenses only
+// that batch and blocks if it's short. Expired lots are not offered (they can't be
 // dispensed; they're cleared via an adjustment).
 //
 // bin = { facilityId, commodityId, locationType ('dispensary'|'dsd'|'sdp'|'store'),
@@ -54,7 +54,7 @@ export function BatchSelect({ facilityId, commodityId, locationType, siteName, v
   const label = o => `${o.batch_number || '(no batch)'} · exp ${o.expiry_date ? fmtDate(o.expiry_date) : '—'} (${o.remaining} left)`
   return (
     <select value={value || FEFO} onChange={e => onSelect?.(e.target.value === FEFO ? null : options.find(o => o.key === e.target.value) || null)} className={cls}>
-      <option value={FEFO}>FEFO (automatic — soonest expiry first)</option>
+      <option value={FEFO}>Select batch</option>
       {options.map(o => <option key={o.key} value={o.key}>{label(o)}</option>)}
     </select>
   )
