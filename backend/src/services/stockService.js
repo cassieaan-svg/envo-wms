@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db.js'
-import { LotService } from './lotService.js'
+import { LotService, ymd } from './lotService.js'
 
 // Embedded-object SQL fragments. The frontend (and the other services) expect
 // stock rows to carry nested `facilities` / `commodities` objects, the same
@@ -181,6 +181,48 @@ export class StockService {
       [facility_id, commodity_id, location_type, site_name || null]
     )
     return rows
+  }
+
+  static async getLotById(lotId) {
+    const { rows } = await query('select * from stock_lot where id = $1', [lotId])
+    return rows[0] || null
+  }
+
+  // Record the batch / expiry of an existing lot. METADATA ONLY — the quantity is
+  // never changed, so a bin's total and the sum(lots) invariant are untouched. Used
+  // to label the "unknown expiry" lots the seed produced where no receipt carried a
+  // usable expiry. If the new identity already exists in the same bin the two lots
+  // are merged (quantities added) rather than colliding on the unique index.
+  static async relabelLot(lotId, { batch_number = null, expiry_date = null }) {
+    return withTransaction(async exec => {
+      const { rows: cur } = await exec('select * from stock_lot where id = $1 for update', [lotId])
+      const lot = cur[0]
+      if (!lot) return null
+
+      const batch = (batch_number ?? '').toString().trim() || null
+      const expiry = ymd(expiry_date)
+
+      const { rows: dup } = await exec(
+        `select id from stock_lot
+          where facility_id=$1 and commodity_id=$2 and location_type=$3
+            and coalesce(site_name,'') = coalesce($4,'')
+            and coalesce(batch_number,'') = coalesce($5,'')
+            and coalesce(expiry_date,'0001-01-01'::date) = coalesce($6::date,'0001-01-01'::date)
+            and id <> $7`,
+        [lot.facility_id, lot.commodity_id, lot.location_type, lot.site_name, batch, expiry, lotId]
+      )
+      if (dup[0]) {
+        await exec('update stock_lot set quantity = quantity + $2, updated_at = now() where id = $1', [dup[0].id, lot.quantity])
+        await exec('delete from stock_lot where id = $1', [lotId])
+        const { rows } = await exec('select * from stock_lot where id = $1', [dup[0].id])
+        return rows[0] || null
+      }
+      const { rows } = await exec(
+        'update stock_lot set batch_number = $2, expiry_date = $3, updated_at = now() where id = $1 returning *',
+        [lotId, batch, expiry]
+      )
+      return rows[0] || null
+    })
   }
 
   static async _reconcileLots(exec, bin, oldQty, newQty) {

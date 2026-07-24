@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { useAppStore } from '../store/appStore'
 import { LoadingState, EmptyState, Spinner } from './ui/Loading'
+import { LotEditor } from './LotEditor'
 import { exportCsv } from '../utils/download'
 import { fmtDate } from '../utils/helpers'
 
@@ -22,6 +24,12 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
   const [category, setCategory] = useState('')
   const [cid, setCid] = useState(commodityId || null)
   const [card, setCard] = useState(null)
+  const [showLots, setShowLots] = useState(false)
+  const canManage = useAppStore(s => s.canManageStock)()
+  // 'store' | 'dispensary' | 'dsd:<site>' | 'sdp:<site>' → lot-ledger bin.
+  const siteMatch = /^(dsd|sdp):(.+)$/i.exec(location || '')
+  const lotLocationType = siteMatch ? siteMatch[1].toLowerCase() : (location || 'store')
+  const lotSiteName = siteMatch ? siteMatch[2].trim() : null
   const [loading, setLoading] = useState(!!(commodityId))
   const [error, setError] = useState(null)
 
@@ -106,12 +114,21 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
           </select>
           {loading && <Spinner size="sm" />}
           <div className="ml-auto flex gap-2">
+            <button onClick={() => setShowLots(true)} disabled={!cid}
+              className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50"
+              title="Batches on hand in this bin — record a missing batch or expiry">Batches</button>
             <button onClick={doCsv} disabled={!card?.rows?.length}
               className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Download CSV</button>
             <button onClick={doPdf} disabled={!card?.rows?.length}
               className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">Print / Save as PDF</button>
           </div>
         </div>
+
+        {showLots && cid && (
+          <LotEditor facilityId={facilityId} commodityId={cid} commodityName={pickedName}
+            locationType={lotLocationType} siteName={lotSiteName} canEdit={canManage}
+            onClose={() => setShowLots(false)} onSaved={() => {}} />
+        )}
 
         {!cid ? <EmptyState message="Select a commodity to view its bin card." /> : loading ? <LoadingState /> : error ? <EmptyState message={`Could not load bin card: ${error}`} /> : !card?.rows?.length ? <EmptyState message="No movements recorded for this bin." /> : (
           <div className="table-wrap"><table className="w-full text-sm">

@@ -114,6 +114,33 @@ router.get('/lots', async (req, res) => {
 })
 
 /**
+ * PATCH /api/stock/lots/:id - record a lot's batch / expiry (metadata only; the
+ * quantity is never touched). Used to label the "unknown expiry" lots the ledger
+ * seed produced. Body: { batch_number, expiry_date }. Store-manager scoped via
+ * enforceFacilityWrite on the lot's own facility.
+ */
+router.patch('/lots/:id', async (req, res) => {
+  try {
+    const { batch_number, expiry_date } = req.body || {}
+    const lot = await StockService.getLotById(req.params.id)
+    if (!lot) {
+      return res.status(404).json({ success: false, error: 'Lot not found', code: 'LOT_NOT_FOUND' })
+    }
+    if (!(await enforceFacilityWrite(req, res, lot.facility_id, 'stock'))) return
+    // A blank expiry clears it (back to unknown); a non-blank one must be a real,
+    // plausible date — reject rather than silently storing "unknown".
+    if (expiry_date && !validators.isValidISODate(String(expiry_date))) {
+      return sendValidationError(res, 'expiry_date must be a valid YYYY-MM-DD date', 'expiry_date')
+    }
+    const updated = await StockService.relabelLot(req.params.id, { batch_number, expiry_date })
+    res.json({ success: true, data: updated, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error updating lot:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'LOT_UPDATE_ERROR' })
+  }
+})
+
+/**
  * GET /api/stock/dsd - Get DSD stock for a facility
  * Query params: facility_id (required), dsd_site_name (optional)
  */

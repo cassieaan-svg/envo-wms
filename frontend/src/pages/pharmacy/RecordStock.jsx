@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { BatchSelect } from '../../components/ui/BatchSelect'
+import { LotEditor } from '../../components/LotEditor'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
@@ -26,6 +27,10 @@ export function RecordStock() {
   // The batch the user chose for the commodity currently in the picker. Facility
   // dispensing only (DSD site stock carries no batch), reported by BatchSelect.
   const [pickerBatch, setPickerBatch] = useState(null)
+  // The bin's raw lots, so we can prompt when any has no expiry recorded.
+  const [binLots, setBinLots] = useState([])
+  const [lotsRefresh, setLotsRefresh] = useState(0)
+  const [showLotEditor, setShowLotEditor] = useState(false)
   const qtyRef                  = useRef(1)
   const [items, setItems]       = useState([])   // staged commodities to record together
   const [by, setBy]             = useState('')
@@ -215,7 +220,25 @@ export function RecordStock() {
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch to consume</label>
                 <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType="dispensary"
-                  value={pickerBatch?.key} onSelect={setPickerBatch} />
+                  value={pickerBatch?.key} onSelect={setPickerBatch}
+                  onLotsLoaded={setBinLots} refreshToken={lotsRefresh} />
+                {/* Some stock carries no expiry (the ledger seed had no receipt to
+                    take one from). Prompt here — this is where it's noticed. */}
+                {binLots.some(l => !l.expiry_date) && (
+                  <div className="mt-2 rounded-lg px-3 py-2 text-xs bg-amber-500/10 border border-amber-500/20 text-amber-300 flex items-center justify-between gap-3 flex-wrap">
+                    <span>
+                      {binLots.filter(l => !l.expiry_date).reduce((s, l) => s + l.quantity, 0)}{' '}
+                      {selectedComm?.unit || 'units'} have no expiry recorded
+                      {canManage ? '.' : ' — ask your store manager to record it.'}
+                    </span>
+                    {canManage && (
+                      <button type="button" onClick={() => setShowLotEditor(true)}
+                        className="text-amber-200 underline underline-offset-2 hover:text-amber-100 shrink-0">
+                        Record batch &amp; expiry
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -298,6 +321,11 @@ export function RecordStock() {
 
       {editRecord && (
         <EditModal record={{...editRecord, _type:'dispense'}} onClose={()=>setEditRecord(null)} onSave={()=>{setEditRecord(null);loadRecent()}}/>
+      )}
+      {showLotEditor && commId && (
+        <LotEditor facilityId={fid} commodityId={commId} commodityName={selectedComm?.name}
+          locationType="dispensary" canEdit={canManage}
+          onClose={()=>setShowLotEditor(false)} onSaved={()=>setLotsRefresh(n=>n+1)} />
       )}
       {historyRecord && (
         <EditHistoryModal record={historyRecord} onClose={()=>setHistoryRecord(null)}/>

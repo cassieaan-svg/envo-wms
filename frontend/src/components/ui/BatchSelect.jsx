@@ -17,15 +17,20 @@ import { fmtDate } from '../../utils/helpers'
 // onSelect(null) for FEFO / when the bin has no ledger lots.
 const FEFO = '__fefo__'
 
-export function BatchSelect({ facilityId, commodityId, locationType, siteName, value, onSelect, className }) {
+// `onLotsLoaded` reports the bin's raw lots (including expired / unknown-expiry
+// ones the dropdown doesn't offer) so the page can prompt about gaps.
+// `refreshToken` re-fetches when it changes — bump it after editing a lot.
+export function BatchSelect({ facilityId, commodityId, locationType, siteName, value, onSelect, onLotsLoaded, refreshToken, className }) {
   const [options, setOptions] = useState([])
   const [loading, setLoading] = useState(false)
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
+  const onLotsLoadedRef = useRef(onLotsLoaded)
+  onLotsLoadedRef.current = onLotsLoaded
 
   useEffect(() => {
     let cancelled = false
-    if (!facilityId || !commodityId || !locationType) { setOptions([]); onSelectRef.current?.(null); return }
+    if (!facilityId || !commodityId || !locationType) { setOptions([]); onSelectRef.current?.(null); onLotsLoadedRef.current?.([]); return }
     setLoading(true)
     api.stock.lots({ facility_id: facilityId, commodity_id: commodityId, location_type: locationType, site_name: siteName || undefined })
       .then(lots => {
@@ -40,12 +45,13 @@ export function BatchSelect({ facilityId, commodityId, locationType, siteName, v
             remaining: l.quantity || 0,
           }))
         setOptions(opts)
+        onLotsLoadedRef.current?.(lots || [])
         onSelectRef.current?.(null)   // default to FEFO (automatic)
       })
-      .catch(() => { if (!cancelled) { setOptions([]); onSelectRef.current?.(null) } })
+      .catch(() => { if (!cancelled) { setOptions([]); onSelectRef.current?.(null); onLotsLoadedRef.current?.([]) } })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [facilityId, commodityId, locationType, siteName])
+  }, [facilityId, commodityId, locationType, siteName, refreshToken])
 
   const cls = className || 'w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500'
 
