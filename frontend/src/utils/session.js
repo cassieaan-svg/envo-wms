@@ -1,6 +1,6 @@
 import { api } from '../lib/api'
 import { useAppStore } from '../store/appStore'
-import { SECTION_CATEGORIES } from './helpers'
+import { allowedCategoriesFor } from './helpers'
 
 // Rebuild the app store from a Supabase auth user. Used both on fresh sign-in
 // and when restoring a persisted session on page refresh, so the two paths
@@ -39,11 +39,12 @@ export async function hydrateSession(user) {
   const amcWindows = {}
   ;(amcRows || []).forEach(r => { amcWindows[r.facility_id] = { months: r.months || [] } })
 
+  // Restrict to the account's section, plus General Consumables for a State Office
+  // Store. Admins (no section) keep the full catalogue. allowedCats null = all.
+  const allowedCats = allowedCategoriesFor(commoditySection, meta.facility_name)
   let allCommodities = comms || []
-  if (commoditySection && SECTION_CATEGORIES[commoditySection]) {
-    allCommodities = allCommodities.filter(c =>
-      SECTION_CATEGORIES[commoditySection].includes(c.category)
-    )
+  if (allowedCats) {
+    allCommodities = allCommodities.filter(c => allowedCats.includes(c.category))
   }
 
   // Resolve facility for facility-level users

@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { SECTION_CATEGORIES } from '../../utils/helpers'
+import { SECTION_CATEGORIES, STATE_OFFICE_CATEGORIES } from '../../utils/helpers'
 
 // Canonical category order (pharmacy first, then lab: RTKs → reagents →
-// consumables). Unknown categories fall to the end, then alphabetical.
-const CATEGORY_ORDER = [...SECTION_CATEGORIES.pharmacy, ...SECTION_CATEGORIES.lab]
+// consumables, then the state-office-only categories). Unknown categories fall to
+// the end, then alphabetical.
+const CATEGORY_ORDER = [...SECTION_CATEGORIES.pharmacy, ...SECTION_CATEGORIES.lab, ...STATE_OFFICE_CATEGORIES]
 
 const DEFAULT_CLS = 'w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500'
 

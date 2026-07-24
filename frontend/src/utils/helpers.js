@@ -193,6 +193,25 @@ export const SECTION_CATEGORIES = {
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
 }
 
+// Categories only the per-state "State Office Store" facilities handle. Not part of
+// any section list, so regular section-pinned facilities never see them; only a
+// state office (or an admin who sees everything) does. Mirror of the backend copy in
+// constants/sections.js — keep the two in sync.
+export const STATE_OFFICE_CATEGORIES = ['General Consumables']
+
+// A facility is a per-state office store when its name reads "… State Office Store".
+export const isStateOfficeName = (name) => /state office store/i.test(name || '')
+
+// The categories a section-pinned account may see: its section's list, plus the
+// state-office-only categories when the account belongs to a State Office Store.
+// Returns null (= all) when there is no section restriction (admins).
+export function allowedCategoriesFor(commoditySection, facilityName) {
+  if (!commoditySection) return null
+  const cats = [...(SECTION_CATEGORIES[commoditySection] || [])]
+  if (isStateOfficeName(facilityName)) cats.push(...STATE_OFFICE_CATEGORIES)
+  return cats
+}
+
 // A commodity category belongs to the lab section (uses SDP, no dispensary/DSD).
 export const isLabCategory = (category) => (SECTION_CATEGORIES.lab || []).includes(category)
 

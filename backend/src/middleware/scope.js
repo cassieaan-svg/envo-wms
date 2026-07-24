@@ -1,5 +1,5 @@
 import { query } from '../db.js'
-import { categoriesForSection } from '../constants/sections.js'
+import { categoriesForSection, isStateOfficeName, STATE_OFFICE_CATEGORIES } from '../constants/sections.js'
 
 // Facility + section scoping for the API layer.
 //
@@ -73,6 +73,14 @@ export function attachScope(req, res, next) {
     ['overall_admin', 'state_admin'].includes(accessLevel)
   const section = bothSections ? null : (meta.commodity_section || null)
 
+  // Section include-list. State Office Store facilities additionally handle the
+  // state-office-only categories (General Consumables), so append those for a
+  // section-pinned state-office caller. Null-section admins already see everything.
+  let sectionCategories = categoriesForSection(section) // null = all, or [categories]
+  if (sectionCategories && isStateOfficeName(meta.facility_name)) {
+    sectionCategories = [...sectionCategories, ...STATE_OFFICE_CATEGORIES]
+  }
+
   req.scope = {
     accessLevel,
     isAdmin: isAdminFlag || accessLevel === 'overall_admin',
@@ -82,7 +90,7 @@ export function attachScope(req, res, next) {
     adminLga: meta.admin_lga || null,
     adminCluster: meta.admin_cluster || null,
     section,
-    sectionCategories: categoriesForSection(section), // null = all, or [categories]
+    sectionCategories,
   }
   next()
 }
