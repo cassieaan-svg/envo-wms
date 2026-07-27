@@ -1,7 +1,7 @@
 import { api } from '../lib/api'
 import {
   groupStockByComm, resolveAmcWindow, amcMapFromRows,
-  getStockStatus, capExpiryBatchesToStock,
+  getStockStatus,
 } from './helpers'
 
 // Counts expiry / low-stock / overstock alerts for a single facility.
@@ -51,18 +51,16 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
     // 'out' excluded on purpose.
   })
 
-  // Expiry — batches expiring within the window, capped to current SOH.
+  // Expiry — on-hand batches from the lot ledger, expiring within the window OR
+  // already expired but still on the shelf. Ledger balances are the on-hand truth,
+  // so this matches the Alerts page (no intake-history estimate to cap).
   const today  = new Date()
   const cutoff = new Date(today.getTime() + expiryDays * 86400000).toISOString().split('T')[0]
-  const todayS = today.toISOString().split('T')[0]
-  const exp = await api.intake.history({
+  const exp = await api.stock.lotsExpiry({
     facility_id: fid, commodity_ids: commIds,
-    expiry_from: todayS, expiry_to: cutoff, has_quantity: true,
-    section: commoditySection || undefined,
+    expiry_to: cutoff, section: commoditySection || undefined,
   }).catch(() => [])
-  const sohByComm = {}
-  groupStockByComm(stockData).forEach(g => { sohByComm[g.commodity_id] = (g.storeQty || 0) + (sdpMap[g.commodity_id] || 0) })
-  const expiry = (capExpiryBatchesToStock(exp || [], sohByComm) || []).length
+  const expiry = (exp || []).length
 
   return { expiry, low, over, total: expiry + low + over }
 }

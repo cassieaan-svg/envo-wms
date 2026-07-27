@@ -9,7 +9,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, capExpiryBatchesToStock, transferReason } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, transferReason } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -174,26 +174,15 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   async function loadExpiry() {
     const today  = new Date()
     const cutoff = new Date(today.getTime()+expiryDays*86400000).toISOString().split('T')[0]
-    const todayS = today.toISOString().split('T')[0]
-    const data = await api.intake.history({
+    // Per-batch balances from the AUTHORITATIVE lot ledger — already the on-hand
+    // truth, so a batch that is ALREADY expired but still on the shelf surfaces
+    // here (the old intake-history estimate inferred those away). Expired lots are
+    // always returned; `expiry_to` caps the future look-ahead.
+    const lots = await api.stock.lotsExpiry({
       facility_id: fid, commodity_ids: commIds,
-      expiry_to: cutoff, has_quantity: true,   // no lower bound: include already-expired stock still on hand
-      section: commoditySection || undefined,
+      expiry_to: cutoff, section: commoditySection || undefined,
     }).catch(() => [])
-
-    // Cap each batch to current stock on hand (store + SDP site stock) so the
-    // expiry list reflects what's physically left, not the original receipt.
-    let sdpMap = {}
-    if (fid) {
-      const sdpData = await api.stock.sdp.list({ facility_id: fid }).catch(() => [])
-      ;(sdpData || []).forEach(d => { sdpMap[d.commodity_id] = (sdpMap[d.commodity_id] || 0) + d.quantity })
-    }
-    const sohByComm = {}
-    groupStockByComm(store.stockData).forEach(g => {
-      sohByComm[g.commodity_id] = (g.storeQty || 0) + (sdpMap[g.commodity_id] || 0)
-    })
-    const capped = capExpiryBatchesToStock(data || [], sohByComm)
-    setExpiry(capped)
+    setExpiry(lots || [])
   }
 
   async function loadStockAlerts() {

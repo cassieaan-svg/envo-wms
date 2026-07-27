@@ -8,7 +8,7 @@ import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DailyTrendChart } from '../../components/DailyTrendChart'
 import { exportCsv, exportPdf } from '../../utils/download'
-import { fmtDate, capExpiryBatchesToStockByFacility } from '../../utils/helpers'
+import { fmtDate } from '../../utils/helpers'
 
 export function Monitoring() {
   const store = useAppStore()
@@ -93,44 +93,17 @@ export function Monitoring() {
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
     const scopeParams = store.getAdminScopeParams()
 
-    // Paginate — large jurisdictions over a long window exceed the 1000-row cap.
-    const PAGE = 1000
-    const fetchAllPages = async (fn, params) => {
-      const out = []
-      for (let offset = 0; ; offset += PAGE) {
-        let data
-        try { data = await fn({ ...params, limit: PAGE, offset }) } catch { break }
-        if (!data || !data.length) break
-        out.push(...data)
-        if (data.length < PAGE) break
-      }
-      return out
-    }
-
-    const all = await fetchAllPages(api.intake.history, {
-      // No lower bound on expiry: also surface batches that are ALREADY expired but
-      // still on hand (e.g. received expired) — they'd otherwise be invisible.
+    // Per-batch balances straight from the AUTHORITATIVE lot ledger — already the
+    // on-hand truth (no intake-history estimate to cap), so a batch that is ALREADY
+    // expired but still on the shelf (e.g. received expired) surfaces here and the
+    // quantities reconcile to Stock Levels. Expired lots are always returned;
+    // `expiry_to` caps the future look-ahead window.
+    const lots = await api.stock.lotsExpiry({
       ...scopeParams,
       expiry_to: cutoff,
-      has_quantity: true, section: commoditySection || undefined,
-    })
-
-    // Intake records the quantity RECEIVED and is never decremented as stock is
-    // consumed/transferred, so cap each batch to its own facility's current stock
-    // on hand for that commodity. Batches span many facilities here, so SOH is
-    // keyed per (facility, commodity) — not a single per-commodity total. Lab
-    // SOH = store (from /api/stock) + SDP.
-    const [stockRows, sdpRows] = await Promise.all([
-      fetchAllPages(api.stock.list, { ...scopeParams }),
-      fetchAllPages(api.stock.sdp.list, { ...scopeParams }),
-    ])
-    const sohByFacComm = {}
-    const addSoh = (fId, cId, q) => { const k = `${fId}|${cId}`; sohByFacComm[k] = (sohByFacComm[k] || 0) + (q || 0) }
-    stockRows.filter(s => s.location_type === 'store').forEach(s => addSoh(s.facility_id, s.commodity_id, s.quantity))
-    sdpRows.forEach(d => addSoh(d.facility_id, d.commodity_id, d.quantity))
-
-    // capExpiryBatchesToStockByFacility drops depleted batches and returns soonest-first.
-    setExpiryData(capExpiryBatchesToStockByFacility(all, sohByFacComm))
+      section: commoditySection || undefined,
+    }).catch(() => [])
+    setExpiryData(lots || [])
     setLoading(false)
   }
 

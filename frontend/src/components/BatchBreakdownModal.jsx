@@ -3,13 +3,13 @@ import { api } from '../lib/api'
 import { fmtDate, fmtStockQty } from '../utils/helpers'
 import { LoadingState, EmptyState } from './ui/Loading'
 
-// Drill-down modal: every recorded batch of a commodity (number + expiry +
-// received qty) with an FEFO-estimated remaining quantity. EnVo doesn't track
-// per-batch stock, so "remaining" is inferred: current stock on hand is filled
-// into the latest-expiring batches first, so the soonest-expiry batches are
-// treated as consumed first. When `fid` is set the view is for that one
-// facility; when null (admin) batches are shown per facility, capped to each
-// facility's own stock on hand.
+// Drill-down modal: the on-hand batches of a commodity (number + expiry +
+// quantity on hand + status) straight from the AUTHORITATIVE lot ledger — the
+// same source the dispense picker uses. This matches what's actually dispatchable
+// and, crucially, still shows batches that are already EXPIRED (they physically
+// remain on the shelf until adjusted out); the old intake-history estimate
+// inferred those away. When `fid` is set the view is for that one facility; when
+// null (admin) batches are shown per facility across the caller's scope.
 export function BatchBreakdownModal({ commodity, fid, scopeIds = null, onClose }) {
   const [rows, setRows]       = useState([])
   const [loading, setLoading] = useState(true)
@@ -20,70 +20,26 @@ export function BatchBreakdownModal({ commodity, fid, scopeIds = null, onClose }
     async function load() {
       setLoading(true)
       const cid = commodity.commodity_id
-      const PAGE = 1000
-      const fetchAll = async (fn, extra = {}) => {
-        let out = []
-        for (let offset = 0; ; offset += PAGE) {
-          let data
-          try {
-            data = await fn({
-              commodity_ids: [cid], commodity_id: cid,
-              facility_id: fid || undefined,
-              facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-              limit: PAGE, offset, ...extra,
-            })
-          } catch { break }
-          if (!data || !data.length) break
-          out = out.concat(data)
-          if (data.length < PAGE) break
-        }
-        return out
-      }
-
-      // All batches ever received for this commodity (any expiry), with qty > 0.
-      const intake = await fetchAll(api.intake.history, { has_quantity: true })
-      // Current stock on hand per facility: store + dispensary (/api/stock) + DSD + SDP.
-      const [stockRows, dsdRows, sdpRows] = await Promise.all([
-        fetchAll(api.stock.list),
-        fetchAll(api.stock.dsd.list),
-        fetchAll(api.stock.sdp.list),
-      ])
+      let data = []
+      try {
+        data = await api.stock.lotsExpiry({
+          commodity_ids: [cid],
+          facility_id: fid || undefined,
+          facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+          include_unknown: 1,   // also list null-expiry ("unknown") lots on hand
+        })
+      } catch { data = [] }
       if (!active) return
 
-      const sohByFac = {}
-      const addSoh = (f, q) => { sohByFac[f] = (sohByFac[f] || 0) + (q || 0) }
-      stockRows.forEach(s => addSoh(s.facility_id, s.quantity))
-      dsdRows.forEach(d => addSoh(d.facility_id, d.quantity))
-      sdpRows.forEach(s => addSoh(s.facility_id, s.quantity))
-
-      // Aggregate intake into batches keyed by facility + batch number + expiry.
-      const byFacBatch = {}
-      intake.forEach(r => {
-        const f = r.facility_id
-        const key = `${f}|${r.batch_number || '—'}|${r.expiry_date || '—'}`
-        const b = byFacBatch[key] || (byFacBatch[key] = {
-          facility_id: f, facility: r.facilities?.name || '—',
-          batch: r.batch_number || '—', expiry: r.expiry_date || null, received: 0,
-        })
-        b.received += r.quantity || 0
-      })
-
-      // FEFO allocation per facility: fill latest-expiry batches first so the
-      // soonest-expiry deplete first; each batch's leftover is its remaining.
-      const byFac = {}
-      Object.values(byFacBatch).forEach(b => { (byFac[b.facility_id] ||= []).push(b) })
-      const out = []
-      Object.entries(byFac).forEach(([f, list]) => {
-        let remaining = sohByFac[f] || 0
-        const ordered = list.slice().sort((a, b) => new Date(b.expiry || 0) - new Date(a.expiry || 0))
-        ordered.forEach(b => {
-          const keep = Math.max(0, Math.min(b.received, remaining))
-          remaining -= keep
-          out.push({ ...b, remaining: keep })
-        })
-      })
-      // Soonest-expiry first for display.
-      out.sort((a, b) => new Date(a.expiry || '9999-12-31') - new Date(b.expiry || '9999-12-31'))
+      // The ledger already returns one summed row per (facility, batch, expiry) on
+      // hand — no FEFO estimation needed. Soonest-expiry first (expired at the top).
+      const out = (data || []).map(r => ({
+        facility_id: r.facility_id,
+        facility: r.facilities?.name || '—',
+        batch: r.batch_number || '(no batch)',
+        expiry: r.expiry_date || null,
+        onHand: r.quantity || 0,
+      })).sort((a, b) => new Date(a.expiry || '9999-12-31') - new Date(b.expiry || '9999-12-31'))
       setRows(out)
       setLoading(false)
     }
@@ -100,7 +56,7 @@ export function BatchBreakdownModal({ commodity, fid, scopeIds = null, onClose }
     if (d <= 90) return { label: 'Warning',  cls: 'text-amber-400' }
     return { label: 'OK', cls: 'text-green-400' }
   }
-  const totalRemaining = rows.reduce((s, r) => s + r.remaining, 0)
+  const totalOnHand = rows.reduce((s, r) => s + r.onHand, 0)
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -110,15 +66,15 @@ export function BatchBreakdownModal({ commodity, fid, scopeIds = null, onClose }
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
         </div>
         <p className="text-xs text-gray-500 mb-4">
-          Remaining is FEFO-estimated (soonest-expiry consumed first){showFacility ? ', across all facilities in scope' : ''}.
+          On-hand per-batch balances from the lot ledger{showFacility ? ', across all facilities in scope' : ''}. Expired batches are shown — they remain on the shelf until adjusted out.
         </p>
 
-        {loading ? <LoadingState /> : rows.length === 0 ? <EmptyState message="No batches recorded for this commodity." /> : (
+        {loading ? <LoadingState /> : rows.length === 0 ? <EmptyState message="No batches on hand for this commodity." /> : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/8 bg-white/2">
                 {showFacility && <th className="text-left px-3 py-2 text-xs text-gray-500 uppercase tracking-wider font-medium">Facility</th>}
-                {['Batch','Expiry','Received','Est. remaining','Status'].map(h => (
+                {['Batch','Expiry','On hand','Status'].map(h => (
                   <th key={h} className="text-left px-3 py-2 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                 ))}
               </tr>
@@ -127,12 +83,11 @@ export function BatchBreakdownModal({ commodity, fid, scopeIds = null, onClose }
               {rows.map((r, i) => {
                 const u = urgency(r.expiry)
                 return (
-                  <tr key={i} className={`border-b border-white/5 ${r.remaining === 0 ? 'opacity-50' : ''}`}>
+                  <tr key={i} className="border-b border-white/5">
                     {showFacility && <td className="px-3 py-2.5 text-gray-300">{r.facility}</td>}
                     <td className="px-3 py-2.5 font-mono text-xs text-gray-300">{r.batch}</td>
                     <td className="px-3 py-2.5 font-mono text-xs text-gray-300">{r.expiry ? fmtDate(r.expiry) : '—'}</td>
-                    <td className="px-3 py-2.5 font-mono text-gray-400">{fmtStockQty(r.received, commodity.commodities)}</td>
-                    <td className="px-3 py-2.5 font-mono font-medium text-gray-100">{fmtStockQty(r.remaining, commodity.commodities)}</td>
+                    <td className="px-3 py-2.5 font-mono font-medium text-gray-100">{fmtStockQty(r.onHand, commodity.commodities)}</td>
                     <td className={`px-3 py-2.5 text-xs font-semibold ${u.cls}`}>{u.label}</td>
                   </tr>
                 )
@@ -140,8 +95,8 @@ export function BatchBreakdownModal({ commodity, fid, scopeIds = null, onClose }
             </tbody>
             <tfoot>
               <tr className="border-t border-white/10">
-                <td className="px-3 py-2.5 text-xs text-gray-400 uppercase tracking-wider" colSpan={showFacility ? 4 : 3}>Total remaining ({rows.length} {rows.length === 1 ? 'batch' : 'batches'})</td>
-                <td className="px-3 py-2.5 font-mono font-medium text-gray-100" colSpan={2}>{fmtStockQty(totalRemaining, commodity.commodities)}</td>
+                <td className="px-3 py-2.5 text-xs text-gray-400 uppercase tracking-wider" colSpan={showFacility ? 3 : 2}>Total on hand ({rows.length} {rows.length === 1 ? 'batch' : 'batches'})</td>
+                <td className="px-3 py-2.5 font-mono font-medium text-gray-100" colSpan={2}>{fmtStockQty(totalOnHand, commodity.commodities)}</td>
               </tr>
             </tfoot>
           </table>

@@ -268,6 +268,30 @@ export function groupStockByComm(stockRows) {
 // commodity_id → units on hand; a commodity missing from the map is treated as 0
 // (no stock row ⇒ nothing on hand ⇒ nothing to expire). Returns the kept batches
 // (with `quantity` capped) sorted soonest-expiry first.
+// Warn-only guard for dispatching expired stock to another site. Returns a short
+// warning string when the dispatch would draw on expired batches, else null. Given
+// the bin's raw on-hand lots (batch_number, expiry_date, quantity), the chosen
+// batch (or null for FEFO), and the quantity being issued:
+//   • a specific EXPIRED batch → always warn
+//   • FEFO → warn only if there isn't enough UNEXPIRED stock to cover the issue,
+//     i.e. the draw would necessarily reach into expired lots.
+// Sending expired stock isn't blocked (per policy) — an adjustment is the proper
+// way to clear it — but the caller confirms before proceeding.
+export function expiredDispatchWarning(lots, chosenBatch, qty) {
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
+  const isExpired = d => !!(d && new Date(d) < startOfToday)
+  if (chosenBatch) {
+    return (chosenBatch.expired || isExpired(chosenBatch.expiry_date))
+      ? `Batch ${chosenBatch.batch_number || '(no batch)'} expired on ${fmtDate(chosenBatch.expiry_date)}.`
+      : null
+  }
+  const unexpired = (lots || []).filter(l => !isExpired(l.expiry_date)).reduce((s, l) => s + (Number(l.quantity) || 0), 0)
+  if (unexpired < qty) {
+    return `Only ${unexpired} unexpired unit${unexpired === 1 ? '' : 's'} on hand for this dispatch of ${qty} — the rest would come from expired stock.`
+  }
+  return null
+}
+
 export function capExpiryBatchesToStock(batches, sohByComm) {
   const byComm = {}
   ;(batches || []).forEach(b => { (byComm[b.commodity_id] ||= []).push(b) })

@@ -77,6 +77,53 @@ export class StockService {
   }
 
   /**
+   * On-hand lots (per-batch balances) across a scope, from the AUTHORITATIVE lot
+   * ledger (stock_lot) — the same source the dispense picker uses, so an expiry
+   * view built on this matches what a store manager can actually dispatch. Unlike
+   * the old intake-history estimate, an already-expired batch still on hand shows
+   * up (it isn't inferred away), and the per-batch quantities reconcile to the
+   * bin totals.
+   *
+   * Lots of the same (facility, commodity, batch, expiry) are summed across bins
+   * (store + dispensary + DSD/SDP) so a commodity reads as one batch, not one row
+   * per location. `facilityIds` null = all in scope; [] = none. `categories`
+   * enforces the caller's section. `expiryTo` (ISO date) caps the look-ahead;
+   * already-expired lots are always included. `includeUnknown` keeps null-expiry
+   * lots (they can't be bucketed, but the modal lists them).
+   */
+  static async getScopedLots({ facilityIds = null, commodityIds = null, categories = null, expiryTo = null, includeUnknown = false } = {}) {
+    if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+    const params = []
+    const conds = ['l.quantity > 0']
+    if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`l.facility_id = any($${params.length})`) }
+    if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`l.commodity_id = any($${params.length})`) }
+    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
+    // Expiry window: keep everything already expired (< today) OR expiring on/before
+    // the cutoff. null-expiry lots pass only when includeUnknown is set.
+    if (expiryTo) {
+      params.push(expiryTo)
+      conds.push(`(l.expiry_date < current_date or l.expiry_date <= $${params.length}${includeUnknown ? ' or l.expiry_date is null' : ''})`)
+    } else if (!includeUnknown) {
+      conds.push('l.expiry_date is not null')
+    }
+
+    const sql = `
+      select l.facility_id, l.commodity_id, l.batch_number, l.expiry_date,
+             sum(l.quantity)::int as quantity,
+             ${COMMODITY_OBJ}, ${FACILITY_OBJ}
+      from stock_lot l
+      left join facilities f on f.id = l.facility_id
+      left join commodities c on c.id = l.commodity_id
+      where ${conds.join(' and ')}
+      group by l.facility_id, l.commodity_id, l.batch_number, l.expiry_date,
+               c.id, f.id
+      order by l.expiry_date asc nulls last`
+    const { rows } = await query(sql, params)
+    return rows
+  }
+
+  /**
    * Get DSD stock for one facility (`facilityId`) or a set (`facilityIds`, for
    * admin/aggregate views), optionally a single site or commodity. Embeds both
    * commodity and facility objects (SiteBreakdownModal reads facilities.name).

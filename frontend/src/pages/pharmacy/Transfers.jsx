@@ -10,7 +10,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { BatchSelect } from '../../components/ui/BatchSelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, SECTION_CATEGORIES, transferReason } from '../../utils/helpers'
+import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning } from '../../utils/helpers'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
 
@@ -156,6 +156,7 @@ export function Transfers() {
   // Batch being issued out of the store (null = FEFO). Chosen at approval,
   // because that is when the stock actually leaves the store.
   const [intApproveBatch, setIntApproveBatch] = useState(null)
+  const [intApproveLots, setIntApproveLots] = useState([])   // raw on-hand lots for the expiry warning
   const [intHistory, setIntHistory] = useState([])
   const [loadingI, setLoadingI] = useState(false)
 
@@ -175,6 +176,7 @@ export function Transfers() {
   const [dsdIssuedQty, setDsdIssuedQty] = useState('')
   const [dsdApproving, setDsdApproving] = useState(false)
   const [dsdApproveBatch, setDsdApproveBatch] = useState(null)
+  const [dsdApproveLots, setDsdApproveLots] = useState([])   // raw on-hand lots for the expiry warning
   const [dsdHistory, setDsdHistory] = useState([])
   const [loadingD, setLoadingD] = useState(false)
   const [dsdDispatched, setDsdDispatched] = useState([])
@@ -586,6 +588,11 @@ export function Transfers() {
     setIntApproving(true)
     const storeStk = stockData.find(r => r.commodity_id === record.commodity_id && r.facility_id === fid && r.location_type === 'store')
     if (!storeStk || storeStk.quantity < parsedQty) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setIntApproving(false); return }
+    // Warn (don't block) if this move would push expired stock into the dispensary.
+    const intExpWarn = expiredDispatchWarning(intApproveLots, intApproveBatch, parsedQty)
+    if (intExpWarn && !window.confirm(`${intExpWarn}\n\nMoving expired stock to the dispensary is not recommended — clear it with an adjustment instead. Proceed anyway?`)) {
+      setIntApproving(false); return
+    }
     // Server moves the qty store→dispensary and marks accepted (transactional).
     try {
       await api.transfers.approveInternal(record.id, { approved_by: intApprovedBy, quantity: parsedQty,
@@ -694,6 +701,11 @@ export function Transfers() {
     setDsdApproving(true)
     const storeStk = stockData.find(r => r.commodity_id === record.commodity_id && r.facility_id === fid && r.location_type === 'store')
     if (!storeStk || storeStk.quantity < issued) { toast(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`, 'red'); setDsdApproving(false); return }
+    // Warn (don't block) if this dispatch would send expired stock to the site.
+    const expWarn = expiredDispatchWarning(dsdApproveLots, dsdApproveBatch, issued)
+    if (expWarn && !window.confirm(`${expWarn}\n\nSending expired stock to a delivery point is not recommended — clear it with an adjustment instead. Dispatch anyway?`)) {
+      setDsdApproving(false); return
+    }
     // Server decrements the store and marks the request dispatched. The DSD site is
     // credited when it confirms receipt (api.transfers.receive), matching the SDP/lab flow.
     try {
@@ -1451,7 +1463,7 @@ export function Transfers() {
                                   <div className="min-w-[15rem]">
                                     <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Batch issued</label>
                                     <BatchSelect key={r.id} facilityId={fid} commodityId={r.commodity_id} locationType="store"
-                                      value={intApproveBatch?.key} onSelect={setIntApproveBatch} />
+                                      value={intApproveBatch?.key} onSelect={setIntApproveBatch} onLotsLoaded={setIntApproveLots} />
                                   </div>
                                 </div>
                                 <div className="flex gap-2">
@@ -1568,7 +1580,7 @@ export function Transfers() {
                                   <div className="min-w-[15rem]">
                                     <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Batch issued</label>
                                     <BatchSelect key={r.id} facilityId={fid} commodityId={r.commodity_id} locationType="store"
-                                      value={dsdApproveBatch?.key} onSelect={setDsdApproveBatch} />
+                                      value={dsdApproveBatch?.key} onSelect={setDsdApproveBatch} onLotsLoaded={setDsdApproveLots} />
                                   </div>
                                 </div>
                                 <div className="flex gap-2">

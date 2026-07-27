@@ -1,6 +1,7 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
 import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection, locationFacilityIds } from '../middleware/scope.js'
+import { categoriesForSection } from '../constants/sections.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
@@ -109,6 +110,66 @@ router.get('/lots', async (req, res) => {
     res.json({ success: true, data: lots, count: lots.length, timestamp: new Date().toISOString() })
   } catch (err) {
     console.error('Error fetching bin lots:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
+  }
+})
+
+/**
+ * GET /api/stock/lots/expiry - on-hand per-batch balances across the caller's
+ * scope, from the AUTHORITATIVE lot ledger (not the intake-history estimate), so
+ * expired / received-expired stock still on hand surfaces and the per-batch
+ * quantities reconcile to the bin totals. Powers the expiry dashboards, the
+ * expiry alerts, and the stock-by-batch modal.
+ * Query: optional facility_id (single-facility path), optional facility_ids /
+ * commodity_ids (view-filter, intersected with scope), optional expiry_to (ISO)
+ * to cap the look-ahead, include_unknown=1 to also return null-expiry lots.
+ * Declared before '/:id' so it isn't shadowed. Section-scoped via sectionCategories.
+ */
+router.get('/lots/expiry', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, commodity_ids, expiry_to, include_unknown, section } = req.query
+    const csv = v => v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null
+    if (expiry_to && !validators.isValidISODate(String(expiry_to))) {
+      return sendValidationError(res, 'expiry_to must be a valid YYYY-MM-DD date', 'expiry_to')
+    }
+
+    // Section: the token already pins section-restricted callers to their categories
+    // (req.scope.sectionCategories). An explicit `section` (e.g. the lab-specific
+    // page viewed by a null-section admin) narrows further — intersect the two so a
+    // caller can never widen past their token scope.
+    const sectionCats = categoriesForSection(section)
+    const tokenCats = req.scope.sectionCategories
+    let categories = tokenCats
+    if (Array.isArray(sectionCats)) {
+      categories = Array.isArray(tokenCats) ? tokenCats.filter(c => sectionCats.includes(c)) : sectionCats
+    }
+
+    let facilityIds
+    if (facility_id) {
+      // Single-facility path: enforce read on that one facility, then scope to it.
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      if (!(await enforceFacilityRead(req, res, facility_id, 'stock'))) return
+      facilityIds = [facility_id]
+    } else {
+      // Multi-facility scoped path (admin/aggregate), mirroring GET /stock: the
+      // token's readable set, optionally intersected with a state/LGA or explicit
+      // facility_ids view-filter (a narrowed admin can't widen their access).
+      facilityIds = await scopedReadFacilityIds(req, 'stock') // null=all, []=none
+      let clientFids = csv(facility_ids)
+      const loc = await locationFacilityIds(req)
+      if (loc) clientFids = clientFids ? clientFids.filter(id => loc.includes(id)) : loc
+      if (clientFids) {
+        facilityIds = facilityIds === null ? clientFids : facilityIds.filter(id => clientFids.includes(id))
+      }
+    }
+
+    const lots = await StockService.getScopedLots({
+      facilityIds, commodityIds: csv(commodity_ids), categories,
+      expiryTo: expiry_to || null, includeUnknown: include_unknown === '1' || include_unknown === 'true',
+    })
+    res.json({ success: true, data: lots, count: lots.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching scoped lots:', err)
     res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
   }
 })

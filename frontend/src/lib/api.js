@@ -88,6 +88,10 @@ export const api = {
     // On-hand lots of one bin (batch/expiry balances) for the dispense picker.
     // params: facility_id, commodity_id, location_type, site_name (dsd/sdp).
     lots:   (params)        => get('/stock/lots', params),
+    // On-hand per-batch balances across scope from the lot ledger (authoritative),
+    // for expiry views + stock-by-batch. params: facility_id | facility_ids,
+    // commodity_ids, expiry_to (ISO), include_unknown. Already-expired lots included.
+    lotsExpiry: (params)    => get('/stock/lots/expiry', params),
     // Record a lot's batch/expiry (metadata only — quantity untouched).
     relabelLot: (id, body)  => patch(`/stock/lots/${id}`, body),
     get:    (id)            => get(`/stock/${id}`),
