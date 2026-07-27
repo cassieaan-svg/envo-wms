@@ -25,8 +25,7 @@ export function Monitoring() {
   const [lgaDrill, setLgaDrill] = useState(null)  // LGA name drilled into within a by-LGA breakdown
   const [catHover, setCatHover] = useState(null)  // category hovered in the donut (highlight only)
   const [consFilter, setConsFilter] = useState('consuming')  // commodity drill facility filter: 'consuming' | 'none' | 'all'
-  const [expDrill, setExpDrill]   = useState(null)  // 'critical' | 'warning' | 'monitor' | 'total'
-  const [expBatchComm, setExpBatchComm] = useState(null)  // Expiring-batches table: commodity drilled into {id,name,cat}
+  const [expUrgency, setExpUrgency] = useState('all')  // expiry urgency filter: 'all'|'expired'|'critical'|'warning'|'monitor'
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
 
   // Honour the admin's facility/LGA/state scope (same resolution as stock loads)
@@ -88,7 +87,7 @@ export function Monitoring() {
 
   async function loadExpiry() {
     setLoading(true)
-    setExpDrill(null); setExpBatchComm(null)
+    setExpUrgency('all')
     const now=new Date()
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
     const scopeParams = store.getAdminScopeParams()
@@ -253,6 +252,17 @@ export function Monitoring() {
               <option value={180}>Next 6 months</option>
               <option value={365}>Next 12 months</option>
             </select>
+            {isAdm && (<>
+              <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">Urgency</span>
+              <select value={expUrgency} onChange={e=>setExpUrgency(e.target.value)}
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                <option value="all">All urgencies</option>
+                <option value="expired">Expired</option>
+                <option value="critical">Critical (≤30d)</option>
+                <option value="warning">Warning (≤90d)</option>
+                <option value="monitor">Monitor (&gt;90d)</option>
+              </select>
+            </>)}
             <button onClick={loadExpiry} disabled={loading} className="ml-auto text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
               {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -555,97 +565,21 @@ export function Monitoring() {
             <>
               <MetricGrid>
                 <Metric label="Expired" value={expBucketRows('expired').length} color="red"
-                  onClick={isAdm?()=>setExpDrill(expDrill==='expired'?null:'expired'):undefined} active={expDrill==='expired'}/>
+                  onClick={isAdm?()=>setExpUrgency(expUrgency==='expired'?'all':'expired'):undefined} active={expUrgency==='expired'}/>
                 <Metric label="Critical (≤30d)" value={expBucketRows('critical').length} color="red"
-                  onClick={isAdm?()=>setExpDrill(expDrill==='critical'?null:'critical'):undefined} active={expDrill==='critical'}/>
+                  onClick={isAdm?()=>setExpUrgency(expUrgency==='critical'?'all':'critical'):undefined} active={expUrgency==='critical'}/>
                 <Metric label="Warning (≤90d)" value={expBucketRows('warning').length} color="amber"
-                  onClick={isAdm?()=>setExpDrill(expDrill==='warning'?null:'warning'):undefined} active={expDrill==='warning'}/>
+                  onClick={isAdm?()=>setExpUrgency(expUrgency==='warning'?'all':'warning'):undefined} active={expUrgency==='warning'}/>
                 <Metric label="Monitor (>90d)" value={expBucketRows('monitor').length} color="blue"
-                  onClick={isAdm?()=>setExpDrill(expDrill==='monitor'?null:'monitor'):undefined} active={expDrill==='monitor'}/>
+                  onClick={isAdm?()=>setExpUrgency(expUrgency==='monitor'?'all':'monitor'):undefined} active={expUrgency==='monitor'}/>
                 <Metric label="Total batches" value={expiryData.length}
-                  onClick={isAdm?()=>setExpDrill(expDrill==='total'?null:'total'):undefined} active={expDrill==='total'}/>
+                  onClick={isAdm?()=>setExpUrgency('all'):undefined} active={expUrgency==='all'}/>
               </MetricGrid>
 
-              {isAdm && expDrill && (() => {
-                const rows = expBucketRows(expDrill)
-                const total = rows.reduce((s,r)=>s+r.quantity,0)||1
-                const commMap={}
-                rows.forEach(r=>{ const n=r.commodities?.name||r.commodity_id; if(!commMap[n])commMap[n]={name:n,cat:r.commodities?.category||'—',unit:r.commodities?.unit||'',qty:0,batches:0}; commMap[n].qty+=r.quantity; commMap[n].batches++ })
-                const byComm=Object.values(commMap).sort((a,b)=>b.qty-a.qty)
-                const aggBy = keyFn => { const m={}; rows.forEach(r=>{const k=keyFn(r); if(k==null)return; m[k]=(m[k]||0)+r.quantity}); return Object.entries(m).sort((a,b)=>b[1]-a[1]) }
-                const byLga = aggBy(r=>facMeta[r.facility_id]?.lga||'—')
-                const byFac = aggBy(r=>r.facility_id).map(([id,v])=>({id,v,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
-                const labels={expired:'Expired',critical:'Critical (≤30d)',warning:'Warning (≤90d)',monitor:'Monitor (>90d)',total:'All expiring batches'}
-                return (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>{labels[expDrill]} — commodities, LGAs &amp; facilities</CardTitle>
-                      <button onClick={()=>setExpDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
-                    </CardHeader>
-                    <div className="px-5 pt-3 pb-2 text-xs text-gray-500 uppercase tracking-widest">By commodity</div>
-                    {byComm.length===0 ? <EmptyState message="No batches in this bucket."/> : (
-                      <div className="table-wrap"><table className="w-full text-sm">
-                        <thead><tr className="border-b border-white/8 bg-white/2">
-                          {['Commodity','Category','Batches','Qty','Share'].map(h=>(
-                            <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                          ))}
-                        </tr></thead>
-                        <tbody>{byComm.map((c,i)=>{
-                          const pct=Math.round((c.qty/total)*100)||0
-                          return (
-                            <tr key={i} className="border-b border-white/5 hover:bg-white/2">
-                              <td className="px-4 py-3 font-medium text-gray-100">{c.name}</td>
-                              <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
-                              <td className="px-4 py-3 text-gray-400">{c.batches}</td>
-                              <td className="px-4 py-3 font-mono text-sm text-gray-200">{c.qty.toLocaleString()} {c.unit}</td>
-                              <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
-                            </tr>
-                          )
-                        })}</tbody>
-                      </table></div>
-                    )}
-                    <CardBody>
-                      <div className="text-xs text-gray-500 uppercase tracking-widest mb-2">By LGA</div>
-                      <div className="space-y-2">
-                        {byLga.map(([lga,v])=>{
-                          const pct=Math.round((v/total)*100)||0
-                          return (
-                            <div key={lga}>
-                              <div className="flex justify-between mb-1"><span className="text-sm text-gray-300">{lga}</span><span className="text-xs font-mono text-gray-500">{pct}% · {v.toLocaleString()}</span></div>
-                              <div className="h-1.5 bg-white/5 rounded-full"><div style={{width:`${pct}%`,height:'100%',background:'#d29922',borderRadius:'9999px'}}/></div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </CardBody>
-                    <div className="px-5 pt-1 pb-2 text-xs text-gray-500 uppercase tracking-widest">By facility</div>
-                    <div className="table-wrap"><table className="w-full text-sm">
-                      <thead><tr className="border-b border-white/8 bg-white/2">
-                        {['#','Facility','LGA','Qty','Share'].map(h=>(
-                          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                        ))}
-                      </tr></thead>
-                      <tbody>{byFac.map((f,i)=>{
-                        const pct=Math.round((f.v/total)*100)||0
-                        return (
-                          <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
-                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
-                            <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
-                            <td className="px-4 py-3 font-mono text-sm text-gray-200">{f.v.toLocaleString()}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
-                          </tr>
-                        )
-                      })}</tbody>
-                    </table></div>
-                  </Card>
-                )
-              })()}
-
-              <Card>
-                <CardHeader><CardTitle>Expiring batches</CardTitle>{isAdm && expiryData.length>0 && !expBatchComm && <span className="text-xs text-gray-500">click a commodity for facilities</span>}</CardHeader>
-                {expiryData.length===0 ? <EmptyState message="No expiring batches in this period ✓"/> :
-                  !isAdm ? (
+              {!isAdm ? (
+                <Card>
+                  <CardHeader><CardTitle>Expiring batches</CardTitle></CardHeader>
+                  {expiryData.length===0 ? <EmptyState message="No expiring batches in this period ✓"/> : (
                     /* Facility view: flat batch list (their own batches). */
                     <div className="table-wrap"><table className="w-full text-sm">
                       <thead><tr className="border-b border-white/8 bg-white/2">
@@ -657,7 +591,7 @@ export function Monitoring() {
                         const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
                         const u=dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
                         return (
-                          <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                          <tr key={`${r.commodity_id}|${r.batch_number}|${r.expiry_date}`} className="border-b border-white/5 hover:bg-white/2">
                             <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
                             <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
                             <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
@@ -668,93 +602,54 @@ export function Monitoring() {
                         )
                       })}</tbody>
                     </table></div>
-                  ) : expBatchComm ? (() => {
-                    /* Admin drill: expiring batches for the selected commodity, by facility. */
-                    const batches = expiryData.filter(r => r.commodity_id === expBatchComm.id).sort((a,b)=>new Date(a.expiry_date)-new Date(b.expiry_date))
-                    return (
-                      <>
-                        <div className="px-5 py-3 border-b border-white/8 flex items-center justify-between flex-wrap gap-2">
-                          <span className="text-sm text-gray-300 flex items-center gap-2">{expBatchComm.name} <CatBadge>{expBatchComm.cat}</CatBadge> — expiring batches by facility</span>
-                          <div className="flex gap-2">
-                            <button onClick={()=>{
-                              const base=(expBatchComm.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
-                              const headers=['Facility','LGA','Batch','Expiry date','Days left','Qty','Unit','Urgency']
-                              const rows=batches.map(r=>{const dL=Math.round((new Date(r.expiry_date)-today)/86400000);const u=dL<0?'Expired':dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [facMeta[r.facility_id]?.name||'—',facMeta[r.facility_id]?.lga||'—',r.batch_number||'',fmtDate(r.expiry_date),dL,r.quantity,r.commodities?.unit||'',u]})
-                              exportCsv(`${base}_expiring-batches.csv`, headers, rows)
-                            }} disabled={batches.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">↓ Download CSV</button>
-                            <button onClick={()=>setExpBatchComm(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Back to commodities</button>
-                          </div>
-                        </div>
-                        <div className="table-wrap"><table className="w-full text-sm">
-                          <thead><tr className="border-b border-white/8 bg-white/2">
-                            {['Facility','LGA','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
-                              <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                            ))}
-                          </tr></thead>
-                          <tbody>{batches.map(r=>{
-                            const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
-                            const u=dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
-                            return (
-                              <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-                                <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}</td>
-                                <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
-                                <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
-                                <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
-                                <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
-                                <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
-                                <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
-                              </tr>
-                            )
-                          })}</tbody>
-                        </table></div>
-                      </>
-                    )
-                  })() : (() => {
-                    /* Admin top view: one row per commodity (tap to drill into facilities). */
-                    const byComm={}
-                    expiryData.forEach(r=>{
-                      const g=byComm[r.commodity_id]||(byComm[r.commodity_id]={id:r.commodity_id,name:r.commodities?.name||'—',cat:r.commodities?.category||'—',unit:r.commodities?.unit||'',batches:0,qty:0,soonest:null,facs:new Set()})
-                      g.batches++; g.qty+=r.quantity; g.facs.add(r.facility_id)
-                      const d=new Date(r.expiry_date); if(!g.soonest||d<g.soonest) g.soonest=d
-                    })
-                    const list=Object.values(byComm).sort((a,b)=>a.soonest-b.soonest)
-                    return (
-                      <>
-                      <div className="px-5 py-2 flex justify-end">
-                        <button onClick={()=>{
-                          const headers=['Commodity','Category','Facilities','Batches','Total qty','Unit','Soonest expiry','Days left','Urgency']
-                          const rows=list.map(g=>{const dL=Math.round((g.soonest-today)/86400000);const u=dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [g.name,g.cat,g.facs.size,g.batches,g.qty,g.unit,fmtDate(g.soonest.toISOString().slice(0,10)),dL,u]})
-                          exportCsv(`expiring-commodities_${expPeriod}d.csv`, headers, rows)
-                        }} disabled={list.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">↓ Download CSV</button>
-                      </div>
+                  )}
+                </Card>
+              ) : (() => {
+                /* Admin view: one flat row per expiring batch — facility & commodity side by
+                   side, filtered by the urgency dropdown / metric cards, with CSV download. */
+                const urgencyLabel = {all:'All expiring',expired:'Expired',critical:'Critical (≤30d)',warning:'Warning (≤90d)',monitor:'Monitor (>90d)'}[expUrgency]
+                const rows = (expUrgency==='all' ? expiryData : expBucketRows(expUrgency)).slice()
+                  .sort((a,b)=>new Date(a.expiry_date)-new Date(b.expiry_date))
+                const download = () => {
+                  const headers=['Facility','LGA','Commodity','Category','Batch','Expiry date','Days left','Qty','Unit','Urgency']
+                  const csv=rows.map(r=>{const dL=Math.round((new Date(r.expiry_date)-today)/86400000);const u=dL<0?'Expired':dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [facMeta[r.facility_id]?.name||'—',facMeta[r.facility_id]?.lga||'—',r.commodities?.name||'—',r.commodities?.category||'—',r.batch_number||'',fmtDate(r.expiry_date),dL,r.quantity,r.commodities?.unit||'',u]})
+                  exportCsv(`expiry_${expUrgency}_${expPeriod}d.csv`, headers, csv)
+                }
+                return (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>{urgencyLabel} batches — by facility <span className="text-gray-500 font-normal">· {rows.length} {rows.length===1?'batch':'batches'}</span></CardTitle>
+                      <button onClick={download} disabled={rows.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5">↓ Download CSV</button>
+                    </CardHeader>
+                    {rows.length===0 ? <EmptyState message="No batches in this bucket ✓"/> : (
                       <div className="table-wrap"><table className="w-full text-sm">
                         <thead><tr className="border-b border-white/8 bg-white/2">
-                          {['Commodity','Category','Facilities','Batches','Total qty','Soonest expiry','Days left','Urgency'].map(h=>(
+                          {['Facility','LGA','Commodity','Category','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
                             <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                           ))}
                         </tr></thead>
-                        <tbody>{list.map(g=>{
-                          const dL=Math.round((g.soonest-today)/86400000)
-                          const u=dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+                        <tbody>{rows.map(r=>{
+                          const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
+                          const u=dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
                           return (
-                            <tr key={g.id} onClick={()=>setExpBatchComm({id:g.id,name:g.name,cat:g.cat})} className="border-b border-white/5 cursor-pointer hover:bg-white/5">
-                              <td className="px-4 py-3 font-medium text-blue-400 hover:text-blue-300">{g.name}<span className="text-gray-600 ml-1">›</span></td>
-                              <td className="px-4 py-3"><CatBadge>{g.cat}</CatBadge></td>
-                              <td className="px-4 py-3 text-gray-400">{g.facs.size}</td>
-                              <td className="px-4 py-3 text-gray-400">{g.batches}</td>
-                              <td className="px-4 py-3 font-mono text-sm text-gray-300">{g.qty} {g.unit}</td>
-                              <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(g.soonest.toISOString().slice(0,10))}</td>
-                              <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL}d</td>
+                            <tr key={`${r.facility_id}|${r.commodity_id}|${r.batch_number}|${r.expiry_date}`} className="border-b border-white/5 hover:bg-white/2">
+                              <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}</td>
+                              <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
+                              <td className="px-4 py-3 text-gray-200">{r.commodities?.name||'—'}</td>
+                              <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
+                              <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
+                              <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
+                              <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
+                              <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
                               <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
                             </tr>
                           )
                         })}</tbody>
                       </table></div>
-                      </>
-                    )
-                  })()
-                }
-              </Card>
+                    )}
+                  </Card>
+                )
+              })()}
             </>
           )}
         </>
