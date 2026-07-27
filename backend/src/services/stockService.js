@@ -179,7 +179,7 @@ export class StockService {
         { facility_id, commodity_id, location_type, site_name: site_name || null }))
     } catch { /* reconcile is best-effort — never block reading the lots */ }
     const { rows } = await query(
-      `select batch_number, expiry_date, quantity
+      `select id, batch_number, expiry_date, quantity
          from stock_lot
         where facility_id = $1 and commodity_id = $2 and location_type = $3
           and coalesce(site_name,'') = coalesce($4,'') and quantity > 0
