@@ -31,6 +31,23 @@ export function splitLots(lots, keepQty) {
   return { kept, rest }
 }
 
+// The authoritative on-hand quantity of a bin, from the real stock tables (the
+// numbers users see on Stock Levels). The lot ledger is meant to always sum to
+// this; when it has drifted behind (a path changed the aggregate without a matching
+// lot move, or a bin was never fully seeded), we trust this and top the ledger up.
+async function binSoh(exec, bin) {
+  if (bin.location_type === 'sdp') {
+    const { rows } = await exec(`select quantity from sdp_stock where facility_id=$1 and coalesce(sdp_name,'')=coalesce($2,'') and commodity_id=$3`, [bin.facility_id, bin.site_name || null, bin.commodity_id])
+    return rows[0]?.quantity || 0
+  }
+  if (bin.location_type === 'dsd') {
+    const { rows } = await exec(`select quantity from dsd_stock where facility_id=$1 and coalesce(dsd_site_name,'')=coalesce($2,'') and commodity_id=$3`, [bin.facility_id, bin.site_name || null, bin.commodity_id])
+    return rows[0]?.quantity || 0
+  }
+  const { rows } = await exec(`select quantity from stock where facility_id=$1 and commodity_id=$2 and location_type=$3`, [bin.facility_id, bin.commodity_id, bin.location_type])
+  return rows[0]?.quantity || 0
+}
+
 // The one place stock movements record their per-batch effect on the lot ledger
 // (stock_lot), kept in lockstep with each location's total quantity so the
 // invariant sum(lots) == quantity always holds. Every method takes the caller's
@@ -86,27 +103,46 @@ export class LotService {
 
     const today = ymd(new Date())
     const isExpired = l => { const e = ymd(l.expiry_date); return e != null && e < today }
-    const { rows } = await exec(
-      `select id, batch_number, expiry_date, quantity
-         from stock_lot
-        where facility_id=$1 and commodity_id=$2 and location_type=$3
-          and coalesce(site_name,'') = coalesce($4,'') and quantity > 0`,
-      [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
-    )
+    // Load the eligible pool: the picked batch only (if any); expired lots excluded
+    // when enforcing. FEFO order — soonest real expiry first, unknown-expiry last.
+    const loadPool = async () => {
+      const { rows } = await exec(
+        `select id, batch_number, expiry_date, quantity
+           from stock_lot
+          where facility_id=$1 and commodity_id=$2 and location_type=$3
+            and coalesce(site_name,'') = coalesce($4,'') and quantity > 0`,
+        [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
+      )
+      const total = rows.reduce((s, l) => s + l.quantity, 0)
+      let pool = batch != null ? rows.filter(l => (l.batch_number || '') === (batch || '')) : rows.slice()
+      if (enforce) pool = pool.filter(l => !isExpired(l))
+      pool.sort((a, b) => {
+        const ea = ymd(a.expiry_date), eb = ymd(b.expiry_date)
+        if (ea && eb) return ea < eb ? -1 : ea > eb ? 1 : 0
+        return ea ? -1 : eb ? 1 : 0
+      })
+      return { pool, total }
+    }
 
-    // Eligible pool: the picked batch only (if any); expired lots excluded when
-    // enforcing (never auto-dispensed — they stay for disposal via adjustment).
-    let pool = batch != null ? rows.filter(l => (l.batch_number || '') === (batch || '')) : rows.slice()
-    if (enforce) pool = pool.filter(l => !isExpired(l))
-    // FEFO: soonest real expiry first; unknown-expiry (null) last.
-    pool.sort((a, b) => {
-      const ea = ymd(a.expiry_date), eb = ymd(b.expiry_date)
-      if (ea && eb) return ea < eb ? -1 : ea > eb ? 1 : 0
-      return ea ? -1 : eb ? 1 : 0
-    })
+    let { pool, total } = await loadPool()
 
     if (enforce) {
-      const eligible = pool.reduce((s, l) => s + l.quantity, 0)
+      let eligible = pool.reduce((s, l) => s + l.quantity, 0)
+      // Self-heal a ledger that has drifted BEHIND the authoritative bin stock. The
+      // caller already decremented the aggregate by `need`, so the ledger's correct
+      // pre-debit total is (aggregate + need). If the pool can't cover `need` but the
+      // aggregate can, top the ledger up to match (unknown-expiry) and proceed — a
+      // lagging ledger must never block real stock. Only a genuine aggregate shortage
+      // (or a short pick of a specific batch) blocks. This restores sum(lots)==qty.
+      if (eligible < need && batch == null) {
+        const soh = await binSoh(exec, bin)
+        const topUp = Math.max(0, (soh + need) - total)
+        if (topUp > 0) {
+          await this.credit(exec, bin, { qty: topUp })
+          ;({ pool } = await loadPool())
+          eligible = pool.reduce((s, l) => s + l.quantity, 0)
+        }
+      }
       if (eligible < need) {
         const e = new Error(batch != null
           ? `Only ${eligible} of batch ${batch || '(unbatched)'} available to dispense (non-expired). Requested ${need}.`
@@ -131,6 +167,25 @@ export class LotService {
       [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
     )
     return { drawn, shortfall: need }
+  }
+
+  // Restore the invariant sum(lots) == authoritative bin stock. Used before the
+  // batch picker reads a bin (so it shows the right "N left") and as a repair for
+  // ledgers that drifted. Shortfall is topped up as an unknown-expiry lot; excess
+  // is trimmed FEFO. Returns the applied delta (0 when already in sync).
+  static async reconcile(exec, bin) {
+    const soh = await binSoh(exec, bin)
+    const { rows } = await exec(
+      `select coalesce(sum(quantity),0) t from stock_lot
+        where facility_id=$1 and commodity_id=$2 and location_type=$3
+          and coalesce(site_name,'') = coalesce($4,'')`,
+      [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
+    )
+    const ledger = Number(rows[0].t)
+    const diff = soh - ledger
+    if (diff > 0) await this.credit(exec, bin, { qty: diff })
+    else if (diff < 0) await this.debit(exec, bin, -diff)   // non-enforced FEFO trim
+    return diff
   }
 
   // Move qty between two bins in the same transaction, preserving batch/expiry:

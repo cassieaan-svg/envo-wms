@@ -172,6 +172,12 @@ export class StockService {
   // The on-hand lots of one bin (store / dispensary / a DSD or SDP site), from the
   // lot ledger, soonest-expiry first. Powers the dispense batch picker.
   static async getBinLots({ facility_id, commodity_id, location_type, site_name }) {
+    // Re-sync the ledger to the authoritative bin stock before showing it, so the
+    // picker's "N left" matches Stock Levels even if the ledger had drifted.
+    try {
+      await withTransaction(exec => LotService.reconcile(exec,
+        { facility_id, commodity_id, location_type, site_name: site_name || null }))
+    } catch { /* reconcile is best-effort — never block reading the lots */ }
     const { rows } = await query(
       `select batch_number, expiry_date, quantity
          from stock_lot
