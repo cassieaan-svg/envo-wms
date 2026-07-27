@@ -274,8 +274,14 @@ export function capExpiryBatchesToStock(batches, sohByComm) {
   const kept = []
   Object.entries(byComm).forEach(([cid, list]) => {
     let remaining = sohByComm[cid] || 0
-    // Fill latest-expiry batches first (they hold the remaining stock under FEFO).
-    const ordered = list.slice().sort((a, b) => new Date(b.expiry_date) - new Date(a.expiry_date))
+    // Expired batches can't be dispensed, so they physically remain — hold stock in
+    // them FIRST (otherwise the FEFO estimate treats them as consumed and hides
+    // them). The rest fills latest-expiry first, so the soonest-expiring non-expired
+    // batches read as consumed.
+    const _now = Date.now()
+    const _expd = x => new Date(x.expiry_date).getTime() < _now
+    const ordered = list.slice().sort((a, b) =>
+      (_expd(a) !== _expd(b)) ? (_expd(a) ? -1 : 1) : (new Date(b.expiry_date) - new Date(a.expiry_date)))
     ordered.forEach(b => {
       const received = Number(b.quantity) || 0
       const keep = Math.max(0, Math.min(received, remaining))
@@ -297,8 +303,14 @@ export function capExpiryBatchesToStockByFacility(batches, sohByFacComm) {
   const kept = []
   Object.entries(byKey).forEach(([key, list]) => {
     let remaining = sohByFacComm[key] || 0
-    // Fill latest-expiry batches first (they hold the remaining stock under FEFO).
-    const ordered = list.slice().sort((a, b) => new Date(b.expiry_date) - new Date(a.expiry_date))
+    // Expired batches can't be dispensed, so they physically remain — hold stock in
+    // them FIRST (otherwise the FEFO estimate treats them as consumed and hides
+    // them). The rest fills latest-expiry first, so the soonest-expiring non-expired
+    // batches read as consumed.
+    const _now = Date.now()
+    const _expd = x => new Date(x.expiry_date).getTime() < _now
+    const ordered = list.slice().sort((a, b) =>
+      (_expd(a) !== _expd(b)) ? (_expd(a) ? -1 : 1) : (new Date(b.expiry_date) - new Date(a.expiry_date)))
     ordered.forEach(b => {
       const received = Number(b.quantity) || 0
       const keep = Math.max(0, Math.min(received, remaining))

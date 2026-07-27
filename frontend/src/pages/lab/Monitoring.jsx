@@ -108,8 +108,10 @@ export function Monitoring() {
     }
 
     const all = await fetchAllPages(api.intake.history, {
+      // No lower bound on expiry: also surface batches that are ALREADY expired but
+      // still on hand (e.g. received expired) — they'd otherwise be invisible.
       ...scopeParams,
-      expiry_from: now.toISOString().split('T')[0], expiry_to: cutoff,
+      expiry_to: cutoff,
       has_quantity: true, section: commoditySection || undefined,
     })
 
@@ -215,7 +217,8 @@ export function Monitoring() {
   const expDays = r => (new Date(r.expiry_date)-today)/86400000
   const expBucketRows = b => (expiryData||[]).filter(r=>{
     const d=expDays(r)
-    if(b==='critical') return d<=30
+    if(b==='expired')  return d<0
+    if(b==='critical') return d>=0 && d<=30
     if(b==='warning')  return d>30 && d<=90
     if(b==='monitor')  return d>90
     return true
@@ -578,6 +581,8 @@ export function Monitoring() {
           {!expiryData ? <EmptyState message="Loading…"/> : (
             <>
               <MetricGrid>
+                <Metric label="Expired" value={expBucketRows('expired').length} color="red"
+                  onClick={isAdm?()=>setExpDrill(expDrill==='expired'?null:'expired'):undefined} active={expDrill==='expired'}/>
                 <Metric label="Critical (≤30d)" value={expBucketRows('critical').length} color="red"
                   onClick={isAdm?()=>setExpDrill(expDrill==='critical'?null:'critical'):undefined} active={expDrill==='critical'}/>
                 <Metric label="Warning (≤90d)" value={expBucketRows('warning').length} color="amber"
@@ -597,7 +602,7 @@ export function Monitoring() {
                 const aggBy = keyFn => { const m={}; rows.forEach(r=>{const k=keyFn(r); if(k==null)return; m[k]=(m[k]||0)+r.quantity}); return Object.entries(m).sort((a,b)=>b[1]-a[1]) }
                 const byLga = aggBy(r=>facMeta[r.facility_id]?.lga||'—')
                 const byFac = aggBy(r=>r.facility_id).map(([id,v])=>({id,v,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
-                const labels={critical:'Critical (≤30d)',warning:'Warning (≤90d)',monitor:'Monitor (>90d)',total:'All expiring batches'}
+                const labels={expired:'Expired',critical:'Critical (≤30d)',warning:'Warning (≤90d)',monitor:'Monitor (>90d)',total:'All expiring batches'}
                 return (
                   <Card>
                     <CardHeader>
@@ -677,12 +682,12 @@ export function Monitoring() {
                       </tr></thead>
                       <tbody>{expiryData.map(r=>{
                         const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
-                        const u=dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+                        const u=dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
                         return (
                           <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
                             <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
                             <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
-                            <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL}d</td>
+                            <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
                             <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
                             <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
                             <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
@@ -701,7 +706,7 @@ export function Monitoring() {
                             <button onClick={()=>{
                               const base=(expBatchComm.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
                               const headers=['Facility','LGA','Batch','Expiry date','Days left','Qty','Unit','Urgency']
-                              const rows=batches.map(r=>{const dL=Math.round((new Date(r.expiry_date)-today)/86400000);const u=dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [facMeta[r.facility_id]?.name||'—',facMeta[r.facility_id]?.lga||'—',r.batch_number||'',fmtDate(r.expiry_date),dL,r.quantity,r.commodities?.unit||'',u]})
+                              const rows=batches.map(r=>{const dL=Math.round((new Date(r.expiry_date)-today)/86400000);const u=dL<0?'Expired':dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [facMeta[r.facility_id]?.name||'—',facMeta[r.facility_id]?.lga||'—',r.batch_number||'',fmtDate(r.expiry_date),dL,r.quantity,r.commodities?.unit||'',u]})
                               exportCsv(`${base}_expiring-batches.csv`, headers, rows)
                             }} disabled={batches.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50">↓ Download CSV</button>
                             <button onClick={()=>setExpBatchComm(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Back to commodities</button>
@@ -715,14 +720,14 @@ export function Monitoring() {
                           </tr></thead>
                           <tbody>{batches.map(r=>{
                             const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
-                            const u=dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+                            const u=dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
                             return (
                               <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
                                 <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}</td>
                                 <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
                                 <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
                                 <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
-                                <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL}d</td>
+                                <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
                                 <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
                                 <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
                               </tr>

@@ -177,7 +177,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     const todayS = today.toISOString().split('T')[0]
     const data = await api.intake.history({
       facility_id: fid, commodity_ids: commIds,
-      expiry_from: todayS, expiry_to: cutoff, has_quantity: true,
+      expiry_to: cutoff, has_quantity: true,   // no lower bound: include already-expired stock still on hand
       section: commoditySection || undefined,
     }).catch(() => [])
 
@@ -266,6 +266,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const today = new Date()
   const urgency = r => {
     const d=(new Date(r.expiry_date)-today)/86400000
+    if(d<0)    return {label:'Expired', color:'text-red-500',bg:'bg-red-500/15',border:'border-red-500/30'}
     if(d<=30)  return {label:'Critical',color:'text-red-400',bg:'bg-red-500/10',border:'border-red-500/20'}
     if(d<=90)  return {label:'Warning', color:'text-amber-400',bg:'bg-amber-500/10',border:'border-amber-500/20'}
     return            {label:'Monitor', color:'text-blue-400',bg:'bg-blue-500/10',border:'border-blue-500/20'}
@@ -366,7 +367,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                     <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
-                    <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.color}`}>{dL}d</td>
+                    <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.color}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
                     <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
                     <td className="px-4 py-3"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${u.bg} ${u.color} ${u.border}`}>{u.label}</span></td>
                   </tr>
