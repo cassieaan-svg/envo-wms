@@ -336,8 +336,13 @@ export function buildCrrfCsv(rows, title, stockMap = {}) {
 // `allFacilities` (optional [{name, lga}]): when provided, EVERY listed facility
 // gets a row even with no activity in the period — a silent facility shows its
 // stock balances (Ending = Beginning, zero movement) for commodities it holds.
-// Omit it for the default "active facilities only" export.
-export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {}, allFacilities = null) {
+// `allCommodities` (optional [name]): when provided, EVERY commodity gets its own
+// column block even if nothing touched it, so the grid is complete. In this
+// "all" mode a commodity with no activity shows zeros (its stock as Begin=End
+// where the facility holds it) instead of blanks.
+// Omit both for the default "active facilities/commodities only" export.
+export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {}, allFacilities = null, allCommodities = null) {
+  const allMode = Boolean(allFacilities || allCommodities)
   const LOSS_REASONS = ['Expired', 'Damaged', 'Lost / Stolen']
   const agg = {}   // facilityName → commodityName → tallies
   const ensure = (fac, commodity, category, unit) => {
@@ -377,15 +382,22 @@ export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {
   // (the CRRF columns), plus a per-commodity totals row.
   const commodities = new Set()
   Object.values(agg).forEach(byComm => Object.keys(byComm).forEach(c => commodities.add(c)))
+  if (Array.isArray(allCommodities)) allCommodities.forEach(c => { if (c) commodities.add(c) })
   const comms = [...commodities].sort((a, b) => a.localeCompare(b))
   const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
   const SUB = ['Beginning Balance', 'Quantity Received', 'Quantity Consumed', 'Adj Positive (+)', 'Adj Negative (-)', 'Losses', 'Ending Balance']
 
-  const header = ['LGA', 'Facility']
-  comms.forEach(c => SUB.forEach(s => header.push(`${c}, ${s}`)))
+  // Two-row grouped header: the commodity name spans its seven sub-columns (name
+  // in the first cell of the block, the rest blank), with the CRRF sub-headers on
+  // the row below — so a spreadsheet shows the commodity as a group over its block.
+  const groupRow = ['LGA', 'Facility']
+  comms.forEach(c => { groupRow.push(c); for (let i = 1; i < SUB.length; i++) groupRow.push('') })
+  const subRow = ['', '']
+  comms.forEach(() => SUB.forEach(s => subRow.push(s)))
 
   let csv = `${title}\r\n`
-  csv += header.map(esc).join(',') + '\r\n'
+  csv += groupRow.map(esc).join(',') + '\r\n'
+  csv += subRow.map(esc).join(',') + '\r\n'
 
   const facs = Object.keys(agg).sort((a, b) => (lgaByName[a] || '').localeCompare(lgaByName[b] || '') || a.localeCompare(b))
   const totals = {}
@@ -399,11 +411,14 @@ export function buildCrrfByFacilityCsv(rows, title, facStock = {}, lgaByName = {
       const E = stock[c]
       const hasE = E != null
       if (!r) {
-        // No activity for this commodity. In "all facilities" mode, still show the
-        // ending balance (= beginning, no movement) where the facility holds stock.
-        if (allFacilities && hasE) {
+        // No activity for this commodity. In "all" mode show the ending balance
+        // (= beginning, no movement) where the facility holds stock, otherwise zeros
+        // so every commodity column is filled; blanks only in the default export.
+        if (allMode && hasE) {
           cells.push(E, 0, 0, 0, 0, 0, E)
           totals[c].B += E; totals[c].E += E
+        } else if (allMode) {
+          cells.push(0, 0, 0, 0, 0, 0, 0)
         } else {
           cells.push('', '', '', '', '', '', '')
         }

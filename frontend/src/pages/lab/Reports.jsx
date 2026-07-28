@@ -158,9 +158,11 @@ export function Reports({ embedded = false } = {}) {
             .filter(f => !(scopeIds && scopeIds.length) || scopeIds.includes(f.id))
             .map(f => ({ name: f.name, lga: f.lga || '' }))
         : null
+      // All-facilities export also lists EVERY commodity as a column, even unused ones.
+      const allComms = (includeAll && category === 'all') ? store.allCommodities.map(c => c.name) : null
       const csv = category === 'dispense'
         ? buildConsumptionByFacilityCsv(rows, title, facStock, lgaByName)
-        : buildCrrfByFacilityCsv(rows, title, facStock, lgaByName, allFacs)
+        : buildCrrfByFacilityCsv(rows, title, facStock, lgaByName, allFacs, allComms)
       downloadCsv(csv, `${tab}-${category}-by-facility${allFacs ? '-all-facilities' : ''}-${summary.label}.csv`)
       return
     }
