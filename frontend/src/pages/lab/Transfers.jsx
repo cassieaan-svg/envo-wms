@@ -11,6 +11,7 @@ import { BatchSelect } from '../../components/ui/BatchSelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning } from '../../utils/helpers'
+import { TransferLotInfo, parseLotFromNotes } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
 
@@ -1060,7 +1061,8 @@ export function Transfers() {
                           </div>
                           <div className="text-xs text-gray-600 mt-1">Initiated {fmtDate(t.initiated_at)} by {t.initiated_by || '—'}</div>
                           {t.notes?.match(/\[Reviewed by: ([^\]]+)\]/)?.[1] && <div className="text-xs text-gray-500 mt-0.5">Reviewed by admin: <span className="text-purple-400">{t.notes.match(/\[Reviewed by: ([^\]]+)\]/)[1]}</span></div>}
-                          {t.notes?.replace(/\[Reviewed by: [^\]]+\]/g, '').trim() && <div className="text-xs text-gray-500 mt-1">Note: {t.notes.replace(/\[Reviewed by: [^\]]+\]/g, '').trim()}</div>}
+                          {t.notes?.replace(/\[(Reviewed by|Approved by|Carrier|Expiry|Batch): [^\]]*\]/g, '').trim() && <div className="text-xs text-gray-500 mt-1">Note: {t.notes.replace(/\[(Reviewed by|Approved by|Carrier|Expiry|Batch): [^\]]*\]/g, '').trim()}</div>}
+                          <TransferLotInfo notes={t.notes} />
                         </div>
                         <div className="flex gap-2 items-center flex-wrap">
                           {t.status === 'pending' && needsAssignment && isAdminUser && (
@@ -1178,16 +1180,23 @@ export function Transfers() {
                         </div>
                       )}
                       {acceptingId === t.id && (
-                        <div className="mt-3 p-3 bg-green-500/5 border border-green-500/20 rounded-lg flex items-end gap-3 flex-wrap">
-                          <div className="flex-1 min-w-[180px]">
-                            <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Receiver name *</label>
-                            <input autoFocus type="text" value={acceptReceiverName} onChange={e => setAcceptReceiverName(e.target.value)}
-                              placeholder="Staff name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-green-500" />
+                        <div className="mt-3 p-3 bg-green-500/5 border border-green-500/20 rounded-lg space-y-3">
+                          {parseLotFromNotes(t.notes)?.isExpired && (
+                            <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
+                              ⚠ This delivery is <strong>expired</strong> (expiry {fmtDate(parseLotFromNotes(t.notes).expiry)}). Accepting it will bring expired stock into your store — dispute it instead unless you have a reason to keep it.
+                            </div>
+                          )}
+                          <div className="flex items-end gap-3 flex-wrap">
+                            <div className="flex-1 min-w-[180px]">
+                              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Receiver name *</label>
+                              <input autoFocus type="text" value={acceptReceiverName} onChange={e => setAcceptReceiverName(e.target.value)}
+                                placeholder="Staff name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-green-500" />
+                            </div>
+                            <Button variant="success" size="sm" disabled={acceptLoading} onClick={() => confirmAcceptTransfer(t)}>
+                              {acceptLoading ? 'Processing…' : 'Confirm accept'}
+                            </Button>
+                            <Button variant="default" size="sm" onClick={() => { setAcceptingId(null); setAcceptReceiverName('') }}>Cancel</Button>
                           </div>
-                          <Button variant="success" size="sm" disabled={acceptLoading} onClick={() => confirmAcceptTransfer(t)}>
-                            {acceptLoading ? 'Processing…' : 'Confirm accept'}
-                          </Button>
-                          <Button variant="default" size="sm" onClick={() => { setAcceptingId(null); setAcceptReceiverName('') }}>Cancel</Button>
                         </div>
                       )}
                       {disputingId === t.id && disputePanel(t)}
@@ -1208,7 +1217,7 @@ export function Transfers() {
               {myRequests.length === 0 ? <EmptyState message="No pending redistribution requests ✓" /> : (
                 myRequests.map(r => {
                   const reviewedBy = r.notes?.match(/\[Reviewed by: ([^\]]+)\]/)?.[1]
-                  const cleanNotes = r.notes?.replace(/\[Reviewed by: [^\]]+\]/g, '').trim()
+                  const cleanNotes = r.notes?.replace(/\[(Reviewed by|Approved by|Carrier|Expiry|Batch): [^\]]*\]/g, '').trim()
                   return (
                   <div key={r.id} className="px-5 py-4 border-b border-white/8 last:border-0">
                     <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -1224,6 +1233,7 @@ export function Transfers() {
                         <div className="text-xs text-gray-600 mt-1">Requested {fmtDate(r.initiated_at)} by {r.initiated_by || '—'}</div>
                         {reviewedBy && <div className="text-xs text-gray-500 mt-0.5">Reviewed by admin: <span className="text-purple-400">{reviewedBy}</span></div>}
                         {cleanNotes && <div className="text-xs text-gray-500 mt-1">{cleanNotes}</div>}
+                        <TransferLotInfo notes={r.notes} />
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         {r.status === 'in_transit' ? (
@@ -1246,16 +1256,23 @@ export function Transfers() {
                       </div>
                     </div>
                     {acceptingId === r.id && (
-                      <div className="mt-3 p-3 bg-green-500/5 border border-green-500/20 rounded-lg flex items-end gap-3 flex-wrap">
-                        <div className="flex-1 min-w-[180px]">
-                          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Receiver name *</label>
-                          <input autoFocus type="text" value={acceptReceiverName} onChange={e => setAcceptReceiverName(e.target.value)}
-                            placeholder="Staff name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-green-500" />
+                      <div className="mt-3 p-3 bg-green-500/5 border border-green-500/20 rounded-lg space-y-3">
+                        {parseLotFromNotes(r.notes)?.isExpired && (
+                          <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
+                            ⚠ This delivery is <strong>expired</strong> (expiry {fmtDate(parseLotFromNotes(r.notes).expiry)}). Accepting it will bring expired stock into your store — dispute it instead unless you have a reason to keep it.
+                          </div>
+                        )}
+                        <div className="flex items-end gap-3 flex-wrap">
+                          <div className="flex-1 min-w-[180px]">
+                            <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Receiver name *</label>
+                            <input autoFocus type="text" value={acceptReceiverName} onChange={e => setAcceptReceiverName(e.target.value)}
+                              placeholder="Staff name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-green-500" />
+                          </div>
+                          <Button variant="success" size="sm" disabled={acceptLoading} onClick={() => confirmAcceptTransfer(r)}>
+                            {acceptLoading ? 'Processing…' : 'Confirm accept'}
+                          </Button>
+                          <Button variant="default" size="sm" onClick={() => { setAcceptingId(null); setAcceptReceiverName('') }}>Cancel</Button>
                         </div>
-                        <Button variant="success" size="sm" disabled={acceptLoading} onClick={() => confirmAcceptTransfer(r)}>
-                          {acceptLoading ? 'Processing…' : 'Confirm accept'}
-                        </Button>
-                        <Button variant="default" size="sm" onClick={() => { setAcceptingId(null); setAcceptReceiverName('') }}>Cancel</Button>
                       </div>
                     )}
                     {disputingId === r.id && disputePanel(r)}
