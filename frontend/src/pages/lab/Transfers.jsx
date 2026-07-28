@@ -11,7 +11,7 @@ import { BatchSelect } from '../../components/ui/BatchSelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning } from '../../utils/helpers'
-import { TransferLotInfo, parseLotFromNotes } from '../../components/TransferLotInfo'
+import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
 
@@ -1062,7 +1062,7 @@ export function Transfers() {
                           <div className="text-xs text-gray-600 mt-1">Initiated {fmtDate(t.initiated_at)} by {t.initiated_by || '—'}</div>
                           {t.notes?.match(/\[Reviewed by: ([^\]]+)\]/)?.[1] && <div className="text-xs text-gray-500 mt-0.5">Reviewed by admin: <span className="text-purple-400">{t.notes.match(/\[Reviewed by: ([^\]]+)\]/)[1]}</span></div>}
                           {t.notes?.replace(/\[(Reviewed by|Approved by|Carrier|Expiry|Batch): [^\]]*\]/g, '').trim() && <div className="text-xs text-gray-500 mt-1">Note: {t.notes.replace(/\[(Reviewed by|Approved by|Carrier|Expiry|Batch): [^\]]*\]/g, '').trim()}</div>}
-                          <TransferLotInfo notes={t.notes} />
+                          <TransferLotInfo record={t} />
                         </div>
                         <div className="flex gap-2 items-center flex-wrap">
                           {t.status === 'pending' && needsAssignment && isAdminUser && (
@@ -1181,9 +1181,9 @@ export function Transfers() {
                       )}
                       {acceptingId === t.id && (
                         <div className="mt-3 p-3 bg-green-500/5 border border-green-500/20 rounded-lg space-y-3">
-                          {parseLotFromNotes(t.notes)?.isExpired && (
+                          {hasExpiredLot(t) && (
                             <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
-                              ⚠ This delivery is <strong>expired</strong> (expiry {fmtDate(parseLotFromNotes(t.notes).expiry)}). Accepting it will bring expired stock into your store — dispute it instead unless you have a reason to keep it.
+                              ⚠ This delivery is <strong>expired</strong> (expiry {fmtDate(earliestExpiredExpiry(t))}). Accepting it will bring expired stock into your store — dispute it instead unless you have a reason to keep it.
                             </div>
                           )}
                           <div className="flex items-end gap-3 flex-wrap">
@@ -1233,7 +1233,7 @@ export function Transfers() {
                         <div className="text-xs text-gray-600 mt-1">Requested {fmtDate(r.initiated_at)} by {r.initiated_by || '—'}</div>
                         {reviewedBy && <div className="text-xs text-gray-500 mt-0.5">Reviewed by admin: <span className="text-purple-400">{reviewedBy}</span></div>}
                         {cleanNotes && <div className="text-xs text-gray-500 mt-1">{cleanNotes}</div>}
-                        <TransferLotInfo notes={r.notes} />
+                        <TransferLotInfo record={r} />
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         {r.status === 'in_transit' ? (
@@ -1257,9 +1257,9 @@ export function Transfers() {
                     </div>
                     {acceptingId === r.id && (
                       <div className="mt-3 p-3 bg-green-500/5 border border-green-500/20 rounded-lg space-y-3">
-                        {parseLotFromNotes(r.notes)?.isExpired && (
+                        {hasExpiredLot(r) && (
                           <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
-                            ⚠ This delivery is <strong>expired</strong> (expiry {fmtDate(parseLotFromNotes(r.notes).expiry)}). Accepting it will bring expired stock into your store — dispute it instead unless you have a reason to keep it.
+                            ⚠ This delivery is <strong>expired</strong> (expiry {fmtDate(earliestExpiredExpiry(r))}). Accepting it will bring expired stock into your store — dispute it instead unless you have a reason to keep it.
                           </div>
                         )}
                         <div className="flex items-end gap-3 flex-wrap">

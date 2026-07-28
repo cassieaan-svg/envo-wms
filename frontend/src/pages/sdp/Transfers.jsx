@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { fmtDate, rowForSite } from '../../utils/helpers'
+import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 function SubTab({ id, current, onChange, label, badge = 0 }) {
   return (
@@ -368,6 +369,7 @@ export function Transfers() {
                             <span className="font-medium text-gray-200">{t.quantity}</span> dispatched by store manager
                           </div>
                           <div className="text-xs text-gray-600 mt-1">Submitted {fmtDate(t.initiated_at)} by {t.initiated_by || '—'}</div>
+                          <TransferLotInfo record={t} />
                         </div>
                         <div className="flex gap-2 flex-wrap">
                           {confirmingId === t.id ? (
@@ -390,6 +392,11 @@ export function Transfers() {
                           )}
                         </div>
                       </div>
+                      {confirmingId === t.id && hasExpiredLot(t) && (
+                        <div className="mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
+                          ⚠ This delivery includes <strong>expired</strong> stock (expiry {fmtDate(earliestExpiredExpiry(t))}). Confirming receipt will bring expired stock into your site — dispute it instead unless you have a reason to keep it.
+                        </div>
+                      )}
                     </div>
                   ))}
                 </Card>
