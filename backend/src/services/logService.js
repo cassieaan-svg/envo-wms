@@ -146,7 +146,20 @@ export class LogService {
    *
    * The aggregate `stock` total is reconciled separately by the client.
    */
-  static async _syncLotsOnEdit(exec, key, { oldBatch, oldExpiry, oldQty, newBatch, newExpiry, newQty }) {
+  static async _syncLotsOnEdit(exec, key, args) {
+    // 1. Best-effort relabel of every bin (incl. store) to the corrected identity,
+    //    plus the quantity delta. Fixes the common cases and is all that survives
+    //    when the store can't be cleanly rebuilt below.
+    await this._relabelAndDelta(exec, key, args)
+    // 2. Authoritative pass: rebuild the STORE bin straight from the records so an
+    //    edit's batch, expiry AND quantity always surface on Stock Levels — even when
+    //    the ledger drifted so far that step 1 had nothing to match (e.g. a batch was
+    //    renamed on a record earlier, orphaning its lot). No-op when it can't be
+    //    reconciled to the store's authoritative SOH, leaving step 1's result intact.
+    await this._rebuildStoreFromRecords(exec, key)
+  }
+
+  static async _relabelAndDelta(exec, key, { oldBatch, oldExpiry, oldQty, newBatch, newExpiry, newQty }) {
     const oldB = oldBatch || null, newB = newBatch || null
     const oldE = ymd(oldExpiry), newE = ymd(newExpiry)
     const oQ = Math.max(0, Math.round(Number(oldQty)) || 0)
@@ -289,6 +302,83 @@ export class LogService {
       await LotService.credit(exec, bin, { batch: toB, expiry: toE, qty: lot.quantity, section: lot.section })
       await exec('delete from stock_lot where id=$1', [lot.id])
     }
+  }
+
+  /**
+   * Reconstruct the STORE bin's per-batch ledger straight from the authoritative
+   * records, so an activity-log edit's batch / expiry / quantity all surface on Stock
+   * Levels — no matter how far the ledger had drifted (a renamed batch, a stale
+   * expiry, a pre-fix edit). The store's true composition is:
+   *
+   *     what the records credited   (intakes + Increase adjustments)
+   *   − what the records removed     (Decrease adjustments)
+   *   − what now lives in other bins (dispensary / DSD / SDP lots)
+   *
+   * grouped by (batch, expiry). We rebuild to that ONLY when it reconciles exactly to
+   * the store's authoritative SOH (the `stock` aggregate) and no identity goes
+   * negative — so it can never invent or drop stock. When it can't reconcile (an
+   * untracked outflow, e.g. an old batch-less store dispense), it changes nothing and
+   * returns false, leaving the caller's best-effort relabel in place.
+   */
+  static async _rebuildStoreFromRecords(exec, { facility_id, commodity_id }) {
+    const p = [facility_id, commodity_id]
+    const { rows: sohRows } = await exec(
+      `select quantity from stock where facility_id=$1 and commodity_id=$2 and location_type='store'`, p)
+    const soh = sohRows[0]?.quantity || 0
+
+    // Net records by (batch, expiry): credits positive, Decrease adjustments negative.
+    const { rows: recs } = await exec(`
+      select coalesce(nullif(btrim(coalesce(batch_number,'')),''),'') batch,
+             to_char(expiry_date,'YYYY-MM-DD') exp, sum(q)::int qty
+        from (
+          select batch_number, expiry_date, quantity q from intake_log
+            where facility_id=$1 and commodity_id=$2
+          union all
+          select batch_number, expiry_date, quantity q from stock_adjustment_log
+            where facility_id=$1 and commodity_id=$2 and adjustment_type='Increase'
+          union all
+          select batch_number, expiry_date, -quantity q from stock_adjustment_log
+            where facility_id=$1 and commodity_id=$2 and adjustment_type='Decrease'
+        ) c group by 1, 2`, p)
+
+    // What currently lives in the non-store bins, by (batch, expiry).
+    const { rows: other } = await exec(`
+      select coalesce(nullif(btrim(coalesce(batch_number,'')),''),'') batch,
+             to_char(expiry_date,'YYYY-MM-DD') exp, sum(quantity)::int qty
+        from stock_lot
+       where facility_id=$1 and commodity_id=$2 and location_type <> 'store' and quantity > 0
+       group by 1, 2`, p)
+
+    // target store = records − other bins, per identity.
+    const map = new Map()
+    const mkey = (b, e) => `${b}|${e || ''}`
+    for (const r of recs)  map.set(mkey(r.batch, r.exp), (map.get(mkey(r.batch, r.exp)) || 0) + r.qty)
+    for (const o of other) map.set(mkey(o.batch, o.exp), (map.get(mkey(o.batch, o.exp)) || 0) - o.qty)
+
+    const target = []
+    let sum = 0
+    for (const [k, qty] of map) {
+      if (qty < 0) return false          // other bins hold more of an identity than records credit — inconsistent
+      if (qty === 0) continue
+      const [batch, exp] = k.split('|')
+      target.push({ batch: batch || null, exp: exp || null, qty })
+      sum += qty
+    }
+    if (sum !== soh) return false         // can't reconcile to authoritative SOH — leave the ledger as-is
+
+    // Carry over the section the store lots use (one per commodity) before we drop them.
+    const { rows: secRows } = await exec(
+      `select distinct section from stock_lot
+         where facility_id=$1 and commodity_id=$2 and location_type='store'
+           and coalesce(site_name,'')='' and section is not null`, p)
+    const section = secRows.length === 1 ? secRows[0].section : null
+
+    await exec(
+      `delete from stock_lot where facility_id=$1 and commodity_id=$2
+         and location_type='store' and coalesce(site_name,'')=''`, p)
+    const bin = { facility_id, commodity_id, location_type: 'store', site_name: null }
+    for (const t of target) await LotService.credit(exec, bin, { batch: t.batch, expiry: t.exp, qty: t.qty, section })
+    return true
   }
 
   /**
