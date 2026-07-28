@@ -40,6 +40,17 @@ export const validators = {
 
   isValidISODate: (dateStr) => /^\d{4}-\d{2}-\d{2}$/.test(dateStr),
 
+  // Expiry at intake must be a REAL FUTURE date — you can't receive already-expired
+  // stock, and isValidISODate only checks the FORMAT so a fumbled "0001-01-01"
+  // slips through. Valid when the date is today or later and within a sane ceiling
+  // (rejects past dates and absurd far-future years like 9999).
+  isPlausibleExpiry: (dateStr) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false
+    const today = new Date().toISOString().slice(0, 10)
+    const maxYear = new Date().getUTCFullYear() + 30
+    return dateStr >= today && parseInt(dateStr.slice(0, 4), 10) <= maxYear
+  },
+
   isValidLocationTypes: (type) => ['store', 'dispensary'].includes(type),
 
   isValidSection: (section) => ['pharmacy', 'lab'].includes(section),

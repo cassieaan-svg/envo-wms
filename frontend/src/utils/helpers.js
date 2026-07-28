@@ -7,6 +7,9 @@ export function fmtDate(d) {
   if (!d) return '—'
   const dt = new Date(d)
   if (isNaN(dt)) return '—'
+  // A pre-1900 date is the "no expiry recorded" sentinel (e.g. 0001-01-01 from the
+  // baseline seed), not a real date — show it as unknown, matching the lot ledger.
+  if (dt.getUTCFullYear() < 1900) return '—'
   return dt.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric', timeZone: LAGOS })
 }
 
@@ -19,6 +22,27 @@ export function fmtDateTime(iso) {
 
 export function todayLagos() {
   return new Date().toLocaleDateString('en-CA', { timeZone: LAGOS })
+}
+
+// Expiry entered at intake must be a REAL FUTURE date: you can't receive stock
+// that's already expired, and a `<input type="date">` otherwise lets a fumbled
+// year (e.g. "0001-01-01") through the non-empty "required" check. Valid when the
+// date is today or later and within a sane ceiling (rejects both past dates and
+// absurd far-future years like 9999). Keep in sync with the backend's
+// validators.isPlausibleExpiry.
+export function isPlausibleExpiry(d) {
+  if (!d) return false
+  const s = (typeof d === 'string' ? d : new Date(d).toISOString()).slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const maxYear = new Date().getFullYear() + 30
+  return s >= todayLagos() && Number(s.slice(0, 4)) <= maxYear
+}
+
+// Min/max bounds for an expiry date input — picker guardrails matching
+// isPlausibleExpiry: no past dates (min = today), no absurd future year.
+export function expiryDateBounds() {
+  const now = new Date().getFullYear()
+  return { min: todayLagos(), max: `${now + 30}-12-31` }
 }
 
 // Timestamp to store for a user-dated entry (intake / consumption). When the

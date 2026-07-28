@@ -32,11 +32,13 @@ router.post('/', async (req, res) => {
       section
     } = req.body
 
-    // Validate required fields
-    if (!facility_id || !commodity_id || quantity === undefined || !received_by) {
+    // Validate required fields. batch_number and expiry_date are required here
+    // too (not just in the form): an intake with no lot/expiry can't be expiry-
+    // checked, and this is the boundary a direct API/import call goes through.
+    if (!facility_id || !commodity_id || quantity === undefined || !received_by || !batch_number || !expiry_date) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: facility_id, commodity_id, quantity, received_by',
+        error: 'Missing required fields: facility_id, commodity_id, quantity, received_by, batch_number, expiry_date',
         code: 'MISSING_FIELDS'
       })
     }
@@ -75,9 +77,13 @@ router.post('/', async (req, res) => {
       return sendValidationError(res, 'received_at must be a valid date', 'received_at')
     }
 
-    // Validate expiry_date if provided
-    if (expiry_date && !validators.isValidISODate(expiry_date)) {
+    // Validate expiry_date: correct format AND a plausible year (rejects a fumbled
+    // "0001-01-01" the date picker can produce, which format-only checks let pass).
+    if (!validators.isValidISODate(expiry_date)) {
       return sendValidationError(res, 'expiry_date must be in YYYY-MM-DD format', 'expiry_date')
+    }
+    if (!validators.isPlausibleExpiry(expiry_date)) {
+      return sendValidationError(res, 'expiry_date must be in the future — cannot receive already-expired stock', 'expiry_date')
     }
 
     const intake = await LogService.recordIntake({

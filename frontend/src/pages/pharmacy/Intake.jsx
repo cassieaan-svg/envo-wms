@@ -9,7 +9,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, SECTION_CATEGORIES, todayLagos, entryTimestamp } from '../../utils/helpers'
+import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, SECTION_CATEGORIES, todayLagos, entryTimestamp, isPlausibleExpiry, expiryDateBounds } from '../../utils/helpers'
 
 export function Intake() {
   const store = useAppStore()
@@ -93,6 +93,7 @@ export function Intake() {
     if (supplier === 'Other' && !supplierOther.trim()) { setMsg({type:'error',text:'Specify the other supplier.'}); return }
     if (!batch)      { setMsg({type:'error',text:'Batch / lot number is required.'}); return }
     if (!expiry)     { setMsg({type:'error',text:'Expiry date is required.'}); return }
+    if (!isPlausibleExpiry(expiry)) { setMsg({type:'error',text:'Expiry date must be in the future — you can\'t receive already-expired stock.'}); return }
     if (!receivedBy) { setMsg({type:'error',text:'Received by is required.'}); return }
     if (!fid)        { setMsg({type:'error',text:'No facility assigned.'}); return }
 
@@ -197,7 +198,7 @@ export function Intake() {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date *</label>
-                <input type="date" value={expiry} onChange={e=>setExpiry(e.target.value)} required className={inputCls}/>
+                <input type="date" value={expiry} min={expiryDateBounds().min} max={expiryDateBounds().max} onChange={e=>setExpiry(e.target.value)} required className={inputCls}/>
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Delivery note ref</label>
