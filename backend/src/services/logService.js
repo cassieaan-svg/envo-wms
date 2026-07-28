@@ -1,6 +1,6 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
-import { LotService } from './lotService.js'
+import { LotService, ymd } from './lotService.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -84,11 +84,20 @@ export class LogService {
     return rows[0] || null
   }
 
-  /** Metadata-only update of a log row (no stock side-effects). Whitelisted fields. */
+  /**
+   * Update a log row's whitelisted fields, and — for records that credited a
+   * specific STORE lot (an intake or an Increase adjustment) — mirror any
+   * batch/expiry/quantity change onto the lot ledger so the Monitoring expiry
+   * view stays in step. Dispense and Decrease adjustments debit FEFO and carry no
+   * lot identity, so their edits stay metadata-only. Runs in one transaction.
+   */
   static async updateLog(type, id, fields = {}) {
     const table = LOG_TABLES[type]
     const allowed = LOG_EDIT_FIELDS[type]
     if (!table) throw new Error(`Unknown log type: ${type}`)
+
+    const old = await this.getLogRow(type, id)
+    if (!old) return null
 
     const sets = []
     const params = [id]
@@ -100,8 +109,72 @@ export class LogService {
     }
     if (!sets.length) throw new Error('No updatable fields provided')
 
-    const { rows } = await query(`update ${table} set ${sets.join(', ')} where id = $1 returning *`, params)
-    return rows[0] || null
+    return await withTransaction(async exec => {
+      const { rows } = await exec(`update ${table} set ${sets.join(', ')} where id = $1 returning *`, params)
+      const updated = rows[0] || null
+
+      const isStoreCredit = type === 'intake' || (type === 'adjustment' && old.adjustment_type === 'Increase')
+      if (updated && isStoreCredit) {
+        const bin = { facility_id: old.facility_id, commodity_id: old.commodity_id, location_type: 'store', site_name: null }
+        await this._syncStoreLotOnEdit(exec, bin, {
+          oldBatch: old.batch_number,   oldExpiry: old.expiry_date, oldQty: old.quantity,
+          newBatch: updated.batch_number, newExpiry: updated.expiry_date, newQty: updated.quantity,
+        })
+      }
+      return updated
+    })
+  }
+
+  /**
+   * Mirror an intake/Increase-adjustment edit onto the STORE lot ledger. The
+   * record originally credited `oldQty` units to the lot (oldBatch, oldExpiry).
+   * We (1) relabel the still-on-hand portion of that lot to the corrected
+   * (newBatch, newExpiry) — moving min(oldQty, what remains), so stock that has
+   * since been dispensed or moved is never over-debited — and (2) apply the
+   * quantity delta on the corrected identity so the ledger tracks the edit.
+   * The aggregate `stock` total is reconciled separately by the client, matching
+   * the existing edit flow; this only keeps the per-batch ledger honest.
+   */
+  static async _syncStoreLotOnEdit(exec, bin, { oldBatch, oldExpiry, oldQty, newBatch, newExpiry, newQty }) {
+    const oldB = oldBatch || null, newB = newBatch || null
+    const oldE = ymd(oldExpiry), newE = ymd(newExpiry)
+    const oQ = Math.max(0, Math.round(Number(oldQty)) || 0)
+    const nQ = Math.max(0, Math.round(Number(newQty)) || 0)
+    const identityChanged = (oldB || '') !== (newB || '') || (oldE || '') !== (newE || '')
+
+    if (identityChanged && oQ > 0) {
+      const { rows } = await exec(
+        `select id, quantity from stock_lot
+          where facility_id=$1 and commodity_id=$2 and location_type=$3
+            and coalesce(site_name,'')=coalesce($4,'')
+            and coalesce(batch_number,'')=coalesce($5,'')
+            and coalesce(expiry_date,'0001-01-01'::date)=coalesce($6::date,'0001-01-01'::date)
+          order by id`,
+        [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null, oldB, oldE]
+      )
+      let need = Math.min(oQ, rows.reduce((s, r) => s + r.quantity, 0))
+      const moved = need
+      for (const r of rows) {
+        if (need <= 0) break
+        const take = Math.min(r.quantity, need)
+        await exec('update stock_lot set quantity = quantity - $2, updated_at = now() where id = $1', [r.id, take])
+        need -= take
+      }
+      if (moved > 0) {
+        await exec(
+          `delete from stock_lot where facility_id=$1 and commodity_id=$2 and location_type=$3
+             and coalesce(site_name,'')=coalesce($4,'') and quantity <= 0`,
+          [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
+        )
+        await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: moved })
+      }
+    }
+
+    // Track the quantity change on the corrected identity: grow it, or trim it
+    // (drawing only from this batch, clamped to what's on hand — never negative).
+    const delta = nQ - oQ
+    if (delta > 0) await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: delta })
+    else if (delta < 0) await LotService.debit(exec, bin, -delta, { batch: newB })
   }
 
   /**
