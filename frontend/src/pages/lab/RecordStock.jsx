@@ -118,22 +118,26 @@ export function RecordStock() {
     }
     if (!commId){ setMsg({ type:'error', text:'Select a commodity.' }); return }
     const qty = parseInt(qtyRef.current?.value || 0)
-    if (qty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
+    if (isNaN(qty) || qty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
     const comm = store.allCommodities.find(c => c.id === commId)
     if (items.some(i => i.commodityId === commId)) {
       setMsg({ type:'error', text:`${comm?.name || 'Commodity'} is already in the list — remove it first to change the quantity.` }); return
     }
     const avail = await resolveStock(commId)
-    if (avail == null || avail === 0) {
-      setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}${batchSdp ? ` at ${batchSdp}` : ''}.` }); return
+    // Zero is a valid "nothing consumed today" record: skip stock / expiry checks
+    // (nothing leaves stock) and attach no batch.
+    if (qty > 0) {
+      if (avail == null || avail === 0) {
+        setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}${batchSdp ? ` at ${batchSdp}` : ''}.` }); return
+      }
+      if (avail < qty) {
+        setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+      }
+      if (pickerBatch?.expired) {
+        setMsg({ type:'error', text:'This batch is expired — move it back to store and adjust it out before deducting it.' }); return
+      }
     }
-    if (avail < qty) {
-      setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
-    }
-    if (pickerBatch?.expired) {
-      setMsg({ type:'error', text:'This batch is expired — move it back to store and adjust it out before deducting it.' }); return
-    }
-    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail, batch: pickerBatch }])
+    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail, batch: qty > 0 ? pickerBatch : null }])
     setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'
   }
 
@@ -172,19 +176,22 @@ export function RecordStock() {
     if (batch.length === 0) {
       if (!commId){ setMsg({ type:'error', text:'Add at least one commodity.' }); return }
       const qty = parseInt(qtyRef.current?.value || 0)
-      if (qty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
+      if (isNaN(qty) || qty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
       const comm  = store.allCommodities.find(c => c.id === commId)
       const avail = await resolveStock(commId)
-      if (avail == null || avail === 0) {
-        setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}${batchSdp ? ` at ${batchSdp}` : ''}.` }); return
+      // Zero consumption skips the stock / expiry checks and attaches no batch.
+      if (qty > 0) {
+        if (avail == null || avail === 0) {
+          setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}${batchSdp ? ` at ${batchSdp}` : ''}.` }); return
+        }
+        if (avail < qty) {
+          setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+        }
+        if (pickerBatch?.expired) {
+          setMsg({ type:'error', text:'This batch is expired — move it back to store and adjust it out before deducting it.' }); return
+        }
       }
-      if (avail < qty) {
-        setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
-      }
-      if (pickerBatch?.expired) {
-        setMsg({ type:'error', text:'This batch is expired — move it back to store and adjust it out before deducting it.' }); return
-      }
-      batch = [{ commodityId: commId, quantity: qty, comm, avail, batch: pickerBatch }]
+      batch = [{ commodityId: commId, quantity: qty, comm, avail, batch: qty > 0 ? pickerBatch : null }]
     }
 
     setSaving(true)
@@ -274,7 +281,7 @@ export function RecordStock() {
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">
                   {qtyLabel}
                 </label>
-                <input type="number" min="1" defaultValue={1} ref={qtyRef}
+                <input type="number" min="0" defaultValue={1} ref={qtyRef}
                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
               </div>
             </div>

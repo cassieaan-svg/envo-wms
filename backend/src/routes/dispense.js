@@ -64,9 +64,11 @@ router.post('/', async (req, res) => {
       })
     }
 
-    // Validate quantity is positive
-    if (!validators.isPositiveNumber(quantity)) {
-      return sendValidationError(res, 'Quantity must be a positive number', 'quantity')
+    // Quantity must be a whole number >= 0. Zero is allowed on purpose: it records
+    // a "nothing consumed today" entry so a facility's daily consumption report
+    // still shows a dated record rather than a gap.
+    if (!validators.isNonNegativeNumber(quantity)) {
+      return sendValidationError(res, 'Quantity must be zero or a positive number', 'quantity')
     }
 
     // Validate dispensed_at if provided

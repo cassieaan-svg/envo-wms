@@ -60,17 +60,20 @@ export function Dispense() {
     if (!fid)   { setMsg({ type:'error', text:'No facility assigned.' }); return }
     if (!commId){ setMsg({ type:'error', text:'Select a commodity.' }); return }
     const parsedQty = parseInt(qty)
-    if (!parsedQty || parsedQty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
+    if (isNaN(parsedQty) || parsedQty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
     const comm = store.allCommodities.find(c => c.id === commId)
     if (items.some(i => i.commodityId === commId)) {
       setMsg({ type:'error', text:`${comm?.name || 'Commodity'} is already in the list — remove it first to change the quantity.` }); return
     }
     const avail = await resolveStock(commId)
-    if (avail == null || avail === 0) {
-      setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}.` }); return
-    }
-    if (avail < parsedQty) {
-      setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+    // Zero is a valid "nothing consumed today" record — skip the stock checks.
+    if (parsedQty > 0) {
+      if (avail == null || avail === 0) {
+        setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}.` }); return
+      }
+      if (avail < parsedQty) {
+        setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+      }
     }
     setItems(prev => [...prev, { commodityId: commId, quantity: parsedQty, comm, avail }])
     setCommId(''); setQty(1)
@@ -91,14 +94,16 @@ export function Dispense() {
     if (batch.length === 0) {
       if (!commId){ setMsg({ type:'error', text:'Add at least one commodity.' }); return }
       const parsedQty = parseInt(qty)
-      if (!parsedQty || parsedQty < 1){ setMsg({ type:'error', text:'Quantity must be at least 1.' }); return }
+      if (isNaN(parsedQty) || parsedQty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
       const comm  = store.allCommodities.find(c => c.id === commId)
       const avail = await resolveStock(commId)
-      if (avail == null || avail === 0) {
-        setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}.` }); return
-      }
-      if (avail < parsedQty) {
-        setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+      if (parsedQty > 0) {
+        if (avail == null || avail === 0) {
+          setMsg({ type:'error', text:`No stock available for ${comm?.name || 'commodity'}.` }); return
+        }
+        if (avail < parsedQty) {
+          setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+        }
       }
       batch = [{ commodityId: commId, quantity: parsedQty, comm, avail }]
     }
@@ -173,7 +178,7 @@ export function Dispense() {
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">
                   {qtyLabel}
                 </label>
-                <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)}
+                <input type="number" min="0" value={qty} onChange={e => setQty(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
               </div>
             </div>

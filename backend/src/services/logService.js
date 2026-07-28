@@ -397,7 +397,9 @@ export class LogService {
       batch_number, expiry_date
     } = dispenseData
 
-    if (!facility_id || !commodity_id || !quantity || !dispensed_by) {
+    // quantity may be 0 (a "nothing consumed today" record), so guard on null/undefined
+    // rather than falsiness. A 0 debit is a no-op in the ledger and stock decrement.
+    if (!facility_id || !commodity_id || quantity == null || !dispensed_by) {
       throw new Error('Missing required fields: facility_id, commodity_id, quantity, dispensed_by')
     }
 
