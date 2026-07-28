@@ -4,6 +4,7 @@ import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
+import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
@@ -380,6 +381,12 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const histReqs     = applyReqFilters(reqHistory)
   const inflightList = applyReqFilters(inflightReqs)
   const reqRowCount  = reqView==='inflight' ? inflightList.length : reqView==='history' ? histReqs.length : activeReqs.length
+  // Commodity filter options = only the commodities that were actually requested in
+  // the current view (not the whole catalogue), deduped. Fed to a searchable select.
+  const reqSourceForView = reqView==='inflight' ? inflightReqs : reqView==='history' ? reqHistory : facReqAlerts
+  const requestedCommodities = [...new Map(
+    reqSourceForView.map(r => store.allCommodities.find(c => c.id === r.commodity_id)).filter(Boolean).map(c => [c.id, c])
+  ).values()]
 
   // Export payload for whichever request view is on screen, honouring the active
   // commodity / category / LGA filters (so you download exactly what you see).
@@ -758,10 +765,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
             <div className="px-5 py-3 border-b border-white/8 flex flex-wrap gap-3 items-end">
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Commodity</label>
-                <select value={filterComm} onChange={e=>setFilterComm(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 min-w-[160px]">
-                  <option value="">All commodities</option>
-                  {[...store.allCommodities].sort((a,b)=>a.name.localeCompare(b.name)).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <CommoditySelect commodities={requestedCommodities} value={filterComm} onChange={setFilterComm}
+                  placeholder="All commodities"
+                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500 min-w-[200px]" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Category</label>
