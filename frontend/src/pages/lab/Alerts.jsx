@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
+import { exportCsv } from '../../utils/download'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
@@ -18,6 +19,7 @@ export function Alerts() {
   // Sub-filter of the Out-of-stock tab only: '' | 'inuse' | 'unused'.
   const [useFilter, setUseFilter] = useState('')
   const [expiryDays, setDays]   = useState(180)
+  const [expUrgency, setExpUrgency] = useState('all')    // expiry tab urgency filter: 'all'|Expired|Critical|Warning|Monitor
   const [expiryRows, setExpiry] = useState([])
   const [stockRows, setStock]   = useState({ out:[], low:[], over:[] })
   const [loading, setLoading]   = useState(true)
@@ -260,6 +262,23 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     if(d<=90)  return {label:'Warning', color:'text-amber-400',bg:'bg-amber-500/10',border:'border-amber-500/20'}
     return            {label:'Monitor', color:'text-blue-400',bg:'bg-blue-500/10',border:'border-blue-500/20'}
   }
+  // Facility lookup + urgency-bucketed expiry rows for the tiles + flat table,
+  // matching the Monitoring expiry view (see pharmacy Alerts for the twin).
+  const facMeta = {}
+  store.allFacilities.forEach(f => { facMeta[f.id] = { name: f.name, lga: f.lga || '—', state: f.state || '—' } })
+  const expBucketRows = lbl => shownExpiry.filter(r => urgency(r).label === lbl)
+  const expShown = (expUrgency==='all' ? shownExpiry : expBucketRows(expUrgency))
+    .slice().sort((a,b)=>new Date(a.expiry_date)-new Date(b.expiry_date))
+  const expUrgencyLabel = { all:'All expiring', Expired:'Expired', Critical:'Critical (≤30d)', Warning:'Warning (≤90d)', Monitor:'Monitor (>90d)' }[expUrgency]
+  function downloadExpiryCsv() {
+    const headers = ['Facility','LGA','Commodity','Category','Batch','Expiry date','Days left','Qty','Unit','Urgency']
+    const rows = expShown.map(r => {
+      const dL = Math.round((new Date(r.expiry_date)-today)/86400000)
+      return [facMeta[r.facility_id]?.name||'—', facMeta[r.facility_id]?.lga||'—', r.commodities?.name||'—',
+        r.commodities?.category||'—', r.batch_number||'', fmtDate(r.expiry_date), dL, r.quantity, r.commodities?.unit||'', urgency(r).label]
+    })
+    exportCsv(`expiry_${expUrgency.toLowerCase()}_${expiryDays}d.csv`, headers, rows)
+  }
 
   const TabBtn = ({id,label}) => (
     <button onClick={()=>setTab(id)}
@@ -330,41 +349,90 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       </div>
 
       {tab==='expiry' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Batches expiring soon</CardTitle>
-            <select value={expiryDays} onChange={e=>{setDays(parseInt(e.target.value));loadExpiry()}}
-              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
-              <option value={30}>Within 30 days</option>
-              <option value={90}>Within 90 days</option>
-              <option value={180}>Within 6 months</option>
-              <option value={365}>Within 12 months</option>
-            </select>
-          </CardHeader>
-          {loading ? <LoadingState/> : shownExpiry.length===0 ? <EmptyState message={`No commodities expiring within ${expiryDays} days ✓`}/> : (
-            <div className="table-wrap"><table className="w-full text-sm">
-              <thead><tr className="border-b border-white/8 bg-white/2">
-                {['Commodity','Category','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
-                  <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                ))}
-              </tr></thead>
-              <tbody>{shownExpiry.map(r=>{
-                const u=urgency(r), dL=Math.round((new Date(r.expiry_date)-today)/86400000)
-                return (
-                  <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-                    <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
-                    <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
-                    <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.color}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
-                    <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
-                    <td className="px-4 py-3"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${u.bg} ${u.color} ${u.border}`}>{u.label}</span></td>
-                  </tr>
-                )
-              })}</tbody>
-            </table></div>
-          )}
-        </Card>
+        <>
+          <MetricGrid>
+            <Metric label="Expired" value={expBucketRows('Expired').length} color="red"
+              onClick={()=>setExpUrgency(expUrgency==='Expired'?'all':'Expired')} active={expUrgency==='Expired'}/>
+            <Metric label="Critical (≤30d)" value={expBucketRows('Critical').length} color="red"
+              onClick={()=>setExpUrgency(expUrgency==='Critical'?'all':'Critical')} active={expUrgency==='Critical'}/>
+            <Metric label="Warning (≤90d)" value={expBucketRows('Warning').length} color="amber"
+              onClick={()=>setExpUrgency(expUrgency==='Warning'?'all':'Warning')} active={expUrgency==='Warning'}/>
+            <Metric label="Monitor (>90d)" value={expBucketRows('Monitor').length} color="blue"
+              onClick={()=>setExpUrgency(expUrgency==='Monitor'?'all':'Monitor')} active={expUrgency==='Monitor'}/>
+            <Metric label="Total batches" value={shownExpiry.length}
+              onClick={()=>setExpUrgency('all')} active={expUrgency==='all'}/>
+          </MetricGrid>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{expUrgencyLabel} batches{store.isAdmin()?' — by facility':''} <span className="text-gray-500 font-normal">· {expShown.length} {expShown.length===1?'batch':'batches'}</span></CardTitle>
+              <div className="flex gap-2 items-center flex-wrap">
+                <select value={expiryDays} onChange={e=>{setDays(parseInt(e.target.value));loadExpiry()}}
+                  className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                  <option value={30}>Within 30 days</option>
+                  <option value={90}>Within 90 days</option>
+                  <option value={180}>Within 6 months</option>
+                  <option value={365}>Within 12 months</option>
+                </select>
+                {store.isAdmin() && (
+                  <button onClick={downloadExpiryCsv} disabled={expShown.length===0}
+                    className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5">↓ Download CSV</button>
+                )}
+              </div>
+            </CardHeader>
+            {loading ? <LoadingState/> : expShown.length===0 ? <EmptyState message={expUrgency==='all'?`No commodities expiring within ${expiryDays} days ✓`:`No ${expUrgencyLabel.toLowerCase()} batches ✓`}/> :
+              !store.isAdmin() ? (
+                /* Facility view: flat batch list (their own batches). */
+                <div className="table-wrap"><table className="w-full text-sm">
+                  <thead><tr className="border-b border-white/8 bg-white/2">
+                    {['Commodity','Category','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
+                      <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{expShown.map(r=>{
+                    const u=urgency(r), dL=Math.round((new Date(r.expiry_date)-today)/86400000)
+                    return (
+                      <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                        <td className="px-4 py-3 font-medium text-gray-100">{r.commodities?.name||'—'}</td>
+                        <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
+                        <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.color}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
+                        <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
+                        <td className="px-4 py-3"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${u.bg} ${u.color} ${u.border}`}>{u.label}</span></td>
+                      </tr>
+                    )
+                  })}</tbody>
+                </table></div>
+              ) : (
+                /* Admin view: one flat row per expiring batch — facility & commodity side by side. */
+                <div className="table-wrap"><table className="w-full text-sm">
+                  <thead><tr className="border-b border-white/8 bg-white/2">
+                    {['Facility','LGA','Commodity','Category','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
+                      <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{expShown.map(r=>{
+                    const u=urgency(r), dL=Math.round((new Date(r.expiry_date)-today)/86400000)
+                    return (
+                      <tr key={`${r.facility_id}|${r.commodity_id}|${r.batch_number}|${r.expiry_date}`} className="border-b border-white/5 hover:bg-white/2">
+                        <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
+                        <td className="px-4 py-3 text-gray-200">{r.commodities?.name||'—'}</td>
+                        <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
+                        <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.color}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
+                        <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
+                        <td className="px-4 py-3"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${u.bg} ${u.color} ${u.border}`}>{u.label}</span></td>
+                      </tr>
+                    )
+                  })}</tbody>
+                </table></div>
+              )
+            }
+          </Card>
+        </>
       )}
 
       {tab==='out' && (
