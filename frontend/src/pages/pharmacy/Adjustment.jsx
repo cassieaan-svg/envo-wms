@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
+import { BatchSelect } from '../../components/ui/BatchSelect'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
 import { fmtDate, fmtStockQty, todayLagos } from '../../utils/helpers'
@@ -46,6 +47,7 @@ export function Adjustment() {
   const [adjNotes, setAdjNotes]= useState('')
   const [adjExpiry, setAdjExpiry] = useState('')
   const [adjBatch, setAdjBatch]   = useState('')
+  const [selectedLot, setSelectedLot] = useState(null)
   const [returnSite, setReturnSite] = useState('')
   const [siteOptions, setSiteOptions] = useState([])
   const [loadingSites, setLoadingSites] = useState(false)
@@ -108,6 +110,14 @@ export function Adjustment() {
     if (r !== RETURN_REASON) { setReturnSite(''); setSiteOptions([]) }
   }
 
+  // A Decrease removes stock already on the shelf, so the batch is CHOSEN from the
+  // store's lot ledger (not typed) — picking one fills in its exact expiry.
+  function onPickLot(lot) {
+    setSelectedLot(lot)
+    setAdjBatch(lot?.batch_number || '')
+    setAdjExpiry(lot?.expiry_date ? String(lot.expiry_date).slice(0, 10) : '')
+  }
+
   if (!canManage) return (
     <div>
       <div className="mb-6"><h1 className="text-xl font-medium text-gray-100">Access Restricted</h1></div>
@@ -128,6 +138,14 @@ export function Adjustment() {
     if (!reason) { setMsg({type:'error',text:'Select a reason.'}); return }
     if (!adjType){ setMsg({type:'error',text:'Select adjustment type.'}); return }
     if (!adjBy)  { setMsg({type:'error',text:'Adjusted by is required.'}); return }
+    // A Decrease must name an on-hand batch (picked from the ledger) and can't take
+    // more than that batch holds. Increase keeps free-typed expiry/batch below.
+    if (adjType === 'Decrease') {
+      if (!selectedLot) { setMsg({type:'error',text:'Select the batch you are adjusting.'}); return }
+      if (parseInt(qty) > selectedLot.remaining) {
+        setMsg({type:'error',text:`Only ${fmtStockQty(selectedLot.remaining, selectedComm)} of that batch on hand.`}); return
+      }
+    }
     if (!adjExpiry) { setMsg({type:'error',text:'Expiry date is required.'}); return }
     if (rule?.lock && rule.type && adjType !== rule.type) {
       setMsg({type:'error',text:`${reason} must be a ${rule.type} adjustment.`}); return
@@ -166,7 +184,7 @@ export function Adjustment() {
       const newStoreQty = prevStore + qtyN
       toast('Return recorded','green')
       setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from ${returnSite} to store. Store stock: ${fmtStockQty(newStoreQty, selectedComm)}`})
-      setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setReturnSite(''); setSiteOptions([])
+      setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setSelectedLot(null); setReturnSite(''); setSiteOptions([])
       await loadStock(); loadRecent(); setSaving(false)
       return
     }
@@ -200,7 +218,7 @@ export function Adjustment() {
       const prevStore = store.stockData.find(r => r.commodity_id === commId && r.facility_id === fid && r.location_type === 'store')?.quantity || 0
       toast('Return recorded','green')
       setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from dispensary to store. Store stock: ${fmtStockQty(prevStore + qtyN, selectedComm)}`})
-      setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch('')
+      setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setSelectedLot(null)
       await loadStock(); loadRecent(); setSaving(false)
       return
     }
@@ -225,7 +243,7 @@ export function Adjustment() {
     const newQty = adjType==='Increase' ? stockRow.quantity + parseInt(qty) : Math.max(0, stockRow.quantity - parseInt(qty))
     toast('Adjustment saved','green')
     setMsg({type:'success',text:`Adjustment saved. New stock: ${fmtStockQty(newQty, selectedComm)}`})
-    setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch('')
+    setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setSelectedLot(null)
     await loadStock()
     loadRecent()
     setSaving(false)
@@ -305,18 +323,31 @@ export function Adjustment() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {adjType === 'Decrease' ? (
               <div>
-                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date *</label>
-                <input type="date" value={adjExpiry} onChange={e=>setAdjExpiry(e.target.value)} required
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch to adjust *</label>
+                <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType="store"
+                  value={selectedLot?.key} onSelect={onPickLot} />
+                <p className="text-xs text-gray-500 mt-1">
+                  {!commId ? 'Select a commodity first.'
+                    : selectedLot ? `Expiry ${selectedLot.expiry_date ? fmtDate(selectedLot.expiry_date) : '—'} · ${fmtStockQty(selectedLot.remaining, selectedComm)} on hand`
+                    : 'Choose the exact batch being removed — its expiry fills in automatically.'}
+                </p>
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch / lot number (optional)</label>
-                <input type="text" value={adjBatch} onChange={e=>setAdjBatch(e.target.value)} placeholder="e.g. LOT2024A001"
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date *</label>
+                  <input type="date" value={adjExpiry} onChange={e=>setAdjExpiry(e.target.value)} required
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch / lot number (optional)</label>
+                  <input type="text" value={adjBatch} onChange={e=>setAdjBatch(e.target.value)} placeholder="e.g. LOT2024A001"
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
