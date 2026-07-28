@@ -127,13 +127,15 @@ export class LogService {
 
   /**
    * Mirror an intake/Increase-adjustment edit onto the STORE lot ledger. The
-   * record originally credited `oldQty` units to the lot (oldBatch, oldExpiry).
-   * We (1) relabel the still-on-hand portion of that lot to the corrected
-   * (newBatch, newExpiry) — moving min(oldQty, what remains), so stock that has
-   * since been dispensed or moved is never over-debited — and (2) apply the
-   * quantity delta on the corrected identity so the ledger tracks the edit.
-   * The aggregate `stock` total is reconciled separately by the client, matching
-   * the existing edit flow; this only keeps the per-batch ledger honest.
+   * record contributed `oldQty` units to the bin; we (1) relabel that on-hand
+   * portion onto the corrected (newBatch, newExpiry), and (2) apply the quantity
+   * delta on the corrected identity. The units are drawn from where the record's
+   * stock actually lives — the exact old-identity lot first, then the bin's
+   * UNKNOWN-expiry lots (where the migration seeded historical stock that never
+   * carried a batch/expiry) — always clamped to what's on hand so stock that has
+   * since been dispensed or moved is never over-debited. The aggregate `stock`
+   * total is reconciled separately by the client; this keeps the per-batch ledger
+   * (the Monitoring / expiry views) honest.
    */
   static async _syncStoreLotOnEdit(exec, bin, { oldBatch, oldExpiry, oldQty, newBatch, newExpiry, newQty }) {
     const oldB = oldBatch || null, newB = newBatch || null
@@ -143,31 +145,8 @@ export class LogService {
     const identityChanged = (oldB || '') !== (newB || '') || (oldE || '') !== (newE || '')
 
     if (identityChanged && oQ > 0) {
-      const { rows } = await exec(
-        `select id, quantity from stock_lot
-          where facility_id=$1 and commodity_id=$2 and location_type=$3
-            and coalesce(site_name,'')=coalesce($4,'')
-            and coalesce(batch_number,'')=coalesce($5,'')
-            and coalesce(expiry_date,'0001-01-01'::date)=coalesce($6::date,'0001-01-01'::date)
-          order by id`,
-        [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null, oldB, oldE]
-      )
-      let need = Math.min(oQ, rows.reduce((s, r) => s + r.quantity, 0))
-      const moved = need
-      for (const r of rows) {
-        if (need <= 0) break
-        const take = Math.min(r.quantity, need)
-        await exec('update stock_lot set quantity = quantity - $2, updated_at = now() where id = $1', [r.id, take])
-        need -= take
-      }
-      if (moved > 0) {
-        await exec(
-          `delete from stock_lot where facility_id=$1 and commodity_id=$2 and location_type=$3
-             and coalesce(site_name,'')=coalesce($4,'') and quantity <= 0`,
-          [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
-        )
-        await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: moved })
-      }
+      const moved = await this._drawForRelabel(exec, bin, { batch: oldB, expiry: oldE }, oQ)
+      if (moved > 0) await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: moved })
     }
 
     // Track the quantity change on the corrected identity: grow it, or trim it
@@ -175,6 +154,44 @@ export class LogService {
     const delta = nQ - oQ
     if (delta > 0) await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: delta })
     else if (delta < 0) await LotService.debit(exec, bin, -delta, { batch: newB })
+  }
+
+  // Draw up to `want` units from `bin` to relabel: first the exact (batch, expiry)
+  // lot, then any UNKNOWN-expiry lot (null expiry — the seed placeholder that holds
+  // historical stock). Returns how many were actually drawn (<= want, <= on hand).
+  // Emptied lots are removed. Deduped by lot id so a lot never double-counts.
+  static async _drawForRelabel(exec, bin, { batch, expiry }, want) {
+    const base = [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
+    const { rows: exact } = await exec(
+      `select id, quantity from stock_lot
+        where facility_id=$1 and commodity_id=$2 and location_type=$3 and coalesce(site_name,'')=coalesce($4,'')
+          and coalesce(batch_number,'')=coalesce($5,'')
+          and coalesce(expiry_date,'0001-01-01'::date)=coalesce($6::date,'0001-01-01'::date)
+          and quantity > 0
+        order by id`, [...base, batch, ymd(expiry)])
+    const { rows: unknown } = await exec(
+      `select id, quantity from stock_lot
+        where facility_id=$1 and commodity_id=$2 and location_type=$3 and coalesce(site_name,'')=coalesce($4,'')
+          and expiry_date is null and quantity > 0
+        order by id`, base)
+
+    const seen = new Set()
+    let need = want, drawn = 0
+    for (const r of [...exact, ...unknown]) {
+      if (need <= 0) break
+      if (seen.has(r.id)) continue
+      seen.add(r.id)
+      const take = Math.min(r.quantity, need)
+      if (take <= 0) continue
+      await exec('update stock_lot set quantity = quantity - $2, updated_at = now() where id = $1', [r.id, take])
+      drawn += take; need -= take
+    }
+    if (drawn > 0) {
+      await exec(
+        `delete from stock_lot where facility_id=$1 and commodity_id=$2 and location_type=$3
+           and coalesce(site_name,'')=coalesce($4,'') and quantity <= 0`, base)
+    }
+    return drawn
   }
 
   /**
