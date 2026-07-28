@@ -72,7 +72,7 @@ export function EditModal({ record, onClose, onSave }) {
       await adjustStockLocation('store', newQty - oldQty)
     } else {
       table = 'stock_adjustment_log'
-      updateData = { quantity:newQty, reason, notes:notes||null, edited_by:editedBy||null }
+      updateData = { quantity:newQty, reason, notes:notes||null, batch_number:batch.trim()||null, expiry_date:expiry||null, edited_by:editedBy||null }
       const oldIsInc = record.adjustment_type === 'Increase'
       const delta = oldIsInc ? (newQty - oldQty) : (oldQty - newQty)
       await adjustStockLocation('store', delta)
@@ -167,6 +167,14 @@ export function EditModal({ record, onClose, onSave }) {
                 <option>Expired</option><option>Damaged</option><option>Lost / Stolen</option>
                 <option>Physical count correction</option><option>Returned to store</option><option>Other</option>
               </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch / lot number</label>
+              <input type="text" value={batch} onChange={e=>setBatch(e.target.value)} placeholder="e.g. LOT2024A001" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date</label>
+              <input type="date" value={expiry} onChange={e=>setExpiry(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
             </div>
             <div>
               <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Notes</label>
