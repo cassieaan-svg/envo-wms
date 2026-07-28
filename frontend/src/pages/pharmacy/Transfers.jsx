@@ -1188,31 +1188,31 @@ export function Transfers() {
                           </div>
                         )}
                         {dispatchingId === t.id && (
-                          <div className="mt-3 p-3 bg-blue-500/5 border border-blue-500/20 rounded-lg space-y-3">
+                          <div className="mt-3 p-3 bg-white/5 border border-white/10 rounded-lg space-y-3">
                             <div className="text-xs text-gray-500">Qty requested: <span className="text-gray-300 font-medium">{t.qty_requested ?? t.quantity}{commUnit(t.commodity_id) ? ` ${commUnit(t.commodity_id)}` : ''}</span></div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
-                                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Qty issued *</label>
+                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Qty issued *</label>
                                 <input autoFocus type="number" min="1" value={dispatchQty} onChange={e => setDispatchQty(e.target.value)}
                                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
                               <div>
-                                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Record approved by *</label>
+                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Record approved by *</label>
                                 <input type="text" value={dispatchApprovedBy} onChange={e => setDispatchApprovedBy(e.target.value)}
                                   placeholder="Approving officer name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
                               <div>
-                                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Carrier *</label>
+                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Carrier *</label>
                                 <input type="text" value={dispatchCarrier} onChange={e => setDispatchCarrier(e.target.value)}
                                   placeholder="Carrier / transporter name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
                               <div>
-                                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Expiry date *</label>
+                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Expiry date *</label>
                                 <input type="date" value={dispatchExpiry} onChange={e => setDispatchExpiry(e.target.value)}
                                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
                               <div>
-                                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Batch / lot no. *</label>
+                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Batch / lot no. *</label>
                                 <input type="text" value={dispatchBatch} onChange={e => setDispatchBatch(e.target.value)}
                                   placeholder="Batch or lot number" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
@@ -1221,7 +1221,7 @@ export function Transfers() {
                               <Button variant="success" size="sm" disabled={dispatchLoading} onClick={() => confirmDispatch(t)}>
                                 {dispatchLoading ? 'Confirming…' : 'Confirm dispatch'}
                               </Button>
-                              <Button variant="ghost" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1) }}>Cancel</Button>
+                              <Button variant="default" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1) }}>Cancel</Button>
                             </div>
                           </div>
                         )}
