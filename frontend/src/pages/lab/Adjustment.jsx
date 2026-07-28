@@ -58,6 +58,9 @@ export function Adjustment() {
 
   const fid = store.currentFacility?.id
   const isReturn = reason === RETURN_REASON
+  // A "Returned from site" adjustment moves the site's OWN stock back to the store,
+  // so the batch is chosen from that site's ledger (lab returns come from an SDP).
+  const returnBin = isReturn && returnSite ? { locationType: 'sdp', siteName: returnSite } : null
 
   useEffect(() => { loadRecent() }, [fid])
   useEffect(() => { if(fid) loadRecent() }, [historyDate])
@@ -133,15 +136,19 @@ export function Adjustment() {
     if (!reason) { setMsg({type:'error',text:'Select a reason.'}); return }
     if (!adjType){ setMsg({type:'error',text:'Select adjustment type.'}); return }
     if (!adjBy)  { setMsg({type:'error',text:'Adjusted by is required.'}); return }
-    // A Decrease must name an on-hand batch (picked from the ledger) and can't take
-    // more than that batch holds. Increase keeps free-typed expiry/batch below.
-    if (adjType === 'Decrease') {
+    // Picker-based adjustments — a Decrease, or a return from a site — must name an
+    // on-hand batch, and the pick fills in its expiry. A manual Increase still needs
+    // a typed expiry.
+    if (adjType === 'Decrease' || returnBin) {
       if (!selectedLot) { setMsg({type:'error',text:'Select the batch you are adjusting.'}); return }
       if (parseInt(qty) > selectedLot.remaining) {
         setMsg({type:'error',text:`Only ${fmtStockQty(selectedLot.remaining, selectedComm)} of that batch on hand.`}); return
       }
+    } else if (isReturn) {
+      setMsg({type:'error',text:`Select the ${SITE_CFG.label} first.`}); return
+    } else if (!adjExpiry) {
+      setMsg({type:'error',text:'Expiry date is required.'}); return
     }
-    if (!adjExpiry) { setMsg({type:'error',text:'Expiry date is required.'}); return }
     if (rule?.lock && rule.type && adjType !== rule.type) {
       setMsg({type:'error',text:`${reason} must be a ${rule.type} adjustment.`}); return
     }
@@ -293,6 +300,21 @@ export function Adjustment() {
                   {!commId ? 'Select a commodity first.'
                     : selectedLot ? `Expiry ${selectedLot.expiry_date ? fmtDate(selectedLot.expiry_date) : '—'} · ${fmtStockQty(selectedLot.remaining, selectedComm)} on hand`
                     : 'Choose the exact batch being removed — its expiry fills in automatically.'}
+                </p>
+              </div>
+            ) : isReturn ? (
+              <div>
+                <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch being returned *</label>
+                {returnBin ? (
+                  <BatchSelect key={`${commId}|${returnBin.siteName}`} facilityId={fid} commodityId={commId}
+                    locationType={returnBin.locationType} siteName={returnBin.siteName}
+                    value={selectedLot?.key} onSelect={onPickLot} />
+                ) : (
+                  <div className="text-xs text-gray-500 bg-white/5 border border-white/10 rounded-lg px-3 py-2">Select the {SITE_CFG.label} above first.</div>
+                )}
+                <p className="text-xs text-gray-500 mt-1">
+                  {selectedLot ? `Expiry ${selectedLot.expiry_date ? fmtDate(selectedLot.expiry_date) : '—'} · ${fmtStockQty(selectedLot.remaining, selectedComm)} at ${returnSite}`
+                    : `Choose the batch being returned — its expiry fills in automatically.`}
                 </p>
               </div>
             ) : (
