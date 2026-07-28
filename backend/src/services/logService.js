@@ -120,6 +120,14 @@ export class LogService {
           oldBatch: old.batch_number,   oldExpiry: old.expiry_date, oldQty: old.quantity,
           newBatch: updated.batch_number, newExpiry: updated.expiry_date, newQty: updated.quantity,
         })
+        // The corrected stock may have already moved on to the dispensary/DSD/SDP
+        // bins, which still carry the OLD (batch, expiry). Relabel those too so a
+        // wrong-expiry fix reaches every bin the stock reached, not just the store.
+        await this._syncOtherBinsOnEdit(exec,
+          { facility_id: old.facility_id, commodity_id: old.commodity_id }, {
+            oldBatch: old.batch_number,   oldExpiry: old.expiry_date,
+            newBatch: updated.batch_number, newExpiry: updated.expiry_date,
+          })
       }
       return updated
     })
@@ -192,6 +200,60 @@ export class LogService {
            and coalesce(site_name,'')=coalesce($4,'') and quantity <= 0`, base)
     }
     return drawn
+  }
+
+  /**
+   * Propagate an intake/Increase-adjustment expiry (or batch) correction to the
+   * NON-store bins — dispensary, DSD, SDP — that this stock has since moved into.
+   * When stock leaves the store it carries its (batch, expiry) verbatim, so a lot
+   * elsewhere still labelled with the OLD identity is now stale. A batch has exactly
+   * one true expiry, so we relabel every such lot onto the corrected identity in
+   * place: same bin, quantity unchanged (units only change their label), merging into
+   * an identical existing lot if one is already there. This keeps the Monitoring /
+   * expiry views honest across all bins, not just the store.
+   *
+   * Guards (mirroring the reconcile script's Pass 1, so we never over-reach):
+   *  - Skip if nothing about the identity changed.
+   *  - Skip a fully generic old identity (no old batch AND no old expiry): that maps
+   *    to the anonymous unknown pool, which can't be attributed to this record.
+   *  - Skip an AMBIGUOUS batch — one whose own credit records disagree on the expiry
+   *    (more than one distinct value) — leaving it for a human / the reconcile script.
+   */
+  static async _syncOtherBinsOnEdit(exec, { facility_id, commodity_id }, { oldBatch, oldExpiry, newBatch, newExpiry }) {
+    const oldB = oldBatch || null, newB = newBatch || null
+    const oldE = ymd(oldExpiry), newE = ymd(newExpiry)
+    if ((oldB || '') === (newB || '') && (oldE || '') === (newE || '')) return  // no identity change
+    if (!oldB && !oldE) return                                                  // generic unknown pool — unattributable
+
+    // Ambiguity guard: if the corrected batch's own credit records carry more than
+    // one distinct non-null expiry, the "one true expiry" assumption fails — bail.
+    if (newB) {
+      const { rows } = await exec(
+        `select count(distinct expiry_date)::int n from (
+           select expiry_date from intake_log
+             where facility_id=$1 and commodity_id=$2
+               and nullif(btrim(coalesce(batch_number,'')),'')=$3 and expiry_date is not null
+           union all
+           select expiry_date from stock_adjustment_log
+             where facility_id=$1 and commodity_id=$2 and adjustment_type='Increase'
+               and nullif(btrim(coalesce(batch_number,'')),'')=$3 and expiry_date is not null
+         ) c`, [facility_id, commodity_id, newB])
+      if ((rows[0]?.n || 0) > 1) return
+    }
+
+    // Every non-store lot still carrying the old identity is stale — relabel in place.
+    const { rows: lots } = await exec(
+      `select id, location_type, site_name, quantity, section from stock_lot
+        where facility_id=$1 and commodity_id=$2 and location_type <> 'store'
+          and coalesce(batch_number,'')=coalesce($3,'')
+          and coalesce(expiry_date,'0001-01-01'::date)=coalesce($4::date,'0001-01-01'::date)
+          and quantity > 0`,
+      [facility_id, commodity_id, oldB, oldE])
+    for (const lot of lots) {
+      const bin = { facility_id, commodity_id, location_type: lot.location_type, site_name: lot.site_name }
+      await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: lot.quantity, section: lot.section })
+      await exec('delete from stock_lot where id=$1', [lot.id])
+    }
   }
 
   /**
