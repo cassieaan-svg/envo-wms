@@ -115,53 +115,78 @@ export class LogService {
 
       const isStoreCredit = type === 'intake' || (type === 'adjustment' && old.adjustment_type === 'Increase')
       if (updated && isStoreCredit) {
-        const bin = { facility_id: old.facility_id, commodity_id: old.commodity_id, location_type: 'store', site_name: null }
-        await this._syncStoreLotOnEdit(exec, bin, {
+        await this._syncLotsOnEdit(exec, { facility_id: old.facility_id, commodity_id: old.commodity_id }, {
           oldBatch: old.batch_number,   oldExpiry: old.expiry_date, oldQty: old.quantity,
           newBatch: updated.batch_number, newExpiry: updated.expiry_date, newQty: updated.quantity,
         })
-        // The corrected stock may have already moved on to the dispensary/DSD/SDP
-        // bins, which still carry the OLD (batch, expiry). Relabel those too so a
-        // wrong-expiry fix reaches every bin the stock reached, not just the store.
-        await this._syncOtherBinsOnEdit(exec,
-          { facility_id: old.facility_id, commodity_id: old.commodity_id }, {
-            oldBatch: old.batch_number,   oldExpiry: old.expiry_date,
-            newBatch: updated.batch_number, newExpiry: updated.expiry_date,
-          })
       }
       return updated
     })
   }
 
   /**
-   * Mirror an intake/Increase-adjustment edit onto the STORE lot ledger. The
-   * record contributed `oldQty` units to the bin; we (1) relabel that on-hand
-   * portion onto the corrected (newBatch, newExpiry), and (2) apply the quantity
-   * delta on the corrected identity. The units are drawn from where the record's
-   * stock actually lives — the exact old-identity lot first, then the bin's
-   * UNKNOWN-expiry lots (where the migration seeded historical stock that never
-   * carried a batch/expiry) — always clamped to what's on hand so stock that has
-   * since been dispensed or moved is never over-debited. The aggregate `stock`
-   * total is reconciled separately by the client; this keeps the per-batch ledger
-   * (the Monitoring / expiry views) honest.
+   * Mirror an intake/Increase-adjustment edit onto the lot ledger so the Monitoring
+   * / expiry views (and the per-batch stock breakdown) stay honest. Three parts:
+   *
+   *  1. IDENTITY. What changed decides how the corrected label is applied:
+   *     - Expiry corrected on a BATCH → a batch has exactly one true expiry, so
+   *       relabel EVERY lot of that batch, in the store AND every bin the stock
+   *       moved to (dispensary/DSD/SDP), whatever (possibly stale) expiry it holds,
+   *       onto the new date. This is self-healing: it fixes the edit even if a past
+   *       edit or the seed left the ledger out of sync — the reason a plain expiry
+   *       edit used to "not take". Skipped only for an AMBIGUOUS batch (its own
+   *       credit records disagree on the expiry), which then falls back to (2)'s
+   *       precise move so we never guess.
+   *     - Batch renumbered, or an UNBATCHED expiry change → we can't key on the
+   *       batch, so move only the record's own contribution: the exact old identity
+   *       in the store (clamped to what's on hand, unknown-expiry lots included),
+   *       plus the same exact relabel in the other bins.
+   *  2. QUANTITY. Apply the (newQty − oldQty) delta to the store's corrected
+   *     identity — grow it, or FEFO-trim it (never negative).
+   *
+   * The aggregate `stock` total is reconciled separately by the client.
    */
-  static async _syncStoreLotOnEdit(exec, bin, { oldBatch, oldExpiry, oldQty, newBatch, newExpiry, newQty }) {
+  static async _syncLotsOnEdit(exec, key, { oldBatch, oldExpiry, oldQty, newBatch, newExpiry, newQty }) {
     const oldB = oldBatch || null, newB = newBatch || null
     const oldE = ymd(oldExpiry), newE = ymd(newExpiry)
     const oQ = Math.max(0, Math.round(Number(oldQty)) || 0)
     const nQ = Math.max(0, Math.round(Number(newQty)) || 0)
-    const identityChanged = (oldB || '') !== (newB || '') || (oldE || '') !== (newE || '')
+    const store = { ...key, location_type: 'store', site_name: null }
+    const batchChanged = (oldB || '') !== (newB || '')
+    const expiryChanged = (oldE || '') !== (newE || '')
 
-    if (identityChanged && oQ > 0) {
-      const moved = await this._drawForRelabel(exec, bin, { batch: oldB, expiry: oldE }, oQ)
-      if (moved > 0) await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: moved })
+    // Move the record's own contribution from the exact old identity to the new one:
+    // the store lot (unknown-expiry lots included), then the same exact relabel in
+    // the other bins. Used for batch renumbers and unbatched/ambiguous expiry edits.
+    const exactMove = async () => {
+      if (oQ > 0) {
+        const moved = await this._drawForRelabel(exec, store, { batch: oldB, expiry: oldE }, oQ)
+        if (moved > 0) await LotService.credit(exec, store, { batch: newB, expiry: newE, qty: moved })
+      }
+      await this._relabelExactOtherBins(exec, key,
+        { fromBatch: oldB, fromExpiry: oldE, toBatch: newB, toExpiry: newE })
     }
 
-    // Track the quantity change on the corrected identity: grow it, or trim it
-    // (drawing only from this batch, clamped to what's on hand — never negative).
+    if (batchChanged) {
+      await exactMove()
+    } else if (newB) {
+      // Batched edit: keep the WHOLE batch aligned to the record's current expiry —
+      // idempotent and run every time, so it also self-heals a ledger that drifted
+      // (e.g. a prior edit whose old value no longer matches, which is why a plain
+      // re-save used to do nothing). Ambiguous batches — records disagree on the
+      // expiry — fall back to moving only this record's own exact contribution.
+      if (await this._batchExpiryAmbiguous(exec, key, newB)) {
+        if (expiryChanged) await exactMove()
+      } else {
+        await this._relabelWholeBatch(exec, key, newB, newE)
+      }
+    } else if (expiryChanged) {
+      await exactMove()   // unbatched — can only match the exact old identity
+    }
+
     const delta = nQ - oQ
-    if (delta > 0) await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: delta })
-    else if (delta < 0) await LotService.debit(exec, bin, -delta, { batch: newB })
+    if (delta > 0) await LotService.credit(exec, store, { batch: newB, expiry: newE, qty: delta })
+    else if (delta < 0) await LotService.debit(exec, store, -delta, { batch: newB })
   }
 
   // Draw up to `want` units from `bin` to relabel: first the exact (batch, expiry)
@@ -202,56 +227,66 @@ export class LogService {
     return drawn
   }
 
-  /**
-   * Propagate an intake/Increase-adjustment expiry (or batch) correction to the
-   * NON-store bins — dispensary, DSD, SDP — that this stock has since moved into.
-   * When stock leaves the store it carries its (batch, expiry) verbatim, so a lot
-   * elsewhere still labelled with the OLD identity is now stale. A batch has exactly
-   * one true expiry, so we relabel every such lot onto the corrected identity in
-   * place: same bin, quantity unchanged (units only change their label), merging into
-   * an identical existing lot if one is already there. This keeps the Monitoring /
-   * expiry views honest across all bins, not just the store.
-   *
-   * Guards (mirroring the reconcile script's Pass 1, so we never over-reach):
-   *  - Skip if nothing about the identity changed.
-   *  - Skip a fully generic old identity (no old batch AND no old expiry): that maps
-   *    to the anonymous unknown pool, which can't be attributed to this record.
-   *  - Skip an AMBIGUOUS batch — one whose own credit records disagree on the expiry
-   *    (more than one distinct value) — leaving it for a human / the reconcile script.
-   */
-  static async _syncOtherBinsOnEdit(exec, { facility_id, commodity_id }, { oldBatch, oldExpiry, newBatch, newExpiry }) {
-    const oldB = oldBatch || null, newB = newBatch || null
-    const oldE = ymd(oldExpiry), newE = ymd(newExpiry)
-    if ((oldB || '') === (newB || '') && (oldE || '') === (newE || '')) return  // no identity change
-    if (!oldB && !oldE) return                                                  // generic unknown pool — unattributable
+  // True when a batch's own credit records (intakes + Increase adjustments) carry
+  // more than one distinct non-null expiry — the "one true expiry per batch" rule
+  // fails, so we must not blindly relabel the whole batch. Mirrors the reconcile
+  // script's ambiguity check.
+  static async _batchExpiryAmbiguous(exec, { facility_id, commodity_id }, batch) {
+    const { rows } = await exec(
+      `select count(distinct expiry_date)::int n from (
+         select expiry_date from intake_log
+           where facility_id=$1 and commodity_id=$2
+             and nullif(btrim(coalesce(batch_number,'')),'')=$3 and expiry_date is not null
+         union all
+         select expiry_date from stock_adjustment_log
+           where facility_id=$1 and commodity_id=$2 and adjustment_type='Increase'
+             and nullif(btrim(coalesce(batch_number,'')),'')=$3 and expiry_date is not null
+       ) c`, [facility_id, commodity_id, batch])
+    return (rows[0]?.n || 0) > 1
+  }
 
-    // Ambiguity guard: if the corrected batch's own credit records carry more than
-    // one distinct non-null expiry, the "one true expiry" assumption fails — bail.
-    if (newB) {
-      const { rows } = await exec(
-        `select count(distinct expiry_date)::int n from (
-           select expiry_date from intake_log
-             where facility_id=$1 and commodity_id=$2
-               and nullif(btrim(coalesce(batch_number,'')),'')=$3 and expiry_date is not null
-           union all
-           select expiry_date from stock_adjustment_log
-             where facility_id=$1 and commodity_id=$2 and adjustment_type='Increase'
-               and nullif(btrim(coalesce(batch_number,'')),'')=$3 and expiry_date is not null
-         ) c`, [facility_id, commodity_id, newB])
-      if ((rows[0]?.n || 0) > 1) return
+  // Relabel EVERY lot of (facility, commodity, batch) — any bin, any site, whatever
+  // current expiry — onto `toExpiry`, in place: quantity is conserved (units only
+  // change their label) and duplicates merge into an existing identical lot. This is
+  // the "one true expiry per batch" repair applied at edit time, so a corrected
+  // expiry reaches the store and every bin the stock moved to, and it self-heals a
+  // ledger a past edit or the seed left out of sync.
+  static async _relabelWholeBatch(exec, { facility_id, commodity_id }, batch, toExpiry) {
+    const toE = ymd(toExpiry)
+    const { rows: lots } = await exec(
+      `select id, location_type, site_name, quantity, section from stock_lot
+        where facility_id=$1 and commodity_id=$2
+          and nullif(btrim(coalesce(batch_number,'')),'')=$3
+          and coalesce(expiry_date,'0001-01-01'::date) <> coalesce($4::date,'0001-01-01'::date)
+          and quantity > 0`,
+      [facility_id, commodity_id, batch, toE])
+    for (const lot of lots) {
+      const bin = { facility_id, commodity_id, location_type: lot.location_type, site_name: lot.site_name }
+      await LotService.credit(exec, bin, { batch, expiry: toE, qty: lot.quantity, section: lot.section })
+      await exec('delete from stock_lot where id=$1', [lot.id])
     }
+  }
 
-    // Every non-store lot still carrying the old identity is stale — relabel in place.
+  // Relabel lots carrying the exact (fromBatch, fromExpiry) identity onto
+  // (toBatch, toExpiry) in the NON-store bins (the store leg is handled by the
+  // caller's _drawForRelabel). Quantity conserved, duplicates merged. Used for batch
+  // renumbers and unbatched/ambiguous expiry edits, where we can only touch stock
+  // that literally matches the record's old identity. A fully-generic old identity
+  // (no batch AND no expiry) is the anonymous unknown pool — unattributable, skipped.
+  static async _relabelExactOtherBins(exec, { facility_id, commodity_id }, { fromBatch, fromExpiry, toBatch, toExpiry }) {
+    const fromB = fromBatch || null, toB = toBatch || null
+    const fromE = ymd(fromExpiry), toE = ymd(toExpiry)
+    if (!fromB && !fromE) return
     const { rows: lots } = await exec(
       `select id, location_type, site_name, quantity, section from stock_lot
         where facility_id=$1 and commodity_id=$2 and location_type <> 'store'
           and coalesce(batch_number,'')=coalesce($3,'')
           and coalesce(expiry_date,'0001-01-01'::date)=coalesce($4::date,'0001-01-01'::date)
           and quantity > 0`,
-      [facility_id, commodity_id, oldB, oldE])
+      [facility_id, commodity_id, fromB, fromE])
     for (const lot of lots) {
       const bin = { facility_id, commodity_id, location_type: lot.location_type, site_name: lot.site_name }
-      await LotService.credit(exec, bin, { batch: newB, expiry: newE, qty: lot.quantity, section: lot.section })
+      await LotService.credit(exec, bin, { batch: toB, expiry: toE, qty: lot.quantity, section: lot.section })
       await exec('delete from stock_lot where id=$1', [lot.id])
     }
   }
