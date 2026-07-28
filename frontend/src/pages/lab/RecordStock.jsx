@@ -130,6 +130,9 @@ export function RecordStock() {
     if (avail < qty) {
       setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
     }
+    if (pickerBatch?.expired) {
+      setMsg({ type:'error', text:'This batch is expired — move it back to store and adjust it out before deducting it.' }); return
+    }
     setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail, batch: pickerBatch }])
     setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'
   }
@@ -177,6 +180,9 @@ export function RecordStock() {
       }
       if (avail < qty) {
         setMsg({ type:'error', text:`Insufficient stock${batchSdp ? ` at ${batchSdp}` : ''}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+      }
+      if (pickerBatch?.expired) {
+        setMsg({ type:'error', text:'This batch is expired — move it back to store and adjust it out before deducting it.' }); return
       }
       batch = [{ commodityId: commId, quantity: qty, comm, avail, batch: pickerBatch }]
     }
@@ -310,6 +316,11 @@ export function RecordStock() {
                         Record batch &amp; expiry
                       </button>
                     )}
+                  </div>
+                )}
+                {pickerBatch?.expired && (
+                  <div className="mt-2 rounded-lg px-3 py-2 text-xs bg-red-500/10 border border-red-500/20 text-red-300">
+                    ⚠ This batch expired{pickerBatch.expiry_date ? ` on ${fmtDate(pickerBatch.expiry_date)}` : ''}. Move it back to store and adjust it out before deducting — expired stock can’t be dispensed.
                   </div>
                 )}
               </div>
