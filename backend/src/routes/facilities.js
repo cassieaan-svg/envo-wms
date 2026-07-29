@@ -1,0 +1,151 @@
+import express from 'express';
+import { FacilityService } from '../services/facilityService.js';
+import { DispatchService } from '../services/dispatchService.js';
+import { fetchEnvoStock } from '../lib/envoClient.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
+
+const router = express.Router();
+
+router.get('/', async (req, res, next) => {
+  try {
+    const facilities = await FacilityService.list({
+      state: req.query.state || null,
+      includeInactive: req.query.includeInactive === 'true',
+    });
+    return res.json(facilities);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/', requireAdmin, async (req, res, next) => {
+  try {
+    const { name, state } = req.body || {};
+    if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
+    if (!state?.trim()) return res.status(400).json({ error: 'state is required' });
+
+    return res.status(201).json(await FacilityService.create(req.body));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.put('/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const facility = await FacilityService.update(Number(req.params.id), req.body || {});
+    if (!facility) return res.status(404).json({ error: 'facility not found' });
+    return res.json(facility);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/:id/commodities', async (req, res, next) => {
+  try {
+    return res.json(await FacilityService.listCommodities(Number(req.params.id)));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/:id/commodities', requireAdmin, async (req, res, next) => {
+  try {
+    const facilityId = Number(req.params.id);
+    const { commodityId, commodityIds, isDefault } = req.body || {};
+
+    if (Array.isArray(commodityIds)) {
+      const added = await FacilityService.addCommodities(facilityId, commodityIds.map(Number), {
+        isDefault: Boolean(isDefault),
+        addedBy: req.user.username,
+      });
+      return res.status(201).json({ added });
+    }
+
+    if (!commodityId) return res.status(400).json({ error: 'commodityId or commodityIds is required' });
+
+    const row = await FacilityService.addCommodity(facilityId, {
+      commodityId: Number(commodityId),
+      isDefault: Boolean(isDefault),
+      addedBy: req.user.username,
+    });
+    if (!row) return res.status(409).json({ error: 'commodity is already assigned to this facility' });
+    return res.status(201).json(row);
+  } catch (err) {
+    if (err.code === '23503') return res.status(400).json({ error: 'unknown facilityId or commodityId' });
+    return next(err);
+  }
+});
+
+router.delete('/:id/commodities/:commodityId', requireAdmin, async (req, res, next) => {
+  try {
+    const removed = await FacilityService.removeCommodity(
+      Number(req.params.id),
+      Number(req.params.commodityId)
+    );
+    if (!removed) return res.status(404).json({ error: 'assignment not found' });
+    return res.json({ removed: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Multi-line dispatch: several commodities, each with its own quantity and price.
+router.post('/:id/dispatch-orders', requireAdmin, async (req, res, next) => {
+  try {
+    const { items, notes } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items must be a non-empty array' });
+    }
+
+    for (const [index, item] of items.entries()) {
+      if (!item?.commodityId) {
+        return res.status(400).json({ error: `items[${index}].commodityId is required` });
+      }
+      if (!(Number(item.quantity) > 0)) {
+        return res.status(400).json({ error: `items[${index}].quantity must be greater than zero` });
+      }
+      if (item.unitPrice == null || !(Number(item.unitPrice) >= 0)) {
+        return res.status(400).json({ error: `items[${index}].unitPrice must be a non-negative number` });
+      }
+    }
+
+    const duplicates = items.length !== new Set(items.map((i) => Number(i.commodityId))).size;
+    if (duplicates) {
+      return res.status(400).json({ error: 'each commodity may only appear once per order' });
+    }
+
+    const order = await DispatchService.createOrder({
+      facilityId: Number(req.params.id),
+      items,
+      notes: notes || null,
+      dispatchedBy: req.user.username,
+    });
+    return res.status(201).json(order);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/:id/dispatch-orders', async (req, res, next) => {
+  try {
+    return res.json(await DispatchService.listForFacility(Number(req.params.id)));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Proxied from EnVo — mock data until the real API details are confirmed.
+router.get('/:id/stock', async (req, res, next) => {
+  try {
+    const facilities = await FacilityService.list({ includeInactive: true });
+    const facility = facilities.find((f) => f.id === Number(req.params.id));
+    if (!facility) return res.status(404).json({ error: 'facility not found' });
+
+    const stock = await fetchEnvoStock(facility.envo_facility_id || facility.id);
+    return res.json(stock);
+  } catch (err) {
+    return res.status(502).json({ error: `could not reach EnVo: ${err.message}` });
+  }
+});
+
+export default router;
