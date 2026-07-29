@@ -4,7 +4,7 @@
 // display filter: a caller whose token pins them to one section can only read/write
 // commodities in that section's categories.
 export const SECTION_CATEGORIES = {
-  pharmacy: ['Pharmacy drugs', 'Medical supplies'],
+  pharmacy: ['Pharmacy drugs'],
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
 }
 

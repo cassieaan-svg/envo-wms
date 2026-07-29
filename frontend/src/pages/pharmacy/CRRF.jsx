@@ -34,14 +34,21 @@ function buildCrrfRows(variant, allData) {
 
 // Off-template commodities a facility stocks print as extra rows at the bottom of
 // their section's primary form — only where there is activity/stock, so a facility
-// only sees what it actually has. Categories are disjoint per variant, so a
-// commodity appears as an extra on at most one form.
-const EXTRA_CATEGORIES = { arv: ['Pharmacy drugs'], condom: ['Medical supplies'], cd4: ['Lab reagents'], rtk: ['RTKs'] }
+// only sees what it actually has. Each commodity appears as an extra on at most one
+// form. Condoms/lubricant used to be their own "Medical supplies" category; that
+// category was merged into "Pharmacy drugs", so they're now told apart by name —
+// routed to the Condom form and kept OFF the ARV form.
+const EXTRA_CATEGORIES = { cd4: ['Lab reagents'], rtk: ['RTKs'] }
+const isCondomLike = name => /condom|lubricant/i.test(name || '')
 const isActive = d => d.received || d.dispensed || d.adjPos || d.adjNeg || d.losses || d.soh
 function extraRows(variant, allData, matched) {
-  const cats = EXTRA_CATEGORIES[variant] || []
   return allData
-    .filter(d => cats.includes(d.category) && isActive(d) && !matched.has(d.commodity) && !CRRF_ALIASES[d.commodity])
+    .filter(d => {
+      if (!isActive(d) || matched.has(d.commodity) || CRRF_ALIASES[d.commodity]) return false
+      if (variant === 'condom') return isCondomLike(d.commodity)
+      if (variant === 'arv')    return d.category === 'Pharmacy drugs' && !isCondomLike(d.commodity)
+      return (EXTRA_CATEGORIES[variant] || []).includes(d.category)
+    })
     .map(d => withData({ name: d.commodity, unit: d.unit || '', pack: '' }, d))
 }
 

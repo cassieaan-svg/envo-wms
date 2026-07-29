@@ -222,7 +222,7 @@ export function transferReason(t) {
 
 // ── Section categories ────────────────────────────
 export const SECTION_CATEGORIES = {
-  pharmacy: ['Pharmacy drugs', 'Medical supplies'],
+  pharmacy: ['Pharmacy drugs'],
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
 }
 
