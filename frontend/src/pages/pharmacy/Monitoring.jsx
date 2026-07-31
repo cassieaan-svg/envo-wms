@@ -295,6 +295,20 @@ export function Monitoring() {
 
       {!loading && tab==='consumption' && consData && (
         <>
+          {commDrill ? (() => {
+            // Drilled into one commodity → scope the summary cards to it, so the totals
+            // read as "this commodity" rather than the whole section.
+            const cRows = consData.rows.filter(r => r.commodity_id === commDrill.id)
+            const cTotal = cRows.reduce((s, r) => s + r.quantity, 0)
+            const cFacs = new Set(cRows.map(r => r.facility_id)).size
+            return (
+              <MetricGrid>
+                <Metric label={`${commDrill.name} — units consumed (${period}d)`} value={cTotal.toLocaleString()} color="green"/>
+                <Metric label="Facilities consuming" value={cFacs} color="blue"/>
+                <Metric label="Consumption records" value={cRows.length.toLocaleString()}/>
+              </MetricGrid>
+            )
+          })() : (
           <MetricGrid>
             <Metric label={`Units consumed (${period}d)`} value={consData.total.toLocaleString()} color="green"/>
             <Metric label="Commodities consumed" value={consData.byComm.length} color="blue"
@@ -302,6 +316,7 @@ export function Monitoring() {
             <Metric label="Consumption records" value={consData.rows.length.toLocaleString()}
               onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='transactions'?null:'transactions')}:undefined} active={metricDrill==='transactions'}/>
           </MetricGrid>
+          )}
 
           {isAdm && metricDrill && (
             <Card>
