@@ -355,9 +355,20 @@ export function Monitoring() {
 
           <div className={`grid grid-cols-1 ${isAdm ? 'lg:grid-cols-2' : ''} gap-4 mb-4`}>
             <Card>
-              <CardHeader><CardTitle>Daily consumption</CardTitle></CardHeader>
+              <CardHeader><CardTitle>{commDrill ? `Daily consumption — ${commDrill.name}` : 'Daily consumption'}</CardTitle></CardHeader>
               <CardBody>
-                <DailyTrendChart daily={consData.daily} unit="units" />
+                {(() => {
+                  // Drilled into one commodity → rebuild the daily series from just its
+                  // rows, reusing the section's ordered date buckets and day-key logic.
+                  const daily = commDrill
+                    ? consData.rows.filter(r => r.commodity_id === commDrill.id).reduce((m, r) => {
+                        const day = r.dispensed_at?.slice(0, 10)
+                        if (day && m[day] !== undefined) m[day] += r.quantity
+                        return m
+                      }, Object.fromEntries(Object.keys(consData.daily).map(k => [k, 0])))
+                    : consData.daily
+                  return <DailyTrendChart daily={daily} unit="units" />
+                })()}
               </CardBody>
             </Card>
 
