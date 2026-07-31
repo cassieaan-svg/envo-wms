@@ -3,7 +3,6 @@ import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
-import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
@@ -101,12 +100,6 @@ export function Stock() {
     setLoading(false)
   }
 
-  // Status toggle cards count within the current category/search scope (but not the
-  // status filter itself), so each card always shows how many would match.
-  const statusBase = rows.filter(r => (!catFilter || r.commodities?.category === catFilter)
-    && (!search || (r.commodities?.name||'').toLowerCase().includes(search.toLowerCase())))
-  const statusCount = s => statusBase.filter(r => r.status === s).length
-
   const filtered = rows
     .filter(r => (!catFilter || r.commodities?.category === catFilter)
               && (!stsFilter || r.status === stsFilter)
@@ -203,16 +196,6 @@ export function Stock() {
           : <Card className="mb-4"><div className="px-4 py-3 text-xs text-gray-500">Select a single facility to configure its AMC window.</div></Card>
       )}
 
-      {/* Status toggle: click a card to filter the table by that status; click again
-          (or "All commodities") to clear. Mirrors the Dashboard's status cards. */}
-      <MetricGrid>
-        <Metric label="All commodities" value={statusBase.length} color="blue" loading={loading} onClick={()=>setSts('')} active={stsFilter===''} />
-        <Metric label="Optimal stock" value={statusCount('ok')}   color="green" loading={loading} onClick={()=>setSts(s=>s==='ok'?'':'ok')}     active={stsFilter==='ok'} />
-        <Metric label="Low stock"     value={statusCount('low')}  color="amber" loading={loading} onClick={()=>setSts(s=>s==='low'?'':'low')}   active={stsFilter==='low'} />
-        <Metric label="Out of stock"  value={statusCount('out')}  color="red"   loading={loading} onClick={()=>setSts(s=>s==='out'?'':'out')}   active={stsFilter==='out'} />
-        <Metric label="Overstock"     value={statusCount('over')} color="blue"  loading={loading} onClick={()=>setSts(s=>s==='over'?'':'over')} active={stsFilter==='over'} />
-      </MetricGrid>
-
       <Card className="mb-4">
         <div className="px-4 py-3 flex gap-2 flex-wrap items-center">
           <button onClick={loadData} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
@@ -220,6 +203,7 @@ export function Stock() {
             className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 flex-1 min-w-[200px] max-w-xs" />
           {[
             [catFilter, setCat, 'All categories', [['','All categories'],['RTKs','RTKs'],['Lab reagents','Lab reagents'],['Lab consumables','Lab consumables']]],
+            [stsFilter, setSts, 'All statuses',   [['','All statuses'],['ok','Optimal'],['low','Low stock'],['out','Out of stock'],['over','Overstock']]],
             [sortBy, setSortBy, '', [['category','Sort by category'],['name','Sort by name'],['qty','Sort by qty'],['mos','Sort by MOS']]],
           ].map(([val, setter, , opts], i) => (
             <select key={i} value={val} onChange={e=>setter(e.target.value)}
