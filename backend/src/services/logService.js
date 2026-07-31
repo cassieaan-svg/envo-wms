@@ -157,6 +157,51 @@ export class LogService {
     //    renamed on a record earlier, orphaning its lot). No-op when it can't be
     //    reconciled to the store's authoritative SOH, leaving step 1's result intact.
     await this._rebuildStoreFromRecords(exec, key)
+    // 3. Heal orphaned batches across EVERY bin. When a batch was renamed on the
+    //    record, the old batch is left in the ledger — in the store AND any site the
+    //    stock had moved to (dispensary/DSD/SDP) — and no earlier step can find it,
+    //    because they all key off the record's current batch. When the records credit
+    //    exactly one identity (the common case), relabel every on-hand lot onto it.
+    await this._healOrphanedBins(exec, key)
+  }
+
+  // When a commodity's records credit exactly ONE (batch, expiry) — the common case —
+  // every on-hand lot, in every bin, must be that identity. Relabel any lot that isn't
+  // (an orphaned batch a rename left behind) onto it, preserving each bin's quantity.
+  // Skipped when the records carry several identities, where a blanket relabel would
+  // guess — those are handled by the exact-move / whole-batch passes above.
+  static async _healOrphanedBins(exec, { facility_id, commodity_id }) {
+    const p = [facility_id, commodity_id]
+    const { rows: recs } = await exec(`
+      select coalesce(nullif(btrim(coalesce(batch_number,'')),''),'') batch,
+             to_char(expiry_date,'YYYY-MM-DD') exp
+        from (
+          select batch_number, expiry_date, quantity q from intake_log
+            where facility_id=$1 and commodity_id=$2
+          union all
+          select batch_number, expiry_date, quantity q from stock_adjustment_log
+            where facility_id=$1 and commodity_id=$2 and adjustment_type='Increase'
+          union all
+          select batch_number, expiry_date, -quantity q from stock_adjustment_log
+            where facility_id=$1 and commodity_id=$2 and adjustment_type='Decrease'
+        ) c group by 1, 2 having sum(q) > 0`, p)
+    if (recs.length !== 1) return               // 0 or many identities — not safe to blanket-relabel
+    const target = { batch: recs[0].batch || null, exp: recs[0].exp || null }
+
+    const { rows: lots } = await exec(`
+      select id, location_type, coalesce(site_name,'') site, section,
+             coalesce(nullif(btrim(coalesce(batch_number,'')),''),'') batch,
+             to_char(expiry_date,'YYYY-MM-DD') exp, quantity
+        from stock_lot where facility_id=$1 and commodity_id=$2 and quantity > 0`, p)
+    let healed = false
+    for (const l of lots) {
+      if ((l.batch || '') === (target.batch || '') && (l.exp || '') === (target.exp || '')) continue
+      await exec('update stock_lot set quantity = quantity - $2, updated_at = now() where id = $1', [l.id, l.quantity])
+      await LotService.credit(exec, { facility_id, commodity_id, location_type: l.location_type, site_name: l.site || null },
+        { batch: target.batch, expiry: target.exp, qty: l.quantity, section: l.section })
+      healed = true
+    }
+    if (healed) await exec(`delete from stock_lot where facility_id=$1 and commodity_id=$2 and quantity <= 0`, p)
   }
 
   static async _relabelAndDelta(exec, key, { oldBatch, oldExpiry, oldQty, newBatch, newExpiry, newQty }) {
