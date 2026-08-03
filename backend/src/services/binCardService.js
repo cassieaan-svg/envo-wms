@@ -21,10 +21,14 @@ import { query } from '../db.js'
 //   dispensary/site bins can't attribute are absorbed into the opening balance and
 //   the closing balance still ties out to stock on hand.
 
-// Transfer statuses that represent stock that actually moved (not pending/
-// in-transit/disputed/cancelled). Refine against prod if other terminal
-// stock-moving statuses exist.
+// Transfer statuses that represent stock that actually moved. INBOUND (we're the
+// receiver) only lands on 'accepted' — that's when the stock reaches us. OUTBOUND
+// (we're the sender) leaves our store the moment it's DISPATCHED, so a still-in-
+// transit dispatch has already reduced our stock and must show as Issued — otherwise
+// its quantity silently disappears into a negative opening balance. 'disputed' is
+// excluded from OUTBOUND: a dispute returns the stock to the sender.
 const MOVED_STATUSES = new Set(['accepted'])
+const OUTBOUND_MOVED = new Set(['in_transit', 'dispatched', 'accepted'])
 
 // Pull "[TAG: value]" out of a notes string (used both to route redistributions/
 // dispenses to a site bin and to label the store's outgoing redistributions).
@@ -307,24 +311,31 @@ export class BinCardService {
               quantity, status, resolved_at, initiated_at, resolved_by, notes
        from stock_transfer_log
        where commodity_id = $2 and (sending_facility_id = $1 or receiving_facility_id = $1)`, [facilityId, commodityId])).rows) {
-      if (!MOVED_STATUSES.has(r.status)) continue
-      const date = r.resolved_at || r.initiated_at
       // Internal redistribution store→(dispensary/DSD/SDP) is recorded with the
       // sending facility = us and receiving_facility_id null (or, older rows, = us).
       const internal = r.sending_facility_id === facilityId &&
         (r.receiving_facility_id == null || r.receiving_facility_id === facilityId)
+      const outbound = r.sending_facility_id === facilityId          // we're the source (external out or store→site)
+      const inbound  = r.receiving_facility_id === facilityId && r.sending_facility_id !== facilityId
+      // Outbound counts once dispatched (stock left our store); inbound only on accept.
+      if (outbound ? !OUTBOUND_MOVED.has(r.status) : !MOVED_STATUSES.has(r.status)) continue
+      const date = r.resolved_at || r.initiated_at
+      // A dispatched-but-unaccepted outbound is real stock in transit — label it so the
+      // Issued row is clearly a pending delivery, not a completed handover.
+      const transit = outbound && r.status !== 'accepted' ? `⏳ in transit — awaiting ${r.receiving_facility_name || 'receiver'} acceptance` : ''
+      const remarks = [freeNote(r.notes), transit].filter(Boolean).join(' · ')
       const batch = rx(r.notes, 'Batch') || '', expiry = rx(r.notes, 'Expiry') || ''
       if (internal) {
         // store → dispensary / DSD / SDP : store is Issued. Batch is FEFO-estimated.
         const dest = rx(r.notes, 'DSD') || rx(r.notes, 'SDP') || 'Dispensary'
         rows.push({ _tid: r.id, date, type: 'Redistribution', ref: '', party: dest, batch, expiry,
-          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
-      } else if (r.receiving_facility_id === facilityId) {
+          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks })
+      } else if (inbound) {
         rows.push({ _tid: r.id, date, type: 'Transfer in', ref: '', party: `from ${r.sending_facility_name || '—'}`, batch, expiry,
-          received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
+          received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks })
       } else {
         rows.push({ _tid: r.id, date, type: 'Transfer out', ref: '', party: `to ${r.receiving_facility_name || '—'}`, batch, expiry,
-          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
+          received: 0, issued: r.quantity, adjustment: 0, by: r.resolved_by || '', remarks })
       }
     }
     return rows
