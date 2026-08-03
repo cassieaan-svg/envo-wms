@@ -73,15 +73,50 @@ try {
     'OPENING PLUG (SOH − net)': storeSoh - binCardStoreNet,
   }])
 
-  // The likely culprits: outbound transfers that already left the store but aren't 'accepted'.
-  const nonAccOut = xfers.filter(r => r.sf === F && r.status !== 'accepted')
-  if (nonAccOut.length) {
-    console.log('⚠ Outbound transfers NOT in "accepted" status (dispatch already decremented the store,')
-    console.log('  but the bin card skips these — a prime suspect for a negative opening):')
-    console.table(nonAccOut.map(r => ({ date: d(r.t), to: r.rn || site(r.notes) || '—', qty: r.q, status: r.status })))
+  // The real culprit for a NEGATIVE store opening: outbound transfers already
+  // dispatched (stock left the store) but not yet accepted — the old bin card skipped
+  // these. cancelled/pending never moved stock, so they don't affect the balance.
+  const inTransitOut = xfers.filter(r => r.sf === F && ['in_transit', 'dispatched'].includes(r.status))
+  if (inTransitOut.length) {
+    console.log('⚠ Outbound transfers IN TRANSIT (dispatch already decremented the store, but the')
+    console.log('  bin card only counted "accepted" — this is what drove the negative opening):')
+    console.table(inTransitOut.map(r => ({ date: d(r.t), to: r.rn || site(r.notes) || '—', qty: r.q, status: r.status })))
   }
 
-  // "Consumed / issued before the first inflow" — answers how a bin dispensed with no intake yet.
+  // ── Per-site reconciliation (SDP / DSD) ──
+  // A site is Received = accepted store→site redistributions tagged for it; Issued =
+  // dispenses tagged for it. Opening plug = site SOH − (received − issued): a positive
+  // plug means the site held/consumed stock the redistributions don't account for.
+  const siteKeys = new Set([
+    ...sdp.map(r => `SDP|${r.site}`), ...dsd.map(r => `DSD|${r.site}`),
+    ...disps.map(r => tag(r.notes, 'SDP') && `SDP|${tag(r.notes, 'SDP')}`).filter(Boolean),
+    ...disps.map(r => tag(r.notes, 'DSD') && `DSD|${tag(r.notes, 'DSD')}`).filter(Boolean),
+  ])
+  if (siteKeys.size) {
+    console.log('\n── Per-site reconciliation (SDP / DSD) ──')
+    const siteRecon = []
+    for (const key of siteKeys) {
+      const [kind, name] = key.split('|')
+      const soh = (kind === 'SDP' ? sdp : dsd).find(r => r.site === name)?.quantity ?? 0
+      const recvd  = xfers.filter(r => r.sf === F && r.status === 'accepted' && tag(r.notes, kind) === name).reduce((s, r) => s + r.q, 0)
+      const siteDisps = disps.filter(r => tag(r.notes, kind) === name)
+      const issued = siteDisps.reduce((s, r) => s + r.q, 0)
+      siteRecon.push({ site: `${kind}: ${name}`, received: recvd, issued, actual_SOH: soh,
+        'OPENING PLUG (SOH − (recv − issued))': soh - (recvd - issued) })
+      // consumption at the site before its first redistribution IN
+      const firstIn = Math.min(...xfers.filter(r => r.sf === F && r.status === 'accepted' && tag(r.notes, kind) === name)
+        .map(r => new Date(r.t).getTime()), Infinity)
+      const early = siteDisps.filter(r => new Date(r.t).getTime() < firstIn)
+      if (early.length) {
+        siteRecon[siteRecon.length - 1]['⚠ used before 1st receipt'] = early.reduce((s, r) => s + r.q, 0)
+      }
+    }
+    console.table(siteRecon)
+    console.log('  A positive opening plug = the site consumed/held more than was redistributed to it —')
+    console.log('  a real baseline seed, OR utilizations logged before/beyond the stock that reached it.')
+  }
+
+  // Facility-level: consumption recorded before the first inflow of ANY kind.
   const firstInflow = Math.min(
     intakes[0] ? new Date(intakes[0].t).getTime() : Infinity,
     ...xfers.filter(r => r.rf === F && r.status === 'accepted').map(r => new Date(r.t).getTime()),
