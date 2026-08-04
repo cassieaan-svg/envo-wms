@@ -209,6 +209,26 @@ export class BinCardService {
       fefoAttribute(rows)
     }
 
+    // An explicitly recorded opening balance is a real line on the card, not the
+    // silent plug below. Where one exists the plug collapses to 0 and the baseline
+    // becomes visible and attributable. Record-only: the stock is already counted in
+    // currentBalance, so this must not also move stock.
+    const opening = (await query(
+      `select quantity, opened_at, recorded_by, notes from bin_opening
+        where facility_id=$1 and commodity_id=$2 and location_type=$3
+          and coalesce(site_name,'') = coalesce($4,'')`,
+      [facilityId, commodityId, kind, site || null])).rows[0]
+    if (opening && opening.quantity !== 0) {
+      rows.push({
+        date: opening.opened_at, type: 'Opening balance', ref: '', party: '',
+        batch: '', expiry: '',
+        received: opening.quantity > 0 ? opening.quantity : 0,
+        issued: opening.quantity < 0 ? -opening.quantity : 0,
+        adjustment: 0, by: opening.recorded_by,
+        remarks: opening.notes || 'Balance on hand before the first recorded movement',
+      })
+    }
+
     rows.sort((a, b) => new Date(a.date) - new Date(b.date))
 
     // Reconstruct running balance so the last row equals the bin's current SOH.

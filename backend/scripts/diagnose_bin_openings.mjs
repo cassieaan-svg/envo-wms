@@ -72,6 +72,12 @@ try {
   for (const r of (await query(`select facility_id f, commodity_id c, sdp_name s, quantity q from sdp_stock`)).rows) siteSoh.set(key(r.f, r.c, `sdp:${r.s}`), r.q)
   for (const r of (await query(`select facility_id f, commodity_id c, dsd_site_name s, quantity q from dsd_stock`)).rows) siteSoh.set(key(r.f, r.c, `dsd:${r.s}`), r.q)
 
+  // Explicitly recorded openings count as a movement, as the bin card treats them,
+  // so a baselined bin stops reporting the opening it has already accounted for.
+  const recorded = new Map()
+  for (const r of (await query(`select facility_id f, commodity_id c, location_type lt, site_name s, quantity q from bin_opening`)).rows)
+    add(recorded, key(r.f, r.c, (r.lt === 'store' || r.lt === 'dispensary') ? r.lt : `${r.lt}:${r.s}`), r.q)
+
   const facName = new Map((await query(`select id, name, lga from facilities`)).rows.map(r => [r.id, r]))
   const commName = new Map((await query(`select id, name from commodities`)).rows.map(r => [r.id, r.name]))
 
@@ -80,6 +86,7 @@ try {
     const [f, c] = k.split('|')
     const soh = storeSoh.get(k) || 0
     const net = (intakes.get(k) || 0) + (adj.get(k) || 0) + (storeIn.get(k) || 0) - (storeOut.get(k) || 0)
+      + (recorded.get(key(f, c, 'store')) || 0)
     if (Math.abs(soh - net) >= min) found.push({ f, c, bin: 'store', soh, opening: soh - net })
   }
   const binKeys = new Set([...siteSoh.keys(), ...recv.keys(), ...issued.keys(), ...returns.keys()])
@@ -87,7 +94,7 @@ try {
   for (const kk of binKeys) {
     const [f, c, bin] = kk.split('|')
     const soh = bin === 'dispensary' ? (dispSoh.get(key(f, c)) || 0) : (siteSoh.get(kk) || 0)
-    const net = (recv.get(kk) || 0) - (issued.get(kk) || 0) - (returns.get(kk) || 0)
+    const net = (recv.get(kk) || 0) - (issued.get(kk) || 0) - (returns.get(kk) || 0) + (recorded.get(kk) || 0)
     if (Math.abs(soh - net) >= min) found.push({ f, c, bin, soh, opening: soh - net })
   }
 
