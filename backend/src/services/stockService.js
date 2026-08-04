@@ -500,6 +500,12 @@ export class StockService {
 
   /**
    * Decrement stock quantity atomically (never below 0).
+   *
+   * NOTE: the greatest(0, …) clamp silently absorbs an overdraft — the caller's
+   * movement row still records the full amount, so the bin drifts from its ledger
+   * and the difference resurfaces later as a bin-card opening balance. Consumption
+   * paths must pre-check with assertBinCovers() (or use decrementStockStrict) so the
+   * write is rejected instead of quietly clamped.
    */
   static async decrementStock(stockId, amount, exec = query) {
     const { rows } = await exec(
@@ -509,6 +515,20 @@ export class StockService {
     )
     if (!rows[0]) throw new Error('Stock record not found')
     return rows[0]
+  }
+
+  /**
+   * Decrement stock, refusing to go negative. Returns null when the row would be
+   * overdrawn (no write performed) so the caller can reject the whole transaction
+   * rather than clamp and leave a movement the stock never funded.
+   */
+  static async decrementStockStrict(stockId, amount, exec = query) {
+    const { rows } = await exec(
+      `update stock set quantity = quantity - $2, updated_at = now()
+       where id = $1 and quantity >= $2 returning *`,
+      [stockId, parseInt(amount)]
+    )
+    return rows[0] || null
   }
 
   /**

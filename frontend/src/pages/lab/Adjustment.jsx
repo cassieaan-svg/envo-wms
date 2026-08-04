@@ -21,7 +21,9 @@ const RULES = {
   'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock' },
   'Damaged':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase damaged stock' },
   'Lost / Stolen':             { type:'Decrease', lock:true,  label:'Negative — cannot increase lost/stolen stock' },
-  'Physical count correction': { type:null,       lock:false, label:'Can be positive or negative' },
+  // 'Physical count correction' is RETIRED — see the note in pharmacy/Adjustment.jsx.
+  // Physical counts go through the Stock Count flow, which records the counted
+  // figure and derives the adjustment from the variance.
   'Returned to store':         { type:'Increase', lock:true,  label:'Positive — stock is being returned' },
   [RETURN_REASON]:             { type:'Increase', lock:true,  label:'Positive to store — deducts from the selected SDP site' },
   'State Office':              { type:'Increase', lock:true,  label:'Positive — stock adjustment from state office' },

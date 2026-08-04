@@ -24,7 +24,13 @@ const RULES = {
   'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock' },
   'Damaged':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase damaged stock' },
   'Lost / Stolen':             { type:'Decrease', lock:true,  label:'Negative — cannot increase lost/stolen stock' },
-  'Physical count correction': { type:null,       lock:false, label:'Can be positive or negative' },
+  // 'Physical count correction' is RETIRED — do not re-add. Staff entered it as a
+  // target ("the shelf holds 200") while the backend applied it as a delta ("remove
+  // 200 more"), so repeated stock-takes silently over-deducted (Apapa General:
+  // -1766/-1746/-1723 for one shelf) and the difference resurfaced as a phantom
+  // bin-card opening balance. Physical counts now go through the Stock Count flow,
+  // which records the counted figure and derives the adjustment from the variance.
+  // Historical rows keep the old reason for audit.
   'Returned to store':         { type:'Increase', lock:true,  label:'Positive — stock is being returned' },
   [DISP_RETURN_REASON]:        { type:'Increase', lock:true,  label:'Positive to store — deducts from the dispensary' },
   [RETURN_REASON]:             { type:'Increase', lock:true,  label:'Positive to store — deducts from the selected DSD site' },
@@ -101,8 +107,15 @@ export function Adjustment() {
     || store.stockData.find(r => r.commodity_id === commId && (!fid || r.facility_id === fid))
   const selectedComm = store.allCommodities.find(c => c.id === commId)
 
+  // Essential Commodities: you can only adjust what you hold, so offer just the
+  // commodities on the facility's stock levels. HIV keeps the full catalogue.
+  const stockedIds = new Set(store.stockData.map(r => r.commodity_id))
+  const commSource = store.module === 'essential'
+    ? store.allCommodities.filter(c => stockedIds.has(c.id))
+    : store.allCommodities
+
   const categories = {}
-  store.allCommodities.forEach(c => {
+  commSource.forEach(c => {
     if (!categories[c.category]) categories[c.category] = []
     categories[c.category].push(c)
   })

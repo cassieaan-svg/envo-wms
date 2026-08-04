@@ -69,6 +69,7 @@ export function PharmacyNav() {
       <NavItem page="dispense"   icon={icons.dispense}>Record Stock Consumed</NavItem>
       {!isRestricted && <NavItem page="intake"     icon={icons.intake}     disabled={!canManage}>Stock Intake</NavItem>}
       {!isRestricted && <NavItem page="adjustment" icon={icons.adjustment} disabled={!canManage}>Adjustment</NavItem>}
+      {!isRestricted && <NavItem page="stock-count" icon={icons.stock} disabled={!canManage}>Stock Count</NavItem>}
       <NavItem page="transfers" icon={icons.transfers} badge={pendingCount}>Redistribution & Emergency Order</NavItem>
 
       {!isRestricted && <NavSection>Overview</NavSection>}

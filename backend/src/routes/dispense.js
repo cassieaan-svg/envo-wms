@@ -97,11 +97,15 @@ router.post('/', async (req, res) => {
       timestamp: new Date().toISOString()
     })
   } catch (err) {
-    console.error('Error recording dispense:', err)
-    res.status(500).json({
+    // A 409 is an expected refusal (bin can't cover the draw / expired or short
+    // batch), not a server fault — pass it through so the UI shows the real reason
+    // instead of a generic error.
+    const status = err.status === 409 ? 409 : 500
+    if (status === 500) console.error('Error recording dispense:', err)
+    res.status(status).json({
       success: false,
       error: err.message,
-      code: 'DISPENSE_ERROR'
+      code: status === 409 ? 'INSUFFICIENT_STOCK' : 'DISPENSE_ERROR'
     })
   }
 })

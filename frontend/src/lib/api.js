@@ -136,6 +136,10 @@ export const api = {
   dispense:    { record: (body) => post('/dispense', body),    history: (params) => get('/dispense', params),    summary: (params) => get('/dispense/summary', params),    update: (id, body) => patch(`/dispense/${id}`, body) },
   intake:      { record: (body) => post('/intake', body),      history: (params) => get('/intake', params),      update: (id, body) => patch(`/intake/${id}`, body) },
   adjustments: { record: (body) => post('/adjustments', body), history: (params) => get('/adjustments', params), update: (id, body) => patch(`/adjustments/${id}`, body) },
+  // A stock count sends counted_quantity — WHAT IS ON THE SHELF, never a delta.
+  // The server reads the system figure itself and derives the correction, so
+  // submitting the same count twice is a no-op instead of double-correcting.
+  stockCounts: { record: (body) => post('/stock-counts', body), history: (params) => get('/stock-counts', params) },
 
   reports: {
     daily:        (params) => get('/reports/daily', params),

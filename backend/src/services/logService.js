@@ -39,6 +39,83 @@ async function resolveSection(section, commodityId, exec) {
   return SECTION_BY_CATEGORY[rows[0]?.category] || null
 }
 
+// Guard a consumption against the bin's actual stock on hand BEFORE any row is
+// written. Throws 409 when the bin can't cover the draw, which rolls back the
+// caller's transaction so a refused consumption leaves no dispense_log row behind.
+//
+// This is the invariant the bin card depends on: a bin's stock on hand must always
+// equal the sum of its recorded movements. Allowing an overdraft (by clamping the
+// decrement at 0) breaks it — the movement is recorded but the stock never moved,
+// and the difference reappears as a phantom opening balance. qty 0 is a legitimate
+// "nothing consumed today" record and is always allowed.
+async function assertBinCovers(exec, soh, qty, commodityId, binLabel) {
+  if (qty <= 0 || soh >= qty) return
+  const name = (await exec('select name from commodities where id = $1', [commodityId])).rows[0]?.name || 'this commodity'
+  const e = new Error(
+    `Cannot record ${qty} consumed: ${binLabel} holds only ${soh} of ${name}. ` +
+    `Record the stock movement into ${binLabel} first (intake or redistribution), then record the consumption.`
+  )
+  e.status = 409
+  throw e
+}
+
+// The reason carried by an adjustment DERIVED from a physical stock count. It
+// replaces the retired 'Physical count correction', which staff entered as a target
+// ("the shelf holds 200") while the system read it as a delta ("remove 200 more") —
+// the cause of the repeated over-deductions in the opening-balance audit. Counts now
+// go through recordStockCount(); this reason marks their derived ledger entry so
+// book corrections stay distinguishable from real stock loss (Expired/Damaged/Lost).
+export const STOCK_COUNT_REASON = 'Stock count variance'
+
+// Read a bin's authoritative stock on hand, whichever table backs it. Bins live in
+// three tables (stock for store/dispensary, dsd_stock, sdp_stock); counting must
+// address all of them, since the audit found drift in every bin type.
+async function binStockOnHand(exec, { facility_id, commodity_id, location_type, site_name }) {
+  if (location_type === 'dsd' || location_type === 'sdp') {
+    const tbl = location_type === 'dsd' ? 'dsd_stock' : 'sdp_stock'
+    const col = location_type === 'dsd' ? 'dsd_site_name' : 'sdp_name'
+    const { rows } = await exec(
+      `select quantity from ${tbl}
+        where facility_id = $1 and commodity_id = $2
+          and lower(btrim(${col})) = lower(btrim($3)) limit 1`,
+      [facility_id, commodity_id, site_name]
+    )
+    return rows[0]?.quantity ?? 0
+  }
+  const { rows } = await exec(
+    `select quantity from stock
+      where facility_id = $1 and commodity_id = $2 and location_type = $3 limit 1`,
+    [facility_id, commodity_id, location_type]
+  )
+  return rows[0]?.quantity ?? 0
+}
+
+// Set a bin's stock to an absolute figure (upsert). Assignment, not a delta — the
+// counted shelf wins outright, which is what stops repeated counts from compounding.
+// Only ever called from recordStockCount: physical observation is the sole warrant
+// for writing stock directly rather than through a movement.
+async function setBinStockOnHand(exec, { facility_id, commodity_id, location_type, site_name }, qty) {
+  if (location_type === 'dsd' || location_type === 'sdp') {
+    const tbl = location_type === 'dsd' ? 'dsd_stock' : 'sdp_stock'
+    const col = location_type === 'dsd' ? 'dsd_site_name' : 'sdp_name'
+    await exec(
+      `insert into ${tbl} (facility_id, ${col}, commodity_id, quantity)
+       values ($1,$2,$3,$4)
+       on conflict (facility_id, ${col}, commodity_id)
+       do update set quantity = $4, updated_at = now()`,
+      [facility_id, site_name, commodity_id, qty]
+    )
+    return
+  }
+  await exec(
+    `insert into stock (facility_id, commodity_id, location_type, quantity)
+     values ($1,$2,$3,$4)
+     on conflict (facility_id, commodity_id, location_type)
+     do update set quantity = $4, updated_at = now()`,
+    [facility_id, commodity_id, location_type, qty]
+  )
+}
+
 // Shared facility/commodity/date-range/section filters for the log history
 // queries. Mutates `conds`/`params` in place (params is 1-based for $n). Covers
 // both the per-facility per-day "recent entries" view and the multi-facility
@@ -466,17 +543,27 @@ export class LogService {
 
       // Decrement the right stock bucket, and debit the matching lot ledger by the
       // same amount — the batch the user chose first, then FEFO for any remainder.
+      //
+      // Every branch checks the bin can cover `qty` BEFORE writing. Previously the
+      // decrements clamped at 0, so consuming from an empty bin still committed the
+      // dispense_log row: the bin ended at 0 while the ledger recorded the full
+      // issue, and the gap resurfaced later as a bin-card opening balance. Worse,
+      // LotService.debit's self-heal reads the bin AFTER the decrement, so a clamped
+      // bin made it mint phantom lots to cover the draw. Rejecting up front (409)
+      // rolls back the whole transaction — a refused consumption leaves no row.
       let bin
       if (dsd_site_name) {
         const dsdStock = await StockService.getDsdStockByFacilitySiteCommodity(facility_id, dsd_site_name, commodity_id, exec)
-        if (dsdStock) {
-          await exec('update dsd_stock set quantity = greatest(0, quantity - $2), updated_at = now() where id = $1', [dsdStock.id, qty])
+        await assertBinCovers(exec, dsdStock?.quantity ?? 0, qty, commodity_id, `DSD site "${dsd_site_name}"`)
+        if (dsdStock && qty > 0) {
+          await exec('update dsd_stock set quantity = quantity - $2, updated_at = now() where id = $1', [dsdStock.id, qty])
         }
         bin = { facility_id, commodity_id, location_type: 'dsd', site_name: dsd_site_name }
       } else if (sdp_name) {
         const sdpStock = await StockService.getSdpStockByFacilitySiteCommodity(facility_id, sdp_name, commodity_id, exec)
-        if (sdpStock) {
-          await exec('update sdp_stock set quantity = greatest(0, quantity - $2), updated_at = now() where id = $1', [sdpStock.id, qty])
+        await assertBinCovers(exec, sdpStock?.quantity ?? 0, qty, commodity_id, `SDP site "${sdp_name}"`)
+        if (sdpStock && qty > 0) {
+          await exec('update sdp_stock set quantity = quantity - $2, updated_at = now() where id = $1', [sdpStock.id, qty])
         }
         bin = { facility_id, commodity_id, location_type: 'sdp', site_name: sdp_name }
       } else {
@@ -484,7 +571,11 @@ export class LogService {
         // from the dispensary); defaults to store when unspecified.
         const loc = location_type || 'store'
         const stock = await StockService.getStockByFacilityAndCommodity(facility_id, commodity_id, loc, exec)
-        if (stock) await StockService.decrementStock(stock.id, qty, exec)
+        await assertBinCovers(exec, stock?.quantity ?? 0, qty, commodity_id, loc === 'store' ? 'the main store' : 'the dispensary')
+        if (stock && qty > 0) {
+          const dec = await StockService.decrementStockStrict(stock.id, qty, exec)
+          if (!dec) await assertBinCovers(exec, 0, qty, commodity_id, loc === 'store' ? 'the main store' : 'the dispensary')
+        }
         bin = { facility_id, commodity_id, location_type: loc, site_name: null }
       }
       // Enforce (phase 3): a chosen batch must cover qty and not be expired; with
@@ -740,5 +831,104 @@ export class LogService {
 
     const { rows } = await query(sql, params)
     return rows
+  }
+
+  /**
+   * Stock count history for a facility, newest first. Exposes counted vs system vs
+   * variance — the audit trail the retired adjustment-only flow could never give,
+   * because it kept the delta and discarded the counted figure.
+   */
+  static async getStockCountHistory(facilityId, { commodityId = null, limit = 100 } = {}) {
+    const params = [facilityId]
+    let sql = `
+      select sc.*, c.name commodity_name, c.unit commodity_unit
+        from stock_count sc
+        left join commodities c on c.id = sc.commodity_id
+       where sc.facility_id = $1`
+    if (commodityId) { params.push(commodityId); sql += ` and sc.commodity_id = $${params.length}` }
+    params.push(limit)
+    sql += ` order by sc.counted_at desc limit $${params.length}`
+    const { rows } = await query(sql, params)
+    return rows
+  }
+
+  /**
+   * Record a physical stock count and reconcile the bin to it.
+   *
+   * The count is the FACT (what was on the shelf); the adjustment is DERIVED from
+   * it. Callers send `counted_quantity` — never a delta. This is the one operation
+   * allowed to set stock directly, because it is backed by physical observation.
+   *
+   * Idempotent by construction: `system_quantity` is read server-side at count time,
+   * so counting 200 twice gives variance 0 the second time. That is what makes the
+   * repeated-stock-take failure (Apapa: -1766/-1746/-1723 for one shelf) impossible.
+   *
+   * Whole-bin only — lots are reconciled FEFO to the counted total.
+   * Everything commits together, so a count never half-applies.
+   */
+  static async recordStockCount(countData) {
+    const {
+      facility_id, commodity_id, location_type = 'store', site_name = null,
+      counted_quantity, counted_by, counted_at, notes, section
+    } = countData
+
+    if (!facility_id || !commodity_id || counted_quantity == null || !counted_by) {
+      throw new Error('Missing required fields: facility_id, commodity_id, counted_quantity, counted_by')
+    }
+    if (!['store', 'dispensary', 'dsd', 'sdp'].includes(location_type)) {
+      throw new Error("location_type must be one of 'store', 'dispensary', 'dsd', 'sdp'")
+    }
+    if ((location_type === 'dsd' || location_type === 'sdp') && !site_name) {
+      throw new Error('site_name is required when counting a DSD/SDP bin')
+    }
+    const counted = parseInt(counted_quantity)
+    if (!Number.isFinite(counted) || counted < 0) throw new Error('counted_quantity must be 0 or more')
+
+    return await withTransaction(async exec => {
+      const resolvedSection = await resolveSection(section, commodity_id, exec)
+      const bin = { facility_id, commodity_id, location_type, site_name: site_name || null }
+      const countedAt = counted_at || new Date().toISOString()
+
+      // The books, read inside the transaction so nothing can move underneath us.
+      const systemQty = await binStockOnHand(exec, bin)
+      const variance = counted - systemQty
+
+      const { rows: countRows } = await exec(
+        `insert into stock_count
+           (facility_id, commodity_id, location_type, site_name, counted_quantity,
+            system_quantity, counted_by, counted_at, notes, section)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         returning *`,
+        [facility_id, commodity_id, location_type, site_name || null, counted,
+         systemQty, counted_by, countedAt, notes || '', resolvedSection]
+      )
+      const stockCount = countRows[0]
+
+      // Books already agree with the shelf — record the count, post nothing.
+      if (variance === 0) return stockCount
+
+      // Derive the adjustment so the movement ledger stays the single source of
+      // movements and the bin card needs no special case for counts.
+      const { rows: adjRows } = await exec(
+        `insert into stock_adjustment_log
+           (facility_id, commodity_id, quantity, adjustment_type, reason, adjusted_by,
+            reference_number, notes, adjusted_at, section)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         returning *`,
+        [facility_id, commodity_id, Math.abs(variance),
+         variance > 0 ? 'Increase' : 'Decrease', STOCK_COUNT_REASON, counted_by,
+         '', `Physical count ${counted} vs system ${systemQty}${notes ? ` — ${notes}` : ''}`,
+         countedAt, resolvedSection]
+      )
+      await exec('update stock_count set adjustment_id = $2 where id = $1', [stockCount.id, adjRows[0].id])
+
+      // Set the bin to the counted figure — assignment, not a delta, so the shelf
+      // wins outright and a repeated count cannot compound.
+      await setBinStockOnHand(exec, bin, counted)
+      // Bring the lot ledger to the same total: trim FEFO / top up unknown-expiry.
+      await LotService.reconcile(exec, bin)
+
+      return { ...stockCount, adjustment_id: adjRows[0].id, variance }
+    })
   }
 }

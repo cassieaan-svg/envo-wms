@@ -128,6 +128,10 @@ export class LotService {
 
     if (enforce) {
       let eligible = pool.reduce((s, l) => s + l.quantity, 0)
+      // DEPENDS ON the caller having verified the bin covers `need` BEFORE it
+      // decremented (LogService.assertBinCovers). Without that check a bin clamped
+      // to 0 made (soh + need) look like real stock, so this "heal" minted phantom
+      // lots to cover a draw the shelf never had — the overdraft then committed.
       // Self-heal a ledger that has drifted BEHIND the authoritative bin stock. The
       // caller already decremented the aggregate by `need`, so the ledger's correct
       // pre-debit total is (aggregate + need). If the pool can't cover `need` but the

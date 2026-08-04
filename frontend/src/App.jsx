@@ -13,6 +13,7 @@ import { Stock      as PharmStock      } from './pages/pharmacy/Stock'
 import { RecordStock as PharmDispense   } from './pages/pharmacy/RecordStock'
 import { Intake     as PharmIntake     } from './pages/pharmacy/Intake'
 import { Adjustment as PharmAdjustment } from './pages/pharmacy/Adjustment'
+import { StockCount as PharmStockCount } from './pages/pharmacy/StockCount'
 import { Transfers  as PharmTransfers  } from './pages/pharmacy/Transfers'
 import { Log        as PharmLog        } from './pages/pharmacy/Log'
 import { Alerts     as PharmAlerts     } from './pages/pharmacy/Alerts'
@@ -24,6 +25,7 @@ import { Stock      as LabStock      } from './pages/lab/Stock'
 import { RecordStock as LabDispense   } from './pages/lab/RecordStock'
 import { Intake     as LabIntake     } from './pages/lab/Intake'
 import { Adjustment as LabAdjustment } from './pages/lab/Adjustment'
+import { StockCount as LabStockCount } from './pages/lab/StockCount'
 import { Transfers  as LabTransfers  } from './pages/lab/Transfers'
 import { Log        as LabLog        } from './pages/lab/Log'
 import { Alerts     as LabAlerts     } from './pages/lab/Alerts'
@@ -58,6 +60,7 @@ const sdpMap = {
 const pharmMap = {
   dashboard: PharmDashboard, stock: PharmStock, dispense: PharmDispense,
   intake: PharmIntake, adjustment: PharmAdjustment, transfers: PharmTransfers,
+  'stock-count': PharmStockCount,
   log: PharmLog, crrf: PharmCRRF,
   alerts: PharmAlerts, monitoring: PharmMonitoring,
   // Reachable by the section-routed oversight viewers (cluster/lga/state) whose
@@ -68,6 +71,7 @@ const pharmMap = {
 const labMap = {
   dashboard: LabDashboard, stock: LabStock, dispense: LabDispense,
   intake: LabIntake, adjustment: LabAdjustment, transfers: LabTransfers,
+  'stock-count': LabStockCount,
   log: LabLog, crrf: LabCRRF,
   alerts: LabAlerts, monitoring: LabMonitoring,
   'all-facilities': AllFacilities,
