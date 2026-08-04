@@ -71,8 +71,11 @@ try {
     const rows = [
       ...(await query(`select received_at t, 'INTAKE' kind, quantity qty, coalesce(supplier_source,'') ref, coalesce(received_by,'') who, coalesce(notes,'') notes from intake_log where facility_id=$1 and commodity_id=$2`, p)).rows.map(r => ({ ...r, delta: r.qty })),
       ...(await query(`select adjusted_at t, 'ADJ ('||adjustment_type||')' kind, quantity qty, coalesce(reason,'') ref, coalesce(adjusted_by,'') who, coalesce(notes,'') notes, adjustment_type from stock_adjustment_log where facility_id=$1 and commodity_id=$2`, p)).rows.map(r => ({ ...r, delta: r.adjustment_type === 'Decrease' ? -r.qty : r.qty })),
-      ...(await query(`select created_at t, 'TRANSFER OUT' kind, quantity qty, status ref, '' who, coalesce(notes,'') notes from stock_transfer_log where sending_facility_id=$1 and commodity_id=$2 and status in ${OUT_STATUSES}`, p)).rows.map(r => ({ ...r, delta: -r.qty })),
-      ...(await query(`select created_at t, 'TRANSFER IN' kind, quantity qty, status ref, '' who, coalesce(notes,'') notes from stock_transfer_log where receiving_facility_id=$1 and commodity_id=$2 and status='accepted' and sending_facility_id is distinct from $1`, p)).rows.map(r => ({ ...r, delta: r.qty })),
+      // stock_transfer_log has no created_at: it dates rows by initiated_at, and
+      // resolved_at once acted on. coalesce(resolved_at, initiated_at) is exactly
+      // what binCardService uses, so this timeline matches the bin card's.
+      ...(await query(`select coalesce(resolved_at, initiated_at) t, 'TRANSFER OUT' kind, quantity qty, status ref, coalesce(initiated_by,'') who, coalesce(notes,'') notes from stock_transfer_log where sending_facility_id=$1 and commodity_id=$2 and status in ${OUT_STATUSES}`, p)).rows.map(r => ({ ...r, delta: -r.qty })),
+      ...(await query(`select coalesce(resolved_at, initiated_at) t, 'TRANSFER IN' kind, quantity qty, status ref, coalesce(initiated_by,'') who, coalesce(notes,'') notes from stock_transfer_log where receiving_facility_id=$1 and commodity_id=$2 and status='accepted' and sending_facility_id is distinct from $1`, p)).rows.map(r => ({ ...r, delta: r.qty })),
     ].sort((x, y) => new Date(x.t) - new Date(y.t))
 
     let run = 0
