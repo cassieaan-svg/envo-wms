@@ -117,6 +117,11 @@ export function Adjustment() {
   // The bin this adjustment will actually move, and what it currently holds.
   // Reasons without a bin picker always act on the store (a client return, a state
   // office issue, a return FROM a site into the store).
+  // A count correction reconciles a quantity, not a lot: the shelf simply holds
+  // more or fewer than recorded. Forcing a batch and expiry made staff invent
+  // values to get past the form, which is worse than leaving them blank — a
+  // decrease draws FEFO, an increase records an unknown-expiry lot.
+  const isCountCorrection = reason === 'Physical count correction'
   const picksBin = !!rule?.binSelect
   const binChosen = !picksBin || adjBin !== 'sdp' || !!adjBinSite
   const dispRow = store.stockData.find(r => r.commodity_id === commId && r.location_type === 'dispensary' && (!fid || r.facility_id === fid))
@@ -182,13 +187,13 @@ export function Adjustment() {
     // on-hand batch, and the pick fills in its expiry. A manual Increase still needs
     // a typed expiry.
     if (adjType === 'Decrease' || returnBin) {
-      if (!selectedLot) { setMsg({type:'error',text:'Select the batch you are adjusting.'}); return }
-      if (parseInt(qty) > selectedLot.remaining) {
+      if (!selectedLot && !isCountCorrection) { setMsg({type:'error',text:'Select the batch you are adjusting.'}); return }
+      if (selectedLot && parseInt(qty) > selectedLot.remaining) {
         setMsg({type:'error',text:`Only ${fmtStockQty(selectedLot.remaining, selectedComm)} of that batch on hand.`}); return
       }
     } else if (isReturn) {
       setMsg({type:'error',text:`Select the ${SITE_CFG.label} first.`}); return
-    } else if (!adjExpiry) {
+    } else if (!adjExpiry && !isCountCorrection) {
       setMsg({type:'error',text:'Expiry date is required.'}); return
     }
     if (rule?.lock && rule.type && adjType !== rule.type) {
@@ -373,7 +378,7 @@ export function Adjustment() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date *</label>
+                  <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date {isCountCorrection ? '(optional)' : '*'}</label>
                   <input type="date" value={adjExpiry} onChange={e=>setAdjExpiry(e.target.value)} required
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
                 </div>
