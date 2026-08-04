@@ -31,8 +31,22 @@ try {
   const intakes = new Map()   // fac|comm -> sum
   for (const r of (await query(`select facility_id f, commodity_id c, sum(quantity)::int q from intake_log group by 1,2`)).rows) add(intakes, key(r.f, r.c), r.q)
 
-  const adj = new Map()       // fac|comm -> signed sum
+  const adj = new Map()       // fac|comm -> signed sum (store side; includes returns as +)
   for (const r of (await query(`select facility_id f, commodity_id c, sum(case when adjustment_type='Decrease' then -quantity else quantity end)::int q from stock_adjustment_log group by 1,2`)).rows) add(adj, key(r.f, r.c), r.q)
+
+  // "Returned from …" adjustments credit the store (already in `adj`) but LEAVE the
+  // dispensary/site — so they're an outflow of that bin. Attribute per bin.
+  const returns = new Map()   // fac|comm|bin -> sum
+  for (const r of (await query(`select facility_id f, commodity_id c, reason, quantity q, notes from stock_adjustment_log where reason in ('Returned from Dispensary','Returned from DSD','Returned from SDP')`)).rows) {
+    let bin
+    if (r.reason === 'Returned from Dispensary') bin = 'dispensary'
+    else {
+      const rs = /Returned from [^:]*:\s*([^—]+)/i.exec(r.notes || '')?.[1]?.trim()
+      if (!rs) continue
+      bin = (r.reason === 'Returned from DSD' ? 'dsd:' : 'sdp:') + rs
+    }
+    add(returns, key(r.f, r.c, bin), r.q)
+  }
 
   // Dispenses, split per destination bin via the notes site tag.
   const issued = new Map()    // fac|comm|bin -> sum   (bin: 'dispensary' | 'sdp:site' | 'dsd:site')
@@ -83,12 +97,12 @@ try {
   }
   // DISPENSARY + SITES: net = received − issued. Canonicalize every source to a
   // single 'fac|comm|bin' key so a bin is never counted twice.
-  const binKeys = new Set([...siteSoh.keys(), ...recv.keys(), ...issued.keys()])
+  const binKeys = new Set([...siteSoh.keys(), ...recv.keys(), ...issued.keys(), ...returns.keys()])
   for (const k of dispSoh.keys()) binKeys.add(`${k}|dispensary`)
   for (const kk of binKeys) {
     const [f, c, bin] = kk.split('|')
     const soh = bin === 'dispensary' ? (dispSoh.get(key(f, c)) || 0) : (siteSoh.get(kk) || 0)
-    const net = (recv.get(kk) || 0) - (issued.get(kk) || 0)
+    const net = (recv.get(kk) || 0) - (issued.get(kk) || 0) - (returns.get(kk) || 0)
     push(f, c, bin, soh, net)
   }
 

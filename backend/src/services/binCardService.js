@@ -47,6 +47,8 @@ const tagMatches = (notes, tag, site) => {
   const v = rx(notes, tag)
   return v != null && v.toLowerCase() === String(site).trim().toLowerCase()
 }
+// Site named in a "Returned from <DSD/SDP site>: <name>" adjustment note.
+const returnSite = notes => /Returned from [^:]*:\s*([^—]+)/i.exec(notes || '')?.[1]?.trim() || null
 
 // location string → { kind, site }
 function parseLocation(location) {
@@ -356,6 +358,17 @@ export class BinCardService {
       if (isSiteTagged(r.notes)) continue
       rows.push(BinCardService._dispenseRow(r))
     }
+    // "Returned from Dispensary" adjustments credit the store (an Increase adj), so
+    // they LEAVE the dispensary → Issued here. Without this the dispensary opening
+    // goes negative by the returned amount (the store side already shows the +).
+    for (const r of (await query(
+      `select adjusted_at "date", quantity, reference_number, adjusted_by, notes, batch_number, expiry_date
+         from stock_adjustment_log
+        where facility_id = $1 and commodity_id = $2 and reason = 'Returned from Dispensary'`, [facilityId, commodityId])).rows) {
+      rows.push({ date: r.date, type: 'Return to store', ref: r.reference_number || '', party: 'to Main Store',
+        batch: r.batch_number || '', expiry: r.expiry_date || '',
+        received: 0, issued: r.quantity, adjustment: 0, by: r.adjusted_by || '', remarks: freeNote(r.notes) })
+    }
     return rows
   }
 
@@ -371,6 +384,18 @@ export class BinCardService {
     for (const r of await BinCardService._dispenses(facilityId, commodityId)) {
       if (!tagMatches(r.notes, tag, site)) continue
       rows.push(BinCardService._dispenseRow(r))
+    }
+    // "Returned from DSD/SDP: <site>" adjustments credit the store, so they LEAVE
+    // this site → Issued here (matched by the site named in the note).
+    for (const r of (await query(
+      `select adjusted_at "date", quantity, reference_number, adjusted_by, notes, batch_number, expiry_date
+         from stock_adjustment_log
+        where facility_id = $1 and commodity_id = $2 and reason in ('Returned from DSD', 'Returned from SDP')`, [facilityId, commodityId])).rows) {
+      const rs = returnSite(r.notes)
+      if (!rs || rs.toLowerCase() !== String(site).trim().toLowerCase()) continue
+      rows.push({ date: r.date, type: 'Return to store', ref: r.reference_number || '', party: 'to Main Store',
+        batch: r.batch_number || '', expiry: r.expiry_date || '',
+        received: 0, issued: r.quantity, adjustment: 0, by: r.adjusted_by || '', remarks: freeNote(r.notes) })
     }
     return rows
   }
