@@ -125,6 +125,21 @@ export function Adjustment() {
     || store.stockData.find(r => r.commodity_id === commId && (!fid || r.facility_id === fid))
   const selectedComm = store.allCommodities.find(c => c.id === commId)
 
+  // The bin this adjustment will actually move, and what it currently holds.
+  // Reasons without a bin picker always act on the store (a client return, a state
+  // office issue, a return FROM a site into the store).
+  const picksBin = !!rule?.binSelect
+  const binChosen = !picksBin || adjBin !== 'dsd' || !!adjBinSite
+  const dispRow = store.stockData.find(r => r.commodity_id === commId && r.location_type === 'dispensary' && (!fid || r.facility_id === fid))
+  const binStock =
+    !picksBin || adjBin === 'store' ? (stockRow ? stockRow.quantity : null)
+    : adjBin === 'dispensary'       ? (dispRow ? dispRow.quantity : null)
+    : (binSites.find(o => o.site === adjBinSite)?.quantity ?? null)
+  const binStockLabel =
+    !picksBin || adjBin === 'store' ? 'Main Store'
+    : adjBin === 'dispensary'       ? 'the Dispensary'
+    : adjBinSite || 'DSD site'
+
   // Essential Commodities: you can only adjust what you hold, so offer just the
   // commodities on the facility's stock levels. HIV keeps the full catalogue.
   const stockedIds = new Set(store.stockData.map(r => r.commodity_id))
@@ -276,7 +291,10 @@ export function Adjustment() {
     // Adjust the exact stock row shown in the preview. Re-querying by
     // facility+commodity with maybeSingle() fails when a commodity has
     // multiple location rows (store/dispensary/dsd); use the row id instead.
-    if (!stockRow) { setMsg({type:'error',text:'No stock record found.'}); setSaving(false); return }
+    // Guard the bin being adjusted, not the store. A site can hold stock the
+    // store has no row for, and blocking on the store's row made those
+    // corrections impossible to record.
+    if (binStock == null) { setMsg({type:'error',text:`No stock record for ${binStockLabel}.`}); setSaving(false); return }
 
     // Records the adjustment AND applies it to the store stock (transactional, server-side).
     try {
@@ -290,9 +308,9 @@ export function Adjustment() {
       })
     } catch (error) { setMsg({type:'error',text:'Error: '+error.message}); setSaving(false); return }
 
-    const newQty = adjType==='Increase' ? stockRow.quantity + parseInt(qty) : Math.max(0, stockRow.quantity - parseInt(qty))
+    const newQty = adjType==='Increase' ? binStock + parseInt(qty) : Math.max(0, binStock - parseInt(qty))
     toast('Adjustment saved','green')
-    setMsg({type:'success',text:`Adjustment saved. New stock: ${fmtStockQty(newQty, selectedComm)}`})
+    setMsg({type:'success',text:`Adjustment saved. ${binStockLabel} now holds ${fmtStockQty(newQty, selectedComm)}.`})
     setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setSelectedLot(null)
     await loadStock()
     loadRecent()
@@ -332,9 +350,12 @@ export function Adjustment() {
               </div>
             </div>
 
-            {commId && (
-              <div className={`rounded-lg px-4 py-3 text-sm border ${!stockRow?'bg-red-500/10 border-red-500/20 text-red-400':'bg-white/5 border-white/10 text-gray-300'}`}>
-                {!stockRow ? '⚠ No stock record' : `Current stock: ${fmtStockQty(stockRow.quantity, selectedComm)}`}
+            {/* Shows the stock of the bin being adjusted, not always the store. For a
+                reason that picks a bin it stays hidden until one is chosen, so the
+                figure on screen is never the wrong shelf's. */}
+            {commId && binChosen && (
+              <div className={`rounded-lg px-4 py-3 text-sm border ${binStock==null?'bg-red-500/10 border-red-500/20 text-red-400':'bg-white/5 border-white/10 text-gray-300'}`}>
+                {binStock == null ? '⚠ No stock record' : `Current stock in ${binStockLabel}: ${fmtStockQty(binStock, selectedComm)}`}
               </div>
             )}
 
@@ -438,7 +459,7 @@ export function Adjustment() {
                     <select value={adjBinSite} onChange={e=>setAdjBinSite(e.target.value)} disabled={!commId}
                       className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                       <option value="">{commId ? 'Select a site…' : 'Choose a commodity first'}</option>
-                      {binSites.map(o => <option key={o.site} value={o.site}>{o.site} — EnVo has {o.quantity}</option>)}
+                      {binSites.map(o => <option key={o.site} value={o.site}>{o.site}</option>)}
                     </select>
                   </div>
                 )}
