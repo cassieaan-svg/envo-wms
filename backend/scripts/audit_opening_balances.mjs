@@ -32,7 +32,7 @@ try {
   for (const r of (await query(`select facility_id f, commodity_id c, sum(quantity)::int q from intake_log group by 1,2`)).rows) add(intakes, key(r.f, r.c), r.q)
 
   const adj = new Map()       // fac|comm -> signed sum (store side; includes returns as +)
-  for (const r of (await query(`select facility_id f, commodity_id c, sum(case when adjustment_type='Decrease' then -quantity else quantity end)::int q from stock_adjustment_log group by 1,2`)).rows) add(adj, key(r.f, r.c), r.q)
+  for (const r of (await query(`select facility_id f, commodity_id c, sum(case when adjustment_type='Decrease' then -quantity else quantity end)::int q from stock_adjustment_log where coalesce(location_type,'store')='store' group by 1,2`)).rows) add(adj, key(r.f, r.c), r.q)
 
   // "Returned from …" adjustments credit the store (already in `adj`) but LEAVE the
   // dispensary/site — so they're an outflow of that bin. Attribute per bin.
@@ -90,6 +90,14 @@ try {
   }
 
   // Names for reporting.
+  // Adjustments now name the bin they correct, so a dispensary/site correction
+  // counts against THAT bin rather than the store — matching the bin card.
+  const binAdj = new Map()
+  for (const r of (await query(`select facility_id f, commodity_id c, location_type lt, site_name s,
+      sum(case when adjustment_type='Decrease' then -quantity else quantity end)::int q
+      from stock_adjustment_log where coalesce(location_type,'store') <> 'store' group by 1,2,3,4`)).rows)
+    add(binAdj, key(r.f, r.c, r.lt === 'dispensary' ? 'dispensary' : `${r.lt}:${r.s}`), r.q)
+
   const facName = new Map((await query(`select id, name, lga, state from facilities`)).rows.map(r => [r.id, r]))
   const commName = new Map((await query(`select id, name from commodities`)).rows.map(r => [r.id, r.name]))
 
@@ -107,12 +115,12 @@ try {
   }
   // DISPENSARY + SITES: net = received − issued. Canonicalize every source to a
   // single 'fac|comm|bin' key so a bin is never counted twice.
-  const binKeys = new Set([...siteSoh.keys(), ...recv.keys(), ...issued.keys(), ...returns.keys()])
+  const binKeys = new Set([...siteSoh.keys(), ...recv.keys(), ...issued.keys(), ...returns.keys(), ...binAdj.keys()])
   for (const k of dispSoh.keys()) binKeys.add(`${k}|dispensary`)
   for (const kk of binKeys) {
     const [f, c, bin] = kk.split('|')
     const soh = bin === 'dispensary' ? (dispSoh.get(key(f, c)) || 0) : (siteSoh.get(kk) || 0)
-    const net = (recv.get(kk) || 0) - (issued.get(kk) || 0) - (returns.get(kk) || 0) + (recorded.get(kk) || 0)
+    const net = (recv.get(kk) || 0) - (issued.get(kk) || 0) - (returns.get(kk) || 0) + (recorded.get(kk) || 0) + (binAdj.get(kk) || 0)
     push(f, c, bin, soh, net)
   }
 

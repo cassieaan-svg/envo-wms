@@ -165,12 +165,7 @@ export function EditModal({ record, onClose, onSave }) {
               <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Reason</label>
               <select value={reason} onChange={e=>setReason(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                 <option>Expired</option><option>Damaged</option><option>Lost / Stolen</option>
-                <option>Returned to store</option><option>Other</option>
-                {/* 'Physical count correction' is retired (see pharmacy/Adjustment.jsx).
-                    Still offered when a historical row already carries it, so editing an
-                    old record doesn't silently relabel it as something else. */}
-                {reason==='Physical count correction' && <option>Physical count correction</option>}
-                {reason==='Stock count variance' && <option>Stock count variance</option>}
+                <option>Physical count correction</option><option>Returned to store</option><option>Other</option>
               </select>
             </div>
             <div>

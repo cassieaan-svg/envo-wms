@@ -14,7 +14,6 @@ import transferRoutes from './routes/transfers.js'
 import dispenseRoutes from './routes/dispense.js'
 import intakeRoutes from './routes/intake.js'
 import adjustmentRoutes from './routes/adjustments.js'
-import stockCountRoutes from './routes/stockCounts.js'
 import reportRoutes from './routes/reports.js'
 import facilityRoutes from './routes/facilities.js'
 import commodityRoutes from './routes/commodities.js'
@@ -57,7 +56,6 @@ app.use('/api/transfers', transferRoutes)
 app.use('/api/dispense', dispenseRoutes)
 app.use('/api/intake', intakeRoutes)
 app.use('/api/adjustments', adjustmentRoutes)
-app.use('/api/stock-counts', stockCountRoutes)
 app.use('/api/reports', reportRoutes)
 app.use('/api/facilities', facilityRoutes)
 app.use('/api/commodities', commodityRoutes)

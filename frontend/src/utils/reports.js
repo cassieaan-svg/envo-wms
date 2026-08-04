@@ -2,15 +2,12 @@ import { api } from '../lib/api'
 
 // Adjustment reasons that must NOT feed the CRRF's Adj +/−/Losses columns.
 // They aren't a real inflow/outflow of the facility's inventory:
-//   - Stock count variance → a book correction derived from a physical count, not
-//     stock entering or leaving. (Real loss stays on Expired/Damaged/Lost.)
-//   - Physical count correction → retired predecessor of the above; kept here so
-//     historical rows stay excluded from the CRRF.
+//   - Physical count correction → reconciles the books to a physical count; not
+//     stock entering or leaving the facility, so it is not a CRRF adjustment.
 //   - Returned from Dispensary/DSD/SDP → internal store↔site redistribution
 //     (the outbound store→site dispatch is likewise excluded), so both legs net
 //     out and neither should register as a CRRF adjustment.
 export const NON_CRRF_ADJ_REASONS = [
-  'Stock count variance',
   'Physical count correction',
   'Returned from Dispensary',
   'Returned from DSD',

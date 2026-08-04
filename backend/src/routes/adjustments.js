@@ -29,7 +29,9 @@ router.post('/', async (req, res) => {
       adjusted_at,
       expiry_date,
       batch_number,
-      section
+      section,
+      location_type,
+      site_name
     } = req.body
 
     // Validate required fields
@@ -97,7 +99,9 @@ router.post('/', async (req, res) => {
       adjusted_at,
       expiry_date,
       batch_number,
-      section
+      section,
+      location_type,
+      site_name
     })
 
     res.status(201).json({
@@ -106,11 +110,15 @@ router.post('/', async (req, res) => {
       timestamp: new Date().toISOString()
     })
   } catch (err) {
-    console.error('Error recording adjustment:', err)
-    res.status(500).json({
+    // 400 = a required field (e.g. compulsory notes); 409 = the bin cannot cover the
+    // decrease. Both are expected refusals, not server faults, so pass the real
+    // message through instead of flattening everything to 500.
+    const status = [400, 409].includes(err.status) ? err.status : 500
+    if (status === 500) console.error('Error recording adjustment:', err)
+    res.status(status).json({
       success: false,
       error: err.message,
-      code: 'ADJUSTMENT_ERROR'
+      code: status === 409 ? 'INSUFFICIENT_STOCK' : status === 400 ? 'VALIDATION_ERROR' : 'ADJUSTMENT_ERROR'
     })
   }
 })

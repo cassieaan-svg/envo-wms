@@ -314,10 +314,15 @@ export class BinCardService {
       })
     }
 
-    // 2) Adjustments → signed Loss/Adj
+    // 2) Adjustments → signed Loss/Adj. Only the ones that hit the STORE: an
+    // adjustment now names the bin it corrects, and correcting a dispensary or site
+    // shelf must not move the store's card. Rows written before adjustments became
+    // bin-addressable have location_type backfilled to 'store', which is what they
+    // were, so `is null` is belt-and-braces for anything the migration missed.
     for (const r of (await query(
       `select adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
-       from stock_adjustment_log where facility_id = $1 and commodity_id = $2`, [facilityId, commodityId])).rows) {
+       from stock_adjustment_log where facility_id = $1 and commodity_id = $2
+         and coalesce(location_type,'store') = 'store'`, [facilityId, commodityId])).rows) {
       const signed = r.adjustment_type === 'Decrease' ? -r.quantity : r.quantity
       rows.push({
         date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
@@ -389,6 +394,18 @@ export class BinCardService {
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: 0, issued: r.quantity, adjustment: 0, by: r.adjusted_by || '', remarks: freeNote(r.notes) })
     }
+    // Adjustments recorded AGAINST the dispensary (a count correction on that shelf).
+    // Before adjustments were bin-addressable these could only hit the store, so a
+    // dispensary correction moved the wrong card and left this one unchanged.
+    for (const r of (await query(
+      `select adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
+         from stock_adjustment_log
+        where facility_id = $1 and commodity_id = $2 and location_type = 'dispensary'`, [facilityId, commodityId])).rows) {
+      rows.push({ date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
+        batch: r.batch_number || '', expiry: r.expiry_date || '',
+        received: 0, issued: 0, adjustment: r.adjustment_type === 'Decrease' ? -r.quantity : r.quantity,
+        by: r.adjusted_by || '', remarks: freeNote(r.notes) })
+    }
     return rows
   }
 
@@ -416,6 +433,18 @@ export class BinCardService {
       rows.push({ date: r.date, type: 'Return to store', ref: r.reference_number || '', party: 'to Main Store',
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: 0, issued: r.quantity, adjustment: 0, by: r.adjusted_by || '', remarks: freeNote(r.notes) })
+    }
+    // Adjustments recorded AGAINST this site (a count correction on that shelf).
+    for (const r of (await query(
+      `select adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
+         from stock_adjustment_log
+        where facility_id = $1 and commodity_id = $2 and location_type = $3
+          and lower(btrim(coalesce(site_name,''))) = lower(btrim($4))`,
+      [facilityId, commodityId, tag.toLowerCase(), site])).rows) {
+      rows.push({ date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
+        batch: r.batch_number || '', expiry: r.expiry_date || '',
+        received: 0, issued: 0, adjustment: r.adjustment_type === 'Decrease' ? -r.quantity : r.quantity,
+        by: r.adjusted_by || '', remarks: freeNote(r.notes) })
     }
     return rows
   }

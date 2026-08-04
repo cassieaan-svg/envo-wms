@@ -21,21 +21,21 @@ const SITE_CFG = { table: 'dsd_stock', col: 'dsd_site_name', label: 'DSD site' }
 const DISP_RETURN_REASON = 'Returned from Dispensary'
 
 const RULES = {
-  'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock' },
-  'Damaged':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase damaged stock' },
-  'Lost / Stolen':             { type:'Decrease', lock:true,  label:'Negative — cannot increase lost/stolen stock' },
-  // 'Physical count correction' is RETIRED — do not re-add. Staff entered it as a
-  // target ("the shelf holds 200") while the backend applied it as a delta ("remove
-  // 200 more"), so repeated stock-takes silently over-deducted (Apapa General:
-  // -1766/-1746/-1723 for one shelf) and the difference resurfaced as a phantom
-  // bin-card opening balance. Physical counts now go through the Stock Count flow,
-  // which records the counted figure and derives the adjustment from the variance.
-  // Historical rows keep the old reason for audit.
+  'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock', binSelect:true },
+  'Damaged':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase damaged stock', binSelect:true },
+  'Lost / Stolen':             { type:'Decrease', lock:true,  label:'Negative — cannot increase lost/stolen stock', binSelect:true, requireNotes:true },
+  // A DELTA, like every other reason here: enter the difference you are correcting,
+  // not the shelf total. Entering the total is what produced the phantom openings in
+  // production (Apapa General: -1766/-1746/-1723 against a shelf of ~1,800 — one
+  // count entered three times). Two things guard against that now: notes are
+  // compulsory, so every correction carries a written explanation and a name; and
+  // it must say WHICH bin it corrects, so it lands on the right bin card.
+  'Physical count correction': { type:null, lock:false, label:'Can be positive or negative', requireNotes:true, binSelect:true },
   'Returned to store':         { type:'Increase', lock:true,  label:'Positive — stock is being returned' },
   [DISP_RETURN_REASON]:        { type:'Increase', lock:true,  label:'Positive to store — deducts from the dispensary' },
   [RETURN_REASON]:             { type:'Increase', lock:true,  label:'Positive to store — deducts from the selected DSD site' },
   'State Office':              { type:'Increase', lock:true,  label:'Positive — stock adjustment from state office' },
-  'Other':                     { type:null,       lock:false, label:'Specify type manually' },
+  'Other':                     { type:null,       lock:false, label:'Specify type manually', binSelect:true, requireNotes:true },
 }
 
 export function Adjustment() {
@@ -54,6 +54,11 @@ export function Adjustment() {
   const [adjExpiry, setAdjExpiry] = useState('')
   const [adjBatch, setAdjBatch]   = useState('')
   const [selectedLot, setSelectedLot] = useState(null)
+  // Which bin a count correction applies to. Adjustments used to always hit the
+  // store, so correcting a dispensary/site shelf silently moved the wrong bin.
+  const [adjBin, setAdjBin] = useState('store')
+  const [adjBinSite, setAdjBinSite] = useState('')
+  const [binSites, setBinSites] = useState([])
   const [returnSite, setReturnSite] = useState('')
   const [siteOptions, setSiteOptions] = useState([])
   const [loadingSites, setLoadingSites] = useState(false)
@@ -99,6 +104,19 @@ export function Adjustment() {
     return () => { active = false }
   }, [isReturn, fid, commId])
 
+  // Sites that could be counted for this commodity, with what EnVo thinks they hold.
+  useEffect(() => {
+    let active = true
+    if (adjBin !== 'dsd' || !fid || !commId) { setBinSites([]); return }
+    api.stock.dsd.list({ facility_id: fid, commodity_id: commId })
+      .then(data => {
+        if (!active) return
+        setBinSites((data || []).map(r => ({ site: r[SITE_CFG.col], quantity: r.quantity })).sort((a, b) => a.site.localeCompare(b.site)))
+      })
+      .catch(() => { if (active) setBinSites([]) })
+    return () => { active = false }
+  }, [adjBin, fid, commId])
+
   const rule      = RULES[reason]
   // Adjustments target the main store inventory. Prefer the 'store' location
   // row, but fall back to any matching row so the preview always reflects
@@ -122,6 +140,7 @@ export function Adjustment() {
 
   function onReasonChange(r) {
     setReason(r)
+    if (!RULES[r]?.binSelect) { setAdjBin('store'); setAdjBinSite('') }
     const rule = RULES[r]
     if (rule?.type) setAdjType(rule.type)
     else setAdjType('')
@@ -156,6 +175,14 @@ export function Adjustment() {
     if (!reason) { setMsg({type:'error',text:'Select a reason.'}); return }
     if (!adjType){ setMsg({type:'error',text:'Select adjustment type.'}); return }
     if (!adjBy)  { setMsg({type:'error',text:'Adjusted by is required.'}); return }
+    // Compulsory for reasons that would otherwise be unexplainable after the fact.
+    // The backend enforces this too — the client check is only for a fast message.
+    if (RULES[reason]?.binSelect && adjBin==='dsd' && !adjBinSite) {
+      setMsg({type:'error',text:'Select which DSD site you are correcting.'}); return
+    }
+    if (RULES[reason]?.requireNotes && !adjNotes.trim()) {
+      setMsg({type:'error',text:`Notes are required for "${reason}" — say what was counted and why the figure differs.`}); return
+    }
     // Picker-based adjustments — a Decrease, or a return from a site — must name an
     // on-hand batch, and the pick fills in its expiry. A manual Increase still needs
     // a typed expiry.
@@ -259,6 +286,7 @@ export function Adjustment() {
         reference_number:adjRef||null, notes:adjNotes||null, adjusted_at:new Date().toISOString(),
         expiry_date:adjExpiry||null, batch_number:adjBatch||null,
         section:commoditySection,
+        location_type:adjBin, site_name:adjBin==='dsd' ? adjBinSite : null,
       })
     } catch (error) { setMsg({type:'error',text:'Error: '+error.message}); setSaving(false); return }
 
@@ -348,7 +376,11 @@ export function Adjustment() {
             {adjType === 'Decrease' ? (
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch to adjust *</label>
-                <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType="store"
+                {/* Read the lots of the bin being adjusted. Fixed to "store" this offered
+                    store batches while the backend debited the selected site's ledger,
+                    so an expiry recorded at an SDP drew from the wrong shelf. */}
+                <BatchSelect key={`${commId}|${adjBin}|${adjBinSite}`} facilityId={fid} commodityId={commId}
+                  locationType={adjBin} siteName={adjBin === 'dsd' ? adjBinSite : null}
                   value={selectedLot?.key} onSelect={onPickLot} />
                 <p className="text-xs text-gray-500 mt-1">
                   {!commId ? 'Select a commodity first.'
@@ -383,6 +415,33 @@ export function Adjustment() {
                   <input type="text" value={adjBatch} onChange={e=>setAdjBatch(e.target.value)} placeholder="e.g. LOT2024A001"
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
                 </div>
+              </div>
+            )}
+
+            {/* Which shelf this correction applies to. Without it every correction
+                hit the store, so counting a dispensary or site shelf moved the wrong
+                bin card and left the one you counted unchanged. */}
+            {rule?.binSelect && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Which stock are you correcting? *</label>
+                  <select value={adjBin} onChange={e=>{setAdjBin(e.target.value); setAdjBinSite('')}}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
+                    <option value="store">Main Store</option>
+                    <option value="dispensary">Dispensary</option>
+                    <option value="dsd">DSD site</option>
+                  </select>
+                </div>
+                {adjBin === 'dsd' && (
+                  <div>
+                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">DSD site *</label>
+                    <select value={adjBinSite} onChange={e=>setAdjBinSite(e.target.value)} disabled={!commId}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
+                      <option value="">{commId ? 'Select a site…' : 'Choose a commodity first'}</option>
+                      {binSites.map(o => <option key={o.site} value={o.site}>{o.site} — EnVo has {o.quantity}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
 
