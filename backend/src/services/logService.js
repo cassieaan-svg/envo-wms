@@ -39,9 +39,22 @@ async function resolveSection(section, commodityId, exec) {
   return SECTION_BY_CATEGORY[rows[0]?.category] || null
 }
 
+// Enforcement switch for the bin-stock precondition below. OFF by default, and
+// deliberately opt-in (=== 'true'), so deploying the Stock Count work cannot start
+// refusing consumption as a side effect.
+//
+// Rollout: a bin whose stock on hand is wrong will refuse consumption once this is
+// on — correct behaviour, but it surfaces as "the app won't let me record" at every
+// facility whose figures have drifted (57 bins across 48 facilities at last audit).
+// Turn it on once those bins have been physically counted through the Stock Count
+// screen. Read per call, so flipping it needs a restart but no code change.
+const enforceBinStock = () => process.env.ENFORCE_BIN_STOCK === 'true'
+
 // Guard a consumption against the bin's actual stock on hand BEFORE any row is
-// written. Throws 409 when the bin can't cover the draw, which rolls back the
-// caller's transaction so a refused consumption leaves no dispense_log row behind.
+// written. Returns true when the bin covers the draw (or nothing is being drawn),
+// false when it does not and enforcement is off. Throws 409 when it does not and
+// enforcement is on — inside the caller's transaction, so a refused consumption
+// rolls back and leaves no dispense_log row behind.
 //
 // This is the invariant the bin card depends on: a bin's stock on hand must always
 // equal the sum of its recorded movements. Allowing an overdraft (by clamping the
@@ -49,12 +62,17 @@ async function resolveSection(section, commodityId, exec) {
 // and the difference reappears as a phantom opening balance. qty 0 is a legitimate
 // "nothing consumed today" record and is always allowed.
 async function assertBinCovers(exec, soh, qty, commodityId, binLabel) {
-  if (qty <= 0 || soh >= qty) return
+  if (qty <= 0 || soh >= qty) return true
   const name = (await exec('select name from commodities where id = $1', [commodityId])).rows[0]?.name || 'this commodity'
-  const e = new Error(
-    `Cannot record ${qty} consumed: ${binLabel} holds only ${soh} of ${name}. ` +
+  const msg = `Cannot record ${qty} consumed: ${binLabel} holds only ${soh} of ${name}. ` +
     `Record the stock movement into ${binLabel} first (intake or redistribution), then record the consumption.`
-  )
+  if (!enforceBinStock()) {
+    // Log it so the overdrafts are measurable during the transition, then fall
+    // through to the old clamped decrement rather than blocking the user.
+    console.warn(`[bin-stock] overdraft ALLOWED (ENFORCE_BIN_STOCK is off): ${msg}`)
+    return false
+  }
+  const e = new Error(msg)
   e.status = 409
   throw e
 }
@@ -551,30 +569,39 @@ export class LogService {
       // LotService.debit's self-heal reads the bin AFTER the decrement, so a clamped
       // bin made it mint phantom lots to cover the draw. Rejecting up front (409)
       // rolls back the whole transaction — a refused consumption leaves no row.
+      // `covers` false means the bin is short AND enforcement is off: fall back to
+      // the old clamped decrement so the user isn't blocked during the transition.
       let bin
       if (dsd_site_name) {
         const dsdStock = await StockService.getDsdStockByFacilitySiteCommodity(facility_id, dsd_site_name, commodity_id, exec)
-        await assertBinCovers(exec, dsdStock?.quantity ?? 0, qty, commodity_id, `DSD site "${dsd_site_name}"`)
+        const covers = await assertBinCovers(exec, dsdStock?.quantity ?? 0, qty, commodity_id, `DSD site "${dsd_site_name}"`)
         if (dsdStock && qty > 0) {
-          await exec('update dsd_stock set quantity = quantity - $2, updated_at = now() where id = $1', [dsdStock.id, qty])
+          await exec(`update dsd_stock set quantity = ${covers ? 'quantity - $2' : 'greatest(0, quantity - $2)'}, updated_at = now() where id = $1`, [dsdStock.id, qty])
         }
         bin = { facility_id, commodity_id, location_type: 'dsd', site_name: dsd_site_name }
       } else if (sdp_name) {
         const sdpStock = await StockService.getSdpStockByFacilitySiteCommodity(facility_id, sdp_name, commodity_id, exec)
-        await assertBinCovers(exec, sdpStock?.quantity ?? 0, qty, commodity_id, `SDP site "${sdp_name}"`)
+        const covers = await assertBinCovers(exec, sdpStock?.quantity ?? 0, qty, commodity_id, `SDP site "${sdp_name}"`)
         if (sdpStock && qty > 0) {
-          await exec('update sdp_stock set quantity = quantity - $2, updated_at = now() where id = $1', [sdpStock.id, qty])
+          await exec(`update sdp_stock set quantity = ${covers ? 'quantity - $2' : 'greatest(0, quantity - $2)'}, updated_at = now() where id = $1`, [sdpStock.id, qty])
         }
         bin = { facility_id, commodity_id, location_type: 'sdp', site_name: sdp_name }
       } else {
         // Facility consumption deducts the given location (the frontend dispenses
         // from the dispensary); defaults to store when unspecified.
         const loc = location_type || 'store'
+        const label = loc === 'store' ? 'the main store' : 'the dispensary'
         const stock = await StockService.getStockByFacilityAndCommodity(facility_id, commodity_id, loc, exec)
-        await assertBinCovers(exec, stock?.quantity ?? 0, qty, commodity_id, loc === 'store' ? 'the main store' : 'the dispensary')
+        const covers = await assertBinCovers(exec, stock?.quantity ?? 0, qty, commodity_id, label)
         if (stock && qty > 0) {
-          const dec = await StockService.decrementStockStrict(stock.id, qty, exec)
-          if (!dec) await assertBinCovers(exec, 0, qty, commodity_id, loc === 'store' ? 'the main store' : 'the dispensary')
+          // Strict when the precondition passed — closes the check-then-write race.
+          // Re-asserting on a null result turns a lost race into the same 409.
+          if (covers) {
+            const dec = await StockService.decrementStockStrict(stock.id, qty, exec)
+            if (!dec) await assertBinCovers(exec, 0, qty, commodity_id, label)
+          } else {
+            await StockService.decrementStock(stock.id, qty, exec)
+          }
         }
         bin = { facility_id, commodity_id, location_type: loc, site_name: null }
       }
