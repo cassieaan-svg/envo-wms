@@ -18,18 +18,28 @@ const ok = (label, pass, detail = '') => { checks.push({ check: label, result: p
 
 try {
   // Tables + their column counts (a partially applied migration shows up here).
-  for (const [t, want] of [['stock_count', 14], ['bin_opening', 10]]) {
-    const n = (await query(`select count(*)::int n from information_schema.columns where table_name = $1`, [t])).rows[0].n
-    ok(`table ${t}`, n === want, n === 0 ? 'MISSING — migration not applied' : `${n} columns (expected ${want})`)
+  const cols = async t => (await query(`select count(*)::int n from information_schema.columns where table_name = $1`, [t])).rows[0].n
+  const nOpen = await cols('bin_opening')
+  ok('table bin_opening', nOpen === 10, nOpen === 0 ? 'MISSING — migration not applied' : `${nOpen} columns (expected 10)`)
+
+  // The bin card, audit and diagnostics all read these; without them an adjustment
+  // cannot say which shelf it corrected and every one silently applies to the store.
+  for (const col of ['location_type', 'site_name']) {
+    const n = (await query(
+      `select count(*)::int n from information_schema.columns where table_name = 'stock_adjustment_log' and column_name = $1`, [col])).rows[0].n
+    ok(`stock_adjustment_log.${col}`, n === 1, n ? '' : 'MISSING — 20260805_adjustment_bin not applied')
   }
 
-  // The derived stock-count adjustment cannot be written without this.
-  const c = (await query(`select pg_get_constraintdef(oid) d from pg_constraint where conname = 'stock_adjustment_log_reason_check'`)).rows[0]
-  ok('reason allows "Stock count variance"', !!c && /Stock count variance/.test(c.d), c ? '' : 'constraint not found')
-  ok('reason allows "Opening balance"', !!c && /Opening balance/.test(c.d), c ? '' : 'constraint not found')
+  // stock_count was the separate counting flow, now removed: corrections are
+  // adjustments again. The table should be gone, not lying around to be rewired.
+  const nCount = await cols('stock_count')
+  ok('stock_count dropped', nCount === 0, nCount ? `still present (${nCount} columns) — apply 20260805_adjustment_bin` : 'gone')
 
-  // Historical rows still carry the retired reason; dropping it would fail validation.
-  ok('reason still allows "Physical count correction" (historical rows)', !!c && /Physical count correction/.test(c.d))
+  const c = (await query(`select pg_get_constraintdef(oid) d from pg_constraint where conname = 'stock_adjustment_log_reason_check'`)).rows[0]
+  // The supported reason for a count correction, and the baseline reason used by
+  // the opening-balance tooling.
+  ok('reason allows "Physical count correction"', !!c && /Physical count correction/.test(c.d), c ? '' : 'constraint not found')
+  ok('reason allows "Opening balance"', !!c && /Opening balance/.test(c.d), c ? '' : 'constraint not found')
 
   // Enforcement is opt-in; anything other than 'true' leaves consumption unchanged.
   const enf = process.env.ENFORCE_BIN_STOCK
@@ -39,8 +49,8 @@ try {
   console.table(checks)
   const failed = checks.filter(c => c.result === 'FAIL')
   if (failed.length) {
-    console.log(`\n✗ ${failed.length} check(s) FAILED — do NOT deploy. Apply the missing migration first:`)
-    console.log('  node scripts/apply_migration.mjs 20260804_stock_count.sql 20260804_opening_balance_reason.sql 20260804_bin_opening.sql')
+    console.log(`\n✗ ${failed.length} check(s) FAILED — do NOT deploy. Apply the missing migration(s) first:`)
+    console.log('  node scripts/apply_migration.mjs 20260804_opening_balance_reason.sql 20260804_bin_opening.sql 20260805_adjustment_bin.sql')
     process.exitCode = 1
   } else {
     console.log('\n✓ All checks passed — safe to deploy.')
