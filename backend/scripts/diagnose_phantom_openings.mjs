@@ -69,21 +69,25 @@ try {
   for (const b of bins) {
     const p = [b.facility_id, b.commodity_id]
     const rows = [
-      ...(await query(`select received_at t, 'INTAKE' kind, quantity qty, coalesce(supplier_source,'') ref, coalesce(received_by,'') who, coalesce(notes,'') notes from intake_log where facility_id=$1 and commodity_id=$2`, p)).rows.map(r => ({ ...r, delta: r.qty })),
-      ...(await query(`select adjusted_at t, 'ADJ ('||adjustment_type||')' kind, quantity qty, coalesce(reason,'') ref, coalesce(adjusted_by,'') who, coalesce(notes,'') notes, adjustment_type from stock_adjustment_log where facility_id=$1 and commodity_id=$2`, p)).rows.map(r => ({ ...r, delta: r.adjustment_type === 'Decrease' ? -r.qty : r.qty })),
+      // Ids are carried through so a correction can name the exact offending row:
+      // fix_opening_balance.mjs --reverse takes these uuids.
+      ...(await query(`select id, received_at t, 'INTAKE' kind, quantity qty, coalesce(supplier_source,'') ref, coalesce(received_by,'') who, coalesce(notes,'') notes from intake_log where facility_id=$1 and commodity_id=$2`, p)).rows.map(r => ({ ...r, delta: r.qty })),
+      ...(await query(`select id, adjusted_at t, 'ADJ ('||adjustment_type||')' kind, quantity qty, coalesce(reason,'') ref, coalesce(adjusted_by,'') who, coalesce(notes,'') notes, adjustment_type from stock_adjustment_log where facility_id=$1 and commodity_id=$2`, p)).rows.map(r => ({ ...r, delta: r.adjustment_type === 'Decrease' ? -r.qty : r.qty })),
       // stock_transfer_log has no created_at: it dates rows by initiated_at, and
       // resolved_at once acted on. coalesce(resolved_at, initiated_at) is exactly
       // what binCardService uses, so this timeline matches the bin card's.
-      ...(await query(`select coalesce(resolved_at, initiated_at) t, 'TRANSFER OUT' kind, quantity qty, status ref, coalesce(initiated_by,'') who, coalesce(notes,'') notes from stock_transfer_log where sending_facility_id=$1 and commodity_id=$2 and status in ${OUT_STATUSES}`, p)).rows.map(r => ({ ...r, delta: -r.qty })),
-      ...(await query(`select coalesce(resolved_at, initiated_at) t, 'TRANSFER IN' kind, quantity qty, status ref, coalesce(initiated_by,'') who, coalesce(notes,'') notes from stock_transfer_log where receiving_facility_id=$1 and commodity_id=$2 and status='accepted' and sending_facility_id is distinct from $1`, p)).rows.map(r => ({ ...r, delta: r.qty })),
+      ...(await query(`select id, coalesce(resolved_at, initiated_at) t, 'TRANSFER OUT' kind, quantity qty, status ref, coalesce(initiated_by,'') who, coalesce(notes,'') notes from stock_transfer_log where sending_facility_id=$1 and commodity_id=$2 and status in ${OUT_STATUSES}`, p)).rows.map(r => ({ ...r, delta: -r.qty })),
+      ...(await query(`select id, coalesce(resolved_at, initiated_at) t, 'TRANSFER IN' kind, quantity qty, status ref, coalesce(initiated_by,'') who, coalesce(notes,'') notes from stock_transfer_log where receiving_facility_id=$1 and commodity_id=$2 and status='accepted' and sending_facility_id is distinct from $1`, p)).rows.map(r => ({ ...r, delta: r.qty })),
     ].sort((x, y) => new Date(x.t) - new Date(y.t))
 
     let run = 0
     console.log(`\n${'='.repeat(100)}\n${b.facility} — ${b.commodity}   SOH ${b.soh}, record net ${b.record_net}, phantom opening ${b.opening}\n`)
     console.table(rows.map(r => {
       run += r.delta
-      detail.push({ facility: b.facility, commodity: b.commodity, date: d(r.t), kind: r.kind, delta: r.delta, running: run, reason: r.ref, by: r.who, notes: r.notes })
-      return { date: d(r.t), kind: r.kind, delta: r.delta, running: run, reason: r.ref, by: r.who, notes: (r.notes || '').slice(0, 45) }
+      detail.push({ id: r.id, facility: b.facility, commodity: b.commodity, date: d(r.t), kind: r.kind, delta: r.delta, running: run, reason: r.ref, by: r.who, notes: r.notes })
+      // Console shows a short id for eyeballing; the CSV carries the full uuid,
+      // which is what --reverse consumes.
+      return { id8: (r.id || '').slice(0, 8), date: d(r.t), kind: r.kind, delta: r.delta, running: run, reason: r.ref, by: r.who, notes: (r.notes || '').slice(0, 38) }
     }))
 
     // The tell: several large Decreases under the same reason are almost always one
@@ -92,13 +96,25 @@ try {
     if (counts.length > 1) {
       console.log(`  ⚠ ${counts.length} count-style DECREASES totalling ${counts.reduce((s, r) => s + r.delta, 0)} — ` +
                   `likely the same shelf entered repeatedly as a delta. Under the new stock_count flow only the LAST would apply.`)
+      // Same-day repeats are the clearest duplicate signal (one shelf, one person,
+      // one day). Print the ids of all but the FIRST in each day's run — those are
+      // the extra entries --reverse would remove. Judgement still required: a
+      // genuine second count on the same day is possible, just rare.
+      const byDay = {}
+      for (const r of counts) (byDay[d(r.t)] = byDay[d(r.t)] || []).push(r)
+      const extras = Object.values(byDay).filter(v => v.length > 1).flatMap(v => v.slice(1))
+      if (extras.length) {
+        console.log(`  → same-day repeats; candidate ids to reverse (${extras.reduce((s, r) => s + r.delta, 0)} units):`)
+        console.log(`    ${extras.map(r => r.id).join(',')}`)
+      }
     }
   }
 
   if (csvPath) {
-    const hdr = ['Facility', 'Commodity', 'Date', 'Kind', 'Delta', 'Running', 'Reason', 'By', 'Notes']
+    // Id first: --reverse takes these uuids, so they must be trivial to copy out.
+    const hdr = ['Id', 'Facility', 'Commodity', 'Date', 'Kind', 'Delta', 'Running', 'Reason', 'By', 'Notes']
     const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-    fs.writeFileSync(csvPath, [hdr.join(','), ...detail.map(r => [r.facility, r.commodity, r.date, r.kind, r.delta, r.running, r.reason, r.by, r.notes].map(esc).join(','))].join('\r\n'))
+    fs.writeFileSync(csvPath, [hdr.join(','), ...detail.map(r => [r.id, r.facility, r.commodity, r.date, r.kind, r.delta, r.running, r.reason, r.by, r.notes].map(esc).join(','))].join('\r\n'))
     console.log(`\nWrote ${detail.length} detail rows to ${csvPath}`)
   }
   console.log('\nREAD-ONLY — nothing was modified.')
