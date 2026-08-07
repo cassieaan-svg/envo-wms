@@ -55,6 +55,35 @@ try {
   // ---- Mode B: reverse specific bogus adjustment rows -----------------------
   // Stock on hand is untouched: removing a phantom deduction raises the movement
   // sum, so the opening falls toward 0 on its own with the evidence intact.
+  // ---- Mode C: remove a baseline that should not have been recorded ------------
+  // A baseline asserts "this location began with N". Where the real cause was
+  // something else — a transfer credited twice, say — that assertion is false and
+  // hides the actual fault, so it has to be removable. Clearing it restores the
+  // opening to what it was; stock is untouched, exactly as when it was written.
+  if (argv.includes('--clear')) {
+    if (!facArg) { console.error('Usage: node scripts/fix_opening_balance.mjs "<facility>" ["<commodity>"] --bin <bin> [--site "<name>"] --clear [--apply]'); process.exit(1) }
+    const fac = (await query(`select id, name from facilities where name ilike $1`, [`%${facArg}%`])).rows
+    if (fac.length !== 1) { console.log('Facility not unique:', fac.map(f => f.name)); process.exit(1) }
+    const p = [fac[0].id, binArg, siteArg || null]
+    let cond = `facility_id=$1 and location_type=$2 and coalesce(site_name,'')=coalesce($3,'')`
+    if (commArg) {
+      const c = (await query(`select id, name from commodities where name ilike $1`, [`%${commArg}%`])).rows
+      if (c.length !== 1) { console.log('Commodity not unique:', c.map(x => x.name)); process.exit(1) }
+      p.push(c[0].id); cond += ` and commodity_id=$4`
+    }
+    const rows = (await query(
+      `select b.id, c.name commodity, b.location_type, b.site_name, b.quantity, b.opened_at, b.recorded_by
+         from bin_opening b join commodities c on c.id=b.commodity_id where ${cond}`, p)).rows
+    if (!rows.length) { console.log('\nNo recorded baseline matches.'); process.exit(0) }
+    console.log(`\n${fac[0].name} — baselines to REMOVE (${rows.length}):\n`)
+    console.table(rows.map(r => ({ commodity: r.commodity, bin: r.location_type + (r.site_name ? `:${r.site_name}` : ''), quantity: r.quantity, recorded_by: r.recorded_by })))
+    console.log('Stock on hand is NOT changed. The opening returns to what it was before.')
+    if (!apply) { console.log('\nDRY RUN — re-run with --apply to remove them.'); process.exit(0) }
+    await withTransaction(async exec => { await exec(`delete from bin_opening where id = any($1::uuid[])`, [rows.map(r => r.id)]) })
+    console.log(`\n✓ Removed ${rows.length} baseline(s).`)
+    process.exit(0)
+  }
+
   if (reverseIds.length) {
     const rows = (await query(
       `select a.id, f.name facility, c.name commodity, a.adjustment_type, a.quantity, a.reason, a.adjusted_at, a.notes
