@@ -33,6 +33,7 @@
 
 import { pool, query, withTransaction } from '../src/db.js'
 import { LotService } from '../src/services/lotService.js'
+import fs from 'node:fs'
 
 const argv = process.argv.slice(2)
 const apply = argv.includes('--apply')
@@ -67,6 +68,15 @@ try {
       type: r.adjustment_type, qty: r.quantity, reason: r.reason })))
     console.log('\nStock on hand is NOT changed — only the erroneous records are removed.')
     if (!apply) { console.log('\nDRY RUN — re-run with --apply to delete them.'); process.exit(0) }
+    // Write the FULL rows to an undo file BEFORE touching anything, so the delete is
+    // reversible without restoring the whole database. Written first on purpose: if
+    // this fails, nothing has been deleted yet.
+    const full = (await query(`select * from stock_adjustment_log where id = any($1::uuid[])`, [reverseIds])).rows
+    const undo = `undo_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    fs.writeFileSync(undo, JSON.stringify({ table: 'stock_adjustment_log', deleted_at: new Date().toISOString(), rows: full }, null, 2))
+    console.log(`\nUndo file written: ${undo}`)
+    console.log(`Restore with:  node scripts/restore_deleted.mjs ${undo}`)
+
     await withTransaction(async exec => { await exec(`delete from stock_adjustment_log where id = any($1::uuid[])`, [reverseIds]) })
     console.log(`\n✓ Deleted ${rows.length} adjustment row(s). Re-run the audit to confirm the opening.`)
     process.exit(0)
