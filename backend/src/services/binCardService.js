@@ -234,7 +234,16 @@ export class BinCardService {
     // Reconstruct running balance so the last row equals the bin's current SOH.
     const delta = r => (r.received || 0) - (r.issued || 0) + (r.adjustment || 0)
     let bal = currentBalance - rows.reduce((s, r) => s + delta(r), 0)
-    for (const r of rows) { bal += delta(r); r.balance = bal; delete r._tid; delete r._seedLots }
+    // Flag rows whose record has been edited. An edit is NOT its own movement — it
+    // changes an existing one, and that row already carries the new quantity. Adding
+    // a row for it would move the balance twice and manufacture an opening balance
+    // rather than explain one. So it is a marker on the row it changed.
+    const editedIds = new Set((await query(
+      `select distinct record_id from edit_history where facility_id = $1 and commodity_id = $2`,
+      [facilityId, commodityId])).rows.map(r => r.record_id))
+    for (const r of rows) if (r._rid && editedIds.has(r._rid)) r.edited = true
+
+    for (const r of rows) { bal += delta(r); r.balance = bal; delete r._tid; delete r._rid; delete r._seedLots }
 
     return {
       facility, commodity, location, currentBalance,
@@ -304,9 +313,10 @@ export class BinCardService {
 
     // 1) Intake → Received
     for (const r of (await query(
-      `select received_at "date", quantity, supplier_source, batch_number, expiry_date, delivery_note_ref, received_by, notes
+      `select id, received_at "date", quantity, supplier_source, batch_number, expiry_date, delivery_note_ref, received_by, notes
        from intake_log where facility_id = $1 and commodity_id = $2`, [facilityId, commodityId])).rows) {
       rows.push({
+        _rid: r.id,
         date: r.date, type: 'Intake', ref: r.delivery_note_ref || '', party: r.supplier_source || '',
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: r.quantity, issued: 0, adjustment: 0,
@@ -320,11 +330,12 @@ export class BinCardService {
     // bin-addressable have location_type backfilled to 'store', which is what they
     // were, so `is null` is belt-and-braces for anything the migration missed.
     for (const r of (await query(
-      `select adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
+      `select id, adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
        from stock_adjustment_log where facility_id = $1 and commodity_id = $2
          and coalesce(location_type,'store') = 'store'`, [facilityId, commodityId])).rows) {
       const signed = r.adjustment_type === 'Decrease' ? -r.quantity : r.quantity
       rows.push({
+        _rid: r.id,
         date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: 0, issued: 0, adjustment: signed,
@@ -398,10 +409,10 @@ export class BinCardService {
     // Before adjustments were bin-addressable these could only hit the store, so a
     // dispensary correction moved the wrong card and left this one unchanged.
     for (const r of (await query(
-      `select adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
+      `select id, adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
          from stock_adjustment_log
         where facility_id = $1 and commodity_id = $2 and location_type = 'dispensary'`, [facilityId, commodityId])).rows) {
-      rows.push({ date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
+      rows.push({ _rid: r.id, date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: 0, issued: 0, adjustment: r.adjustment_type === 'Decrease' ? -r.quantity : r.quantity,
         by: r.adjusted_by || '', remarks: freeNote(r.notes) })
@@ -436,12 +447,12 @@ export class BinCardService {
     }
     // Adjustments recorded AGAINST this site (a count correction on that shelf).
     for (const r of (await query(
-      `select adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
+      `select id, adjusted_at "date", quantity, adjustment_type, reason, reference_number, adjusted_by, notes, batch_number, expiry_date
          from stock_adjustment_log
         where facility_id = $1 and commodity_id = $2 and location_type = $3
           and lower(btrim(coalesce(site_name,''))) = lower(btrim($4))`,
       [facilityId, commodityId, tag.toLowerCase(), site])).rows) {
-      rows.push({ date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
+      rows.push({ _rid: r.id, date: r.date, type: 'Adjustment', ref: r.reference_number || '', party: r.reason || '',
         batch: r.batch_number || '', expiry: r.expiry_date || '',
         received: 0, issued: 0, adjustment: r.adjustment_type === 'Decrease' ? -r.quantity : r.quantity,
         by: r.adjusted_by || '', remarks: freeNote(r.notes) })
@@ -462,7 +473,7 @@ export class BinCardService {
 
   static async _dispenses(facilityId, commodityId) {
     return (await query(
-      `select dispensed_at "date", quantity, dispensed_to, dispensed_by, regimen_name, notes, batch_number, expiry_date
+      `select id, dispensed_at "date", quantity, dispensed_to, dispensed_by, regimen_name, notes, batch_number, expiry_date
        from dispense_log where facility_id = $1 and commodity_id = $2`, [facilityId, commodityId])).rows
   }
 
@@ -471,6 +482,7 @@ export class BinCardService {
     // fall back to a legacy notes-encoded batch; leave blank so FEFO estimates
     // when neither exists.
     return {
+      _rid: r.id,
       date: r.date, type: 'Dispense', ref: '', party: r.dispensed_to || '',
       batch: r.batch_number || rx(r.notes, 'Batch') || '',
       expiry: r.expiry_date || rx(r.notes, 'Expiry') || '',

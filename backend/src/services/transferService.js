@@ -242,6 +242,24 @@ export class TransferService {
     if (!transfer.receiving_facility_id) throw new Error('Transfer has no receiving facility')
 
     return withTransaction(async exec => {
+      // Claim the transfer FIRST, and only credit if this call is the one that moved
+      // it off its previous status. Crediting first and setting the status after made
+      // accept non-idempotent: a second call — a retried request, an impatient second
+      // click — credited the stock and the lots again while the status update was a
+      // harmless no-op, so nothing looked wrong afterwards. The receiver's stock ended
+      // at exactly double the amount received, with the lot ledger doubled to match,
+      // which is why the two agreed with each other and disagreed with the records
+      // (Ikpe Annang: one accepted transfer of 15, stock 30, records 15).
+      //
+      // `and status <> 'accepted'` makes the claim atomic: concurrent calls contend on
+      // the same row, and only one gets a row back.
+      const { rows } = await exec(
+        `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2
+         where id = $1 and status <> 'accepted' returning *`,
+        [transferId, received_by]
+      )
+      if (!rows[0]) return transfer      // already accepted — credit nothing, report the existing row
+
       await this._creditStock(exec, transfer.receiving_facility_id, transfer.commodity_id, transfer.quantity, 'store', transfer.section)
       // Credit the receiver's store lots with exactly the batch/expiry lots the
       // sender dispatched (fall back to the transfer's recorded batch/expiry, then
@@ -250,12 +268,7 @@ export class TransferService {
         { facility_id: transfer.receiving_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
         transfer.quantity)
 
-      const { rows } = await exec(
-        `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2
-         where id = $1 returning *`,
-        [transferId, received_by]
-      )
-      return rows[0] || null
+      return rows[0]
     })
   }
 
@@ -528,6 +541,16 @@ export class TransferService {
     const qty = transfer.quantity
 
     return withTransaction(async exec => {
+      // Claim first, credit second — same reason as accept() above. Receiving twice
+      // used to add the quantity to the site bin twice.
+      const resolvedBy = `${transfer.resolved_by || ''} [Received by: ${received_by || ''}]`.trim()
+      const { rows } = await exec(
+        `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2
+         where id = $1 and status <> 'accepted' returning *`,
+        [transferId, resolvedBy]
+      )
+      if (!rows[0]) return transfer      // already received — credit nothing
+
       if (isDsd) {
         const existing = await StockService.getDsdStockByFacilitySiteCommodity(fid, site, transfer.commodity_id, exec)
         if (existing) {
@@ -549,13 +572,7 @@ export class TransferService {
       await this._creditLotsFromTransfer(exec, transfer,
         { facility_id: fid, commodity_id: transfer.commodity_id, location_type: isDsd ? 'dsd' : 'sdp', site_name: site }, qty)
 
-      const resolvedBy = `${transfer.resolved_by || ''} [Received by: ${received_by || ''}]`.trim()
-      const { rows } = await exec(
-        `update stock_transfer_log set status = 'accepted', resolved_at = now(), resolved_by = $2
-         where id = $1 returning *`,
-        [transferId, resolvedBy]
-      )
-      return rows[0] || null
+      return rows[0]
     })
   }
 

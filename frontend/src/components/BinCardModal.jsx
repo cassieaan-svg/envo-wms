@@ -67,7 +67,7 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
   const locLabel = bins.find(l => l.value === location)?.label || location
   const title = `Bin Card — ${pickedName}`
   const subtitle = card ? `${card.facility?.name || ''} · ${locLabel} · Unit: ${card.commodity?.unit || '—'} · Current SOH: ${card.currentBalance ?? '—'}` : ''
-  const exportRows = () => (card?.rows || []).map(r => [dstr(r.date), r.ref, r.party, r.batch, dstr(r.expiry), r.received || 0, r.issued || 0, r.adjustment || 0, r.balance, r.by, r.remarks])
+  const exportRows = () => (card?.rows || []).map(r => [dstr(r.date), r.ref, r.party + (r.edited ? ' (edited)' : ''), r.batch, dstr(r.expiry), r.received || 0, r.issued || 0, r.adjustment || 0, r.balance, r.by, r.remarks])
   const base = (card?.commodity?.name || 'commodity').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '')
   const doCsv = () => exportCsv(`bincard_${base}_${location}.csv`, HEADERS, exportRows())
   // Print the national BIN CARD (coat of arms + exact layout); loaded on demand.
@@ -147,7 +147,17 @@ export function BinCardModal({ facilityId, commodityId, commodityName, commoditi
                 <tr key={i} className="border-b border-white/5 hover:bg-white/2">
                   <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{dstr(r.date)}</td>
                   <td className="px-3 py-2 text-xs text-gray-500">{r.ref}</td>
-                  <td className="px-3 py-2 text-gray-200">{r.party}</td>
+                  <td className="px-3 py-2 text-gray-200">
+                    {r.party}
+                    {/* An edit is not its own movement — this row already carries the
+                        edited quantity — so it is a marker here, not a separate line. */}
+                    {r.edited && (
+                      <span title="This record was edited after it was first entered"
+                            className="ml-2 align-middle text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                        edited
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-xs text-gray-500">{r.batch}</td>
                   <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{dstr(r.expiry)}</td>
                   <td className={`px-3 py-2 text-right font-mono ${r.received ? 'text-green-400' : 'text-gray-600'}`}>{num0(r.received)}</td>
