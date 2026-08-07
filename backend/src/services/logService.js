@@ -86,6 +86,23 @@ async function assertBinCovers(exec, soh, qty, commodityId, binLabel) {
 // self-describing, so they stay optional.
 export const REASONS_REQUIRING_NOTES = new Set(['Physical count correction', 'Lost / Stolen', 'Other'])
 
+// The bin an edited log row accounts for. dispense_log has no bin column — the
+// site is carried in the notes tag, exactly as the bin card reads it, and an
+// untagged dispense belongs to the dispensary. Adjustments carry the bin explicitly
+// (rows written before that column existed default to the store, which is what they
+// were). Intakes are always the store.
+function editBin(type, row) {
+  const base = { facility_id: row.facility_id, commodity_id: row.commodity_id }
+  if (type === 'intake') return { ...base, location_type: 'store', site_name: null }
+  if (type === 'adjustment') return { ...base, location_type: row.location_type || 'store', site_name: row.site_name || null }
+  const notes = row.notes || ''
+  const dsd = /\[DSD:\s*([^\]]+)\]/i.exec(notes)?.[1]?.trim()
+  const sdp = /\[SDP:\s*([^\]]+)\]/i.exec(notes)?.[1]?.trim()
+  if (dsd) return { ...base, location_type: 'dsd', site_name: dsd }
+  if (sdp) return { ...base, location_type: 'sdp', site_name: sdp }
+  return { ...base, location_type: 'dispensary', site_name: null }
+}
+
 // Human label for a bin, for error messages.
 const binLabel = ({ location_type, site_name }) =>
   location_type === 'store' ? 'the main store'
@@ -213,12 +230,48 @@ export class LogService {
       const { rows } = await exec(`update ${table} set ${sets.join(', ')} where id = $1 returning *`, params)
       const updated = rows[0] || null
 
+      // Move the stock the edited record accounts for, in the SAME transaction.
+      //
+      // This used to be the client's job (EditModal -> api.stock.update), which wrote
+      // the stock figure directly with no movement attached and in a separate request.
+      // If that second call clamped at zero, matched the wrong row, or simply failed,
+      // the log row changed and the stock did not — and the difference resurfaced as a
+      // bin-card opening balance on a bin that had reconciled the day before.
+      //
+      // Editing a quantity does not need a NEW movement: the edited row IS the
+      // movement, so the recorded total moves with it. What must move in step is the
+      // stock, by exactly the same delta — that is what keeps opening at 0.
+      if (updated && fields.quantity !== undefined) {
+        const oldQty = Number(old.quantity) || 0
+        const newQty = Number(updated.quantity) || 0
+        const diff = newQty - oldQty
+        if (diff !== 0) {
+          const bin = editBin(type, old)
+          // Sign per record type: an intake or an Increase adjustment credits its bin,
+          // so more means more stock. A dispense or a Decrease adjustment draws from
+          // it, so more means less.
+          const credits = type === 'intake' || (type === 'adjustment' && old.adjustment_type === 'Increase')
+          const delta = credits ? diff : -diff
+          const current = await binSoh(exec, bin)
+          const target = current + delta
+          if (target < 0) {
+            const msg = `Cannot apply this edit: ${binLabel(bin)} holds ${current}, and the change would take it to ${target}.`
+            if (enforceBinStock()) { const e = new Error(msg); e.status = 409; throw e }
+            console.warn(`[bin-stock] edit clamped (ENFORCE_BIN_STOCK is off): ${msg}`)
+          }
+          await setBinSoh(exec, bin, Math.max(0, target))
+        }
+      }
+
       const isStoreCredit = type === 'intake' || (type === 'adjustment' && old.adjustment_type === 'Increase')
       if (updated && isStoreCredit) {
         await this._syncLotsOnEdit(exec, { facility_id: old.facility_id, commodity_id: old.commodity_id }, {
           oldBatch: old.batch_number,   oldExpiry: old.expiry_date, oldQty: old.quantity,
           newBatch: updated.batch_number, newExpiry: updated.expiry_date, newQty: updated.quantity,
         })
+      } else if (updated && fields.quantity !== undefined) {
+        // Debits carry no lot identity, so bring the ledger back to the bin total.
+        await LotService.reconcile(exec, editBin(type, old))
       }
       return updated
     })

@@ -24,16 +24,12 @@ export function EditModal({ record, onClose, onSave }) {
 
   const fid = store.currentFacility?.id
 
-  // Adjust a single stock row at a specific location by a signed delta.
-  // Scoping by location_type guarantees a single matching row, avoiding the
-  // multi-row failure that .maybeSingle() hits when a commodity has separate
-  // store / dispensary / dsd rows.
-  async function adjustStockLocation(locationType, delta) {
-    if (delta === 0) return
-    const rows = await api.stock.list({ facility_id: fid, commodity_id: record.commodity_id, location_type: locationType }).catch(() => [])
-    const stk = rows && rows[0]
-    if (stk) await api.stock.update(stk.id, Math.max(0, stk.quantity + delta))
-  }
+  // Stock is NOT adjusted here. The server moves it inside the same transaction that
+  // updates the log row (LogService.updateLog), so the record and the stock can never
+  // disagree. Writing it from here — a second, separate request that set the stock
+  // figure directly — is what put stock and records out of step and produced opening
+  // balances on bins that had reconciled the day before. It also always targeted the
+  // STORE, so editing a dispensary, SDP or DSD record moved the wrong bin.
 
   async function save() {
     if (qty < 1) { setErr('Quantity must be at least 1.'); return }
@@ -42,40 +38,19 @@ export function EditModal({ record, onClose, onSave }) {
 
     const newQty = parseInt(qty)
     const oldQty = record.quantity
-    const isDSD  = (record.notes || '').startsWith('[DSD:')
     let table = '', updateData = {}
 
     if (record._type === 'dispense') {
       table = 'dispense_log'
       updateData = { quantity:newQty, dispensed_at:date?new Date(date).toISOString():record.dispensed_at, notes:notes||null, edited_by:editedBy||null }
-      // Consumption deducts stock. If less is now consumed (newQty < oldQty)
-      // the difference is returned to stock; if more, extra is deducted.
-      const returnToStock = oldQty - newQty
-      if (isDSD) {
-        // DSD consumption lives in dsd_stock, keyed by site name (parsed from notes).
-        const m = (record.notes || '').match(/^\[DSD:\s*([^\]]+)\]/)
-        const siteName = m ? m[1].trim() : null
-        if (siteName && returnToStock !== 0) {
-          const dsRows = await api.stock.dsd.list({ facility_id: fid, dsd_site_name: siteName, commodity_id: record.commodity_id }).catch(() => [])
-          const ds = dsRows && dsRows[0]
-          if (ds) await api.stock.dsd.setQuantity(ds.id, Math.max(0, ds.quantity + returnToStock))
-        }
-      } else {
-        await adjustStockLocation('dispensary', returnToStock)
-      }
     } else if (record._type === 'intake') {
       const supplierSource = supplier === 'Other' ? supplierOther.trim() : supplier
       if (!supplierSource) { setErr('Supplier is required.'); setSaving(false); return }
       table = 'intake_log'
       updateData = { quantity:newQty, batch_number:batch.trim()||null, expiry_date:expiry||null, supplier_source:supplierSource||null, condition_on_arrival:condition, edited_by:editedBy||null }
-      // Intake adds to the store. Increasing intake adds more, decreasing removes.
-      await adjustStockLocation('store', newQty - oldQty)
     } else {
       table = 'stock_adjustment_log'
       updateData = { quantity:newQty, reason, notes:notes||null, batch_number:batch.trim()||null, expiry_date:expiry||null, edited_by:editedBy||null }
-      const oldIsInc = record.adjustment_type === 'Increase'
-      const delta = oldIsInc ? (newQty - oldQty) : (oldQty - newQty)
-      await adjustStockLocation('store', delta)
     }
 
     const apiByType = { dispense: api.dispense, intake: api.intake, adjustment: api.adjustments }
