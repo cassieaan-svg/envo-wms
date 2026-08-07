@@ -26,7 +26,7 @@ const RULES = {
   'Physical count correction': { type:null, lock:false, label:'Can be positive or negative', requireNotes:true, binSelect:true },
   'Returned to store':         { type:'Increase', lock:true,  label:'Positive — stock is being returned' },
   [RETURN_REASON]:             { type:'Increase', lock:true,  label:'Positive to store — deducts from the selected SDP site' },
-  'State Office':              { type:'Increase', lock:true,  label:'Positive — stock adjustment from state office' },
+  'State Office':              { type:null,       lock:false, label:'Positive for stock received from state office, negative for stock returned to it' },
   'Other':                     { type:null,       lock:false, label:'Specify type manually', binSelect:true, requireNotes:true },
 }
 
