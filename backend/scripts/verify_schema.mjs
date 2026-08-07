@@ -41,19 +41,28 @@ try {
   ok('reason allows "Physical count correction"', !!c && /Physical count correction/.test(c.d), c ? '' : 'constraint not found')
   ok('reason allows "Opening balance"', !!c && /Opening balance/.test(c.d), c ? '' : 'constraint not found')
 
-  // Enforcement is opt-in; anything other than 'true' leaves consumption unchanged.
-  const enf = process.env.ENFORCE_BIN_STOCK
-  ok('ENFORCE_BIN_STOCK is off', enf !== 'true', enf == null ? 'unset (consumption unchanged)' : `= ${enf}`)
-
   console.log('')
   console.table(checks)
+
+  // Enforcement is a DEPLOYMENT SETTING, not a schema check — reported, never
+  // gating. It used to be a check, which meant switching enforcement on made this
+  // script print "1 check(s) FAILED — do NOT deploy. Apply the missing migration(s)"
+  // while every schema check passed. Misleading in the one direction that matters.
+  const enf = process.env.ENFORCE_BIN_STOCK
+  console.log(enf === 'true'
+    ? '\nENFORCE_BIN_STOCK = true — consumption and adjustments are REFUSED when they\n' +
+      'would take a location below zero in EnVo. Run enforcement_readiness.mjs to see\n' +
+      'which locations are affected. Remove the line from .env and restart to reverse.'
+    : `\nENFORCE_BIN_STOCK ${enf == null ? 'is unset' : `= ${enf}`} — a draw beyond a location's balance is\n` +
+      'still allowed (logged as a [bin-stock] warning, not blocked).')
+
   const failed = checks.filter(c => c.result === 'FAIL')
   if (failed.length) {
-    console.log(`\n✗ ${failed.length} check(s) FAILED — do NOT deploy. Apply the missing migration(s) first:`)
+    console.log(`\n✗ ${failed.length} schema check(s) FAILED — do NOT deploy. Apply the missing migration(s) first:`)
     console.log('  node scripts/apply_migration.mjs 20260804_opening_balance_reason.sql 20260804_bin_opening.sql 20260805_adjustment_bin.sql')
     process.exitCode = 1
   } else {
-    console.log('\n✓ All checks passed — safe to deploy.')
+    console.log('\n✓ All schema checks passed — safe to deploy.')
   }
 } catch (err) {
   console.error('Verify failed:', err.message)
