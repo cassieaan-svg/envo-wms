@@ -15,7 +15,8 @@
 //   cd C:\envo\app\backend
 //   node scripts/enforcement_readiness.mjs                    # summary + worst facilities
 //   node scripts/enforcement_readiness.mjs --days 30          # wider window (default 14)
-//   node scripts/enforcement_readiness.mjs --csv worklist.csv # per-facility worklist
+//   node scripts/enforcement_readiness.mjs --csv worklist.csv # one file, whole network
+//   node scripts/enforcement_readiness.mjs --split worklists  # ONE FILE PER FACILITY
 //   node scripts/enforcement_readiness.mjs "Etim Ekpo"        # one facility's list
 
 import { pool, query } from '../src/db.js'
@@ -25,7 +26,8 @@ const argv = process.argv.slice(2)
 const flag = n => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : null }
 const days = parseInt(flag('--days')) || 14
 const csvPath = flag('--csv')
-const facArg = argv.filter((a, i) => !a.startsWith('--') && !['--days', '--csv'].includes(argv[i - 1]))[0] || null
+const splitDir = flag('--split')
+const facArg = argv.filter((a, i) => !a.startsWith('--') && !['--days', '--csv', '--split'].includes(argv[i - 1]))[0] || null
 
 const rx = (n, t) => new RegExp(`\\[${t}:\\s*([^\\]]+)\\]`, 'i').exec(n || '')?.[1]?.trim()
 const binOf = n => { const d = rx(n, 'DSD'), s = rx(n, 'SDP'); return d ? `dsd:${d}` : s ? `sdp:${s}` : 'dispensary' }
@@ -81,12 +83,36 @@ try {
       .map(([f, v]) => ({ facility: f.slice(0, 44), locations: v.locations, 'records blocked': v.blocked })))
   }
 
+  const hdr = ['Facility', 'Location', 'Commodity', 'Unit', 'EnVoBalance', 'LargestDrawAttempted', 'RecordsBlocked', 'ActionNeeded']
+  const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+  const line = r => [r.fac, label(r.bin), r.comm, r.unit || '', r.have, r.biggest, r.refusals,
+    r.bin === 'store' ? 'Record the intake that brought this stock in' : 'Record the store→location redistribution'].map(esc).join(',')
+
   if (csvPath) {
-    const hdr = ['Facility', 'Location', 'Commodity', 'Unit', 'EnVoBalance', 'LargestDrawAttempted', 'RecordsBlocked', 'ActionNeeded']
-    const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-    fs.writeFileSync(csvPath, [hdr.join(','), ...rows.map(r => [r.fac, label(r.bin), r.comm, r.unit || '', r.have, r.biggest, r.refusals,
-      r.bin === 'store' ? 'Record the intake that brought this stock in' : 'Record the store→location redistribution'].map(esc).join(','))].join('\r\n'))
+    fs.writeFileSync(csvPath, [hdr.join(','), ...rows.map(line)].join('\r\n'))
     console.log(`\nWrote ${rows.length} rows to ${csvPath}`)
+  }
+
+  // One file per facility. A single 1,000-row sheet is not actionable when ~218
+  // different store managers each need only their own handful of lines; this is a
+  // folder you can attach from.
+  if (splitDir) {
+    fs.mkdirSync(splitDir, { recursive: true })
+    const byFac = new Map()
+    for (const r of rows) { const a = byFac.get(r.fac) || []; a.push(r); byFac.set(r.fac, a) }
+    // Windows-safe filename; keep it recognisable so the right sheet reaches the
+    // right person. Collisions get a counter rather than silently overwriting.
+    const used = new Set()
+    for (const [fac, list] of byFac) {
+      let base = fac.replace(/[<>:"/\\|?*]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 90)
+      let name = base; let n = 2
+      while (used.has(name.toLowerCase())) name = `${base} (${n++})`
+      used.add(name.toLowerCase())
+      list.sort((a, b) => b.refusals - a.refusals)
+      fs.writeFileSync(`${splitDir}/${name}.csv`, [hdr.join(','), ...list.map(line)].join('\r\n'))
+    }
+    console.log(`\nWrote ${byFac.size} facility file(s) to ${splitDir}/`)
+    console.log('Each contains only that facility\'s locations, worst first.')
   }
   console.log('\nEnforcement refuses a draw only when it would go below zero in EnVo.')
   console.log('Dispensing exactly the balance always passes.')
