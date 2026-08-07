@@ -1,9 +1,15 @@
 // Correct stock that a double-credited transfer left overstated.
 //
-// Posts a Physical count correction (Decrease) on the affected location, through the
-// same service the app uses — so it is a real, transactional movement with a reason,
-// a name and a note saying which transfer was duplicated. Because the correction is
-// itself a movement, the opening balance lands on 0 without any baseline.
+// Removes the phantom credit from the stock figure, leaving the movement records
+// untouched — because the duplicate was never a movement. The transfer was recorded
+// ONCE; it was the crediting that ran twice. So the repair is to the stock figure
+// alone, and the opening then lands on 0 because the records were always right.
+//
+// It is NOT an adjustment. An adjustment moves stock AND the movement total by the
+// same amount, so it would fix the stock figure and leave the opening exactly where
+// it was: stock 30, movements 15, opening 15 -> post -15 -> stock 15, movements 0,
+// opening still 15. That is the same reason a physical count cannot clear an
+// opening, and it applies here too.
 //
 // Do NOT baseline these locations. A baseline asserts "this location began with N",
 // which is false here: it began with nothing and a receipt was credited twice. The
@@ -23,8 +29,8 @@
 //   node scripts/correct_double_credit.mjs --by "Your Name" --all --apply
 //   node scripts/correct_double_credit.mjs "Ikpe Annang General" --by "Your Name" --apply
 
-import { pool, query } from '../src/db.js'
-import { LogService } from '../src/services/logService.js'
+import { pool, query, withTransaction } from '../src/db.js'
+import { LotService } from '../src/services/lotService.js'
 
 const argv = process.argv.slice(2)
 const apply = argv.includes('--apply')
@@ -118,18 +124,34 @@ try {
   let n = 0, failed = 0
   for (const r of todo) {
     try {
-      await LogService.recordAdjustment({
-        facility_id: r.f, commodity_id: r.c, quantity: r.op, adjustment_type: 'Decrease',
-        reason: 'Physical count correction', adjusted_by: by,
-        location_type: r.bin.startsWith('sdp:') ? 'sdp' : r.bin.startsWith('dsd:') ? 'dsd' : r.bin,
-        site_name: r.bin.includes(':') ? r.bin.split(':').slice(1).join(':') : null,
-        notes: `Transfer of ${r.op} accepted ${r.when} was credited twice; removing the duplicate. Stock ${r.soh} → ${r.soh - r.op}, which is what the records support.`,
+      const kind = r.bin.startsWith('sdp:') ? 'sdp' : r.bin.startsWith('dsd:') ? 'dsd' : r.bin
+      const site = r.bin.includes(':') ? r.bin.split(':').slice(1).join(':') : null
+      await withTransaction(async exec => {
+        if (kind === 'store' || kind === 'dispensary') {
+          await exec(`update stock set quantity = $4, updated_at = now()
+                       where facility_id=$1 and commodity_id=$2 and location_type=$3`, [r.f, r.c, kind, r.net])
+        } else {
+          const tbl = kind === 'dsd' ? 'dsd_stock' : 'sdp_stock'
+          const col = kind === 'dsd' ? 'dsd_site_name' : 'sdp_name'
+          await exec(`update ${tbl} set quantity = $4, updated_at = now()
+                       where facility_id=$1 and commodity_id=$2 and lower(btrim(${col}))=lower(btrim($3))`, [r.f, r.c, site, r.net])
+        }
+        // Bring the lot ledger down with it — it was double-credited too.
+        await LotService.reconcile(exec, { facility_id: r.f, commodity_id: r.c, location_type: kind, site_name: site })
+        // The repair itself is recorded, so it is never a silent change to stock.
+        await exec(`insert into stock_correction_log (facility_id, commodity_id, location_type, site_name,
+                      old_quantity, new_quantity, reason, corrected_by, transfer_id)
+                    values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [r.f, r.c, kind, site, r.soh, r.net,
+           `Transfer of ${r.op} accepted ${r.when} was credited twice; removed the duplicate credit.`, by, r.tid])
       })
       n++
     } catch (e) { failed++; console.error(`  ✗ ${r.fac} — ${r.comm}: ${e.message}`) }
   }
-  console.log(`\n✓ Posted ${n} correction(s)${failed ? `, ${failed} failed` : ''}.`)
-  console.log('Each is a Physical count correction on its location, with a note naming the transfer.')
+  console.log(`\n✓ Corrected ${n} location(s)${failed ? `, ${failed} failed` : ''}.`)
+  console.log('The phantom credit was removed from the stock figure and the lot ledger, and')
+  console.log('logged in stock_correction_log with who did it and which transfer was duplicated.')
+  console.log('Movement records were NOT changed — they were always right; only the crediting ran twice.')
   console.log('Re-run audit_opening_balances.mjs — these locations should now read 0.')
 } catch (err) {
   console.error('Failed:', err.message)
