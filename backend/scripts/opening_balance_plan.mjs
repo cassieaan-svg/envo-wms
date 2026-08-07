@@ -113,11 +113,27 @@ try {
     const drew = issued.get(K(b.f, b.c, b.bin)) || 0
     const phantomDraw = everRecv === 0 && drew > 0
 
+    // Same-day repetition alone does NOT prove duplication — a store manager working
+    // through a reconciliation legitimately posts several corrections in one sitting,
+    // each offsetting a return they had just credited (Ikot Eko Ibon: +149 then -150,
+    // +50 then -25). Reversing those would leave the credits standing with nothing
+    // against them and assert stock that arrived and never left.
+    //
+    // What does prove it is impossibility: corrections that remove more than the
+    // location has EVER received. Apapa took in 3,736 and its corrections remove
+    // 5,692, so at least 1,956 of that cannot have happened. That is the test.
+    const everIn = (b.bin === 'store'
+      ? (intakes.get(`${b.f}|${b.c}`) || 0) + (storeIn.get(`${b.f}|${b.c}`) || 0)
+      : (recv.get(K(b.f, b.c, b.bin)) || 0))
+      + Math.max(0, (b.bin === 'store' ? (adjStore.get(`${b.f}|${b.c}`) || 0) : (binAdj.get(K(b.f, b.c, b.bin)) || 0)) + decs.reduce((s, d) => s + d.quantity, 0))
+    const removed = decs.reduce((s, d) => s + d.quantity, 0)
+    const impossible = removed > everIn
+
     let action, why, cmd, after = 0
-    if (extras.length && b.op > 0) {
+    if (extras.length && b.op > 0 && impossible) {
       const gain = -extras.reduce((s, r) => s + r.quantity * -1, 0)   // extras are Decreases
       action = 'REVERSE'
-      why = `${extras.length + 1} count corrections on one day (${[...new Set(extras.map(e => e.adjusted_by))].join('/')}) — one shelf entered repeatedly`
+      why = `corrections remove ${removed} from a location that ever received ${everIn} — ${extras.length + 1} on one day by ${[...new Set(extras.map(e => e.adjusted_by))].join('/')}`
       cmd = `node scripts/fix_opening_balance.mjs --reverse ${extras.map(e => e.id).join(',')}`
       after = b.op - extras.reduce((s, e) => s + e.quantity, 0)
     } else if (phantomDraw && b.op > 0) {

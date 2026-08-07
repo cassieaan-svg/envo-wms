@@ -28,7 +28,7 @@
 //   node scripts/pre_receipt_consumption.mjs "Ikot Ebok"          # one facility
 //   node scripts/pre_receipt_consumption.mjs --before 2026-07-01  # only before go-live
 //   node scripts/pre_receipt_consumption.mjs --csv pre.csv        # rows to CSV
-//   node scripts/pre_receipt_consumption.mjs --apply              # DELETE them
+//   node scripts/pre_receipt_consumption.mjs --ids <uuid,uuid> --apply   # delete NAMED rows
 
 import { pool, query, withTransaction } from '../src/db.js'
 import fs from 'node:fs'
@@ -38,6 +38,9 @@ const apply = argv.includes('--apply')
 const flag = n => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : null }
 const csvPath = flag('--csv')
 const before = flag('--before')          // extra safety: only rows dated before this
+// Delete ONLY these rows. --apply alone is refused (see below): naming the rows is
+// the only way to remove any.
+const onlyIds = (flag('--ids') || '').split(',').map(x => x.trim()).filter(Boolean)
 const facArg = argv.filter((a, i) => !a.startsWith('--') && !['--csv', '--before'].includes(argv[i - 1]))[0] || null
 const d = v => (v ? new Date(v).toISOString().slice(0, 10) : '')
 const TAG = `case when notes ~* '\\[SDP:' then 'sdp:'||btrim(substring(notes from '\\[SDP:\\s*([^\\]]+)\\]'))
@@ -109,13 +112,34 @@ try {
     console.log(`\nWrote ${hits.length} rows to ${csvPath}`)
   }
 
-  if (!apply) { console.log('\nDRY RUN — nothing deleted. Re-run with --apply once you have reviewed the rows.'); process.exit(0) }
+  const target = onlyIds.length ? hits.filter(h => onlyIds.includes(h.id)) : hits
+  if (onlyIds.length) {
+    const missing = onlyIds.filter(i => !hits.some(h => h.id === i))
+    console.log(`\n--ids given: ${target.length} of ${onlyIds.length} matched this sweep.`)
+    if (missing.length) console.log(`  NOT matched (already deleted, or not pre-receipt): ${missing.join(', ')}`)
+    console.table(target.map(t => ({ facility: t.facility.slice(0, 30), commodity: t.commodity.slice(0, 22), bin: t.bin, date: t.dispensed, qty: t.qty })))
+  }
 
-  console.log('\nDeleting. Stock on hand is NOT changed — only the impossible records go.')
+  if (!apply) { console.log('\nDRY RUN — nothing deleted. Re-run with --ids <uuid,uuid> --apply to delete named rows.'); process.exit(0) }
+
+  // A blanket delete is refused outright. Most pre-receipt consumption sits in
+  // locations that balance perfectly — on production, 1,493 of 1,559 — so deleting
+  // everything this finds would destroy real consumption AND break those locations.
+  // Only named rows can be removed.
+  if (!onlyIds.length) {
+    console.log('\n✗ Refusing a blanket delete: most of what this finds is in locations that')
+    console.log('  balance perfectly, and deleting from those destroys real consumption.')
+    console.log('  Name the rows instead:  --ids <uuid,uuid> --apply')
+    process.exitCode = 1
+    process.exit(1)
+  }
+  if (!target.length) { console.log('\nNothing to delete.'); process.exit(0) }
+
+  console.log('\nDeleting. Stock on hand is NOT changed — only the named records go.')
   await withTransaction(async exec => {
-    await exec(`delete from dispense_log where id = any($1::uuid[])`, [hits.map(h => h.id)])
+    await exec(`delete from dispense_log where id = any($1::uuid[])`, [target.map(h => h.id)])
   })
-  console.log(`✓ Deleted ${hits.length} dispense row(s). Re-run audit_opening_balances.mjs to see the effect.`)
+  console.log(`✓ Deleted ${target.length} dispense row(s). Re-run audit_opening_balances.mjs to see the effect.`)
   console.log('Consumption reporting (AMC / CRRF / monitoring) for those months has changed.')
 } catch (err) {
   console.error('Failed:', err.message)
