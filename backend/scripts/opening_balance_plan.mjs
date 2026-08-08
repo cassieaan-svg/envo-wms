@@ -111,7 +111,16 @@ try {
     // (b) a draw from a location that has never received anything
     const everRecv = (recv.get(K(b.f, b.c, b.bin)) || 0) + (b.bin === 'store' ? (intakes.get(`${b.f}|${b.c}`) || 0) + (storeIn.get(`${b.f}|${b.c}`) || 0) : 0)
     const drew = issued.get(K(b.f, b.c, b.bin)) || 0
-    const phantomDraw = everRecv === 0 && drew > 0
+    // A draw from a location that never received anything looks impossible, but it is
+    // only impossible if the DISPENSE is the wrong record. Where the person wrote a
+    // note explaining it — "updated for last week's consumption" — the consumption is
+    // real and the missing record is the INFLOW. Deleting it would erase a week of
+    // dispensing and understate AMC, so a noted draw is baselined, not reversed.
+    const noted = (await query(
+      `select 1 from dispense_log where facility_id=$1 and commodity_id=$2
+         and coalesce(btrim(regexp_replace(notes, '\[[^\]]*\]', '', 'g')), '') <> '' limit 1`,
+      [b.f, b.c])).rows.length > 0
+    const phantomDraw = everRecv === 0 && drew > 0 && !noted
 
     // Same-day repetition alone does NOT prove duplication — a store manager working
     // through a reconciliation legitimately posts several corrections in one sitting,

@@ -41,7 +41,7 @@ const before = flag('--before')          // extra safety: only rows dated before
 // Delete ONLY these rows. --apply alone is refused (see below): naming the rows is
 // the only way to remove any.
 const onlyIds = (flag('--ids') || '').split(',').map(x => x.trim()).filter(Boolean)
-const facArg = argv.filter((a, i) => !a.startsWith('--') && !['--csv', '--before'].includes(argv[i - 1]))[0] || null
+const facArg = argv.filter((a, i) => !a.startsWith('--') && !['--csv', '--before', '--ids'].includes(argv[i - 1]))[0] || null
 const d = v => (v ? new Date(v).toISOString().slice(0, 10) : '')
 const TAG = `case when notes ~* '\\[SDP:' then 'sdp:'||btrim(substring(notes from '\\[SDP:\\s*([^\\]]+)\\]'))
                   when notes ~* '\\[DSD:' then 'dsd:'||btrim(substring(notes from '\\[DSD:\\s*([^\\]]+)\\]'))
