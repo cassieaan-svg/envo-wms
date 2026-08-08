@@ -40,6 +40,9 @@ const BATCHES = {
     ],
   },
   uuth: {
+    // Was recorded as "University Teaching Hospital"; corrected by
+    // db/migrations/20260808_rename_uuth_facility.sql. Not to be confused with
+    // "University of Uyo Medical Centre", the campus clinic — a different facility.
     hub: 'University of Uyo Teaching Hospital',
     section: 'pharmacy',
     sites: [
