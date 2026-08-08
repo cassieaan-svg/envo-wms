@@ -52,3 +52,8 @@ new_facility_logins_confirmed.csv
 # (db/_migration/*) rather than the dir itself, so the negation can re-include.
 db/_migration/*
 !db/_migration/realtime_triggers.sql
+
+# Account handover sheets — plaintext logins for provisioned facility/DSD accounts.
+# Never commit these; they exist only to be handed to the site and then deleted.
+DSD_Sites_*.csv
+DSD_Sites_*.xlsx

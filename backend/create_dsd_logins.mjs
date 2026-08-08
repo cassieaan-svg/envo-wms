@@ -5,32 +5,56 @@
 //
 // Idempotent: safe to re-run (hub matched by name, users matched by email).
 //
+// One batch per hub, selected by argv so each provisioning run stays on record
+// instead of being edited over the top of the last one:
+//   node create_dsd_logins.mjs ibeno
+//   node create_dsd_logins.mjs uuth
+//
 // Passwords are read from environment variables (never hardcoded — this file is
 // committed, and plaintext passwords must not enter git history). Set them inline
 // when you run it on the VM, e.g. (PowerShell):
 //   cd C:\envo\app\backend
-//   $env:DSD_PW_IWUOKPUM='…'; $env:DSD_PW_ATABRIKANG='…'; $env:DSD_PW_UZARD='…'; node create_dsd_logins.mjs
+//   $env:DSD_PW_SIBAN='…'; $env:DSD_PW_CHASTAGRA='…'; node create_dsd_logins.mjs uuth
 //
 import 'dotenv/config'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
 
-// The hub these spokes hang off. Matched by exact name — must already exist.
-const HUB_NAME = 'Ibeno Cottage Hospital'
-
+// Each batch: the hub facility (matched by EXACT name — must already exist), the
+// commodity section its spokes work in, and its spoke sites.
+//
 // dsd_type must match the values the Transfers dropdown uses exactly:
 //   'Decentralized Hub & Spoke' | 'Community Pharmacy' | 'Fast Track'
 // email = login identity (the app appends @envo.ng to the typed Username, so the
 // username is the local part, e.g. "ibeno.iwuokpum"). `oldEmail` is the address
 // the account was first created under; when present the script RENAMES that
 // account in place rather than creating a duplicate.
-const SITES = [
-  { site: 'Iwuokpum Opolom HC', dsd_type: 'Decentralized Hub & Spoke', email: 'ibeno.iwuokpum@envo.ng',  oldEmail: 'iwuokpum.opolom.dsd@envo.ng', pwEnv: 'DSD_PW_IWUOKPUM' },
-  { site: 'Atabrikang HC',      dsd_type: 'Decentralized Hub & Spoke', email: 'ibeno.atabrikang@envo.ng', oldEmail: 'atabrikang.dsd@envo.ng',      pwEnv: 'DSD_PW_ATABRIKANG' },
-  { site: 'Uzard pharmacy Eket', dsd_type: 'Community Pharmacy',       email: 'ibeno.uzard@envo.ng',      oldEmail: 'uzard.eket.dsd@envo.ng',       pwEnv: 'DSD_PW_UZARD' },
-]
+const BATCHES = {
+  ibeno: {
+    hub: 'Ibeno Cottage Hospital',
+    section: 'pharmacy', // these spokes dispense ARVs
+    sites: [
+      { site: 'Iwuokpum Opolom HC', dsd_type: 'Decentralized Hub & Spoke', email: 'ibeno.iwuokpum@envo.ng',  oldEmail: 'iwuokpum.opolom.dsd@envo.ng', pwEnv: 'DSD_PW_IWUOKPUM' },
+      { site: 'Atabrikang HC',      dsd_type: 'Decentralized Hub & Spoke', email: 'ibeno.atabrikang@envo.ng', oldEmail: 'atabrikang.dsd@envo.ng',      pwEnv: 'DSD_PW_ATABRIKANG' },
+      { site: 'Uzard pharmacy Eket', dsd_type: 'Community Pharmacy',       email: 'ibeno.uzard@envo.ng',      oldEmail: 'uzard.eket.dsd@envo.ng',       pwEnv: 'DSD_PW_UZARD' },
+    ],
+  },
+  uuth: {
+    hub: 'University of Uyo Teaching Hospital',
+    section: 'pharmacy',
+    sites: [
+      { site: 'Siban Pharmacy',     dsd_type: 'Community Pharmacy', email: 'uuth.siban@envo.ng',     pwEnv: 'DSD_PW_SIBAN' },
+      { site: 'Chastagra Pharmacy', dsd_type: 'Community Pharmacy', email: 'uuth.chastagra@envo.ng', pwEnv: 'DSD_PW_CHASTAGRA' },
+    ],
+  },
+}
 
-const SECTION = 'pharmacy' // these spokes dispense ARVs
+const batchName = process.argv[2]
+const batch = BATCHES[batchName]
+if (!batch) {
+  console.error(`usage: node create_dsd_logins.mjs <batch>   (batches: ${Object.keys(BATCHES).join(', ')})`)
+  process.exit(1)
+}
 
 const pool = new pg.Pool({
   host: process.env.PGHOST, port: process.env.PGPORT, database: process.env.PGDATABASE,
@@ -40,15 +64,15 @@ const pool = new pg.Pool({
 async function run() {
   // Resolve the hub facility once. Abort if it isn't there — creating spokes under a
   // wrong/blank facility_id would orphan their stock.
-  const hub = (await pool.query('select id, name from facilities where name = $1', [HUB_NAME])).rows[0]
+  const hub = (await pool.query('select id, name from facilities where name = $1', [batch.hub])).rows[0]
   if (!hub) {
-    console.error(`✗ hub facility "${HUB_NAME}" not found — check the exact name. Aborting.`)
+    console.error(`✗ hub facility "${batch.hub}" not found — check the exact name. Aborting.`)
     await pool.end()
     process.exit(1)
   }
   console.log(`= hub: ${hub.name}  (${hub.id})`)
 
-  for (const s of SITES) {
+  for (const s of batch.sites) {
     const password = process.env[s.pwEnv]
     if (!password) {
       console.error(`✗ ${s.site}: env var ${s.pwEnv} not set — skipped`)
@@ -60,7 +84,7 @@ async function run() {
       facility_id: hub.id,
       facility_name: hub.name,
       facility_role: 'dsd',
-      commodity_section: SECTION,
+      commodity_section: batch.section,
       dsd_site_name: s.site,
       dsd_type: s.dsd_type,
       email_verified: true,
