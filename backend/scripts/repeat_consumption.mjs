@@ -123,10 +123,25 @@ try {
     console.log(`\nWrote ${rows.length} rows to ${csvPath}`)
   }
 
+  // With --ids, show exactly what those ids resolve to. Reprinting the whole list
+  // tells you nothing about what you are about to delete.
+  if (onlyIds.length) {
+    const picked = rows.filter(r => r.dropIds.some(i => onlyIds.includes(i)))
+    const unknown = onlyIds.filter(i => !rows.some(r => r.dropIds.includes(i)))
+    console.log(`\n--ids selects ${picked.length} group(s):\n`)
+    console.table(picked.map(r => ({
+      facility: r.fac.slice(0, 30), location: label(r.bin).slice(0, 16), commodity: r.comm.slice(0, 24),
+      date: r.date, qty: r.qty, 'recorded': `${r.times}x`, 'deleting': onlyIds.filter(i => r.dropIds.includes(i)).length,
+      opening: r.opening, '→ after': r.after,
+    })))
+    if (unknown.length) console.log(`NOT deletable (not a repeat, or the first of its group): ${unknown.join(', ')}`)
+  }
+
   if (!apply) {
-    console.log('\nDRY RUN — nothing deleted. To remove specific repeats:')
-    console.log('  node scripts/repeat_consumption.mjs --ids <uuid,uuid> --apply')
-    console.log('Take the ids from IdsToDelete — the FIRST record of each group is always kept.')
+    console.log('\nDRY RUN — nothing deleted. Add --apply to remove the rows above.')
+    if (!onlyIds.length) {
+      console.log('Take the ids from IdsToDelete — the FIRST record of each group is always kept.')
+    }
     process.exit(0)
   }
 
