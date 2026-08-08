@@ -31,7 +31,9 @@ const facArg = argv.filter((a, i) => !a.startsWith('--') && !['--days', '--csv',
 
 const rx = (n, t) => new RegExp(`\\[${t}:\\s*([^\\]]+)\\]`, 'i').exec(n || '')?.[1]?.trim()
 const binOf = n => { const d = rx(n, 'DSD'), s = rx(n, 'SDP'); return d ? `dsd:${d}` : s ? `sdp:${s}` : 'dispensary' }
-const label = b => b === 'dispensary' ? 'Dispensary' : b.startsWith('dsd:') ? `DSD — ${b.slice(4)}` : b.startsWith('sdp:') ? `SDP — ${b.slice(4)}` : 'Main Store'
+// ASCII only: these files are opened in Excel by 218 store managers, and a UTF-8
+// en-dash renders as mojibake unless every one of them picks the right encoding.
+const label = b => b === 'dispensary' ? 'Dispensary' : b.startsWith('dsd:') ? `DSD - ${b.slice(4)}` : b.startsWith('sdp:') ? `SDP - ${b.slice(4)}` : 'Main Store'
 
 try {
   // Current EnVo balance per location.
@@ -100,12 +102,17 @@ try {
   // time: a redistribution out of a store that cannot cover it is refused outright.
   const action = r => r.bin === 'store' ? 'Record the intake that brought this stock in'
     : (r.store >= r.biggest - r.have)
-      ? 'Record the store→location redistribution'
-      : 'FIRST record the intake into the Main Store, THEN the redistribution (the store cannot cover this yet)'
+      ? 'Record the redistribution from Main Store to this location'
+      : 'FIRST record the intake into the Main Store, THEN the redistribution to this location (the Main Store cannot cover this yet)'
   const line = r => [r.fac, label(r.bin), r.comm, r.unit || '', r.have, r.store, r.biggest, r.refusals, action(r)].map(esc).join(',')
 
+  // Excel only detects UTF-8 from a byte-order mark. Without it the file opens as
+  // Windows-1252 and every non-ASCII character is mangled — which is how a store
+  // manager ends up reading "storeâ€ 'location" where an instruction should be.
+  const BOM = '﻿'
+
   if (csvPath) {
-    fs.writeFileSync(csvPath, [hdr.join(','), ...rows.map(line)].join('\r\n'))
+    fs.writeFileSync(csvPath, BOM + [hdr.join(','), ...rows.map(line)].join('\r\n'))
     console.log(`\nWrote ${rows.length} rows to ${csvPath}`)
   }
 
@@ -125,7 +132,7 @@ try {
       while (used.has(name.toLowerCase())) name = `${base} (${n++})`
       used.add(name.toLowerCase())
       list.sort((a, b) => b.refusals - a.refusals)
-      fs.writeFileSync(`${splitDir}/${name}.csv`, [hdr.join(','), ...list.map(line)].join('\r\n'))
+      fs.writeFileSync(`${splitDir}/${name}.csv`, BOM + [hdr.join(','), ...list.map(line)].join('\r\n'))
     }
     console.log(`\nWrote ${byFac.size} facility file(s) to ${splitDir}/`)
     console.log('Each contains only that facility\'s locations, worst first.')
