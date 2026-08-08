@@ -49,6 +49,15 @@ try {
       join commodities cm on cm.id = l.commodity_id
      where l.dispensed_at >= now() - interval '${days} days' and l.quantity > 0`)).rows
 
+  // The store's balance for the same commodity. A site can only be restocked from
+  // its store, so where the store cannot cover the gap either, recording the
+  // redistribution is not the fix — it will be refused (the transfer path checks the
+  // store and throws 409). The missing record is further up: the intake that brought
+  // the stock into the facility. 405 of 950 blocked locations are in that position.
+  const storeSoh = new Map()
+  for (const r of (await query(`select facility_id f, commodity_id c, quantity q from stock where location_type='store'`)).rows)
+    storeSoh.set(`${r.f}|${r.c}`, r.q)
+
   // Group the shortfalls by location: what is there, what people tried to draw.
   const bins = new Map()
   for (const d of disp) {
@@ -56,7 +65,8 @@ try {
     const have = soh.get(K(d.f, d.c, bin)) ?? 0
     if (have >= d.quantity) continue                      // would pass
     const k = `${d.fac}||${d.comm}||${bin}`
-    const v = bins.get(k) || { fac: d.fac, comm: d.comm, bin, unit: d.unit, have, refusals: 0, biggest: 0 }
+    const v = bins.get(k) || { fac: d.fac, comm: d.comm, bin, unit: d.unit, have, refusals: 0, biggest: 0,
+      store: storeSoh.get(`${d.f}|${d.c}`) ?? 0 }
     v.refusals++; v.biggest = Math.max(v.biggest, d.quantity)
     bins.set(k, v)
   }
@@ -74,7 +84,8 @@ try {
 
   if (facArg) {
     console.log(`${rows.length ? rows[0].fac : facArg} — record a redistribution (or intake) into these locations:\n`)
-    console.table(rows.map(r => ({ location: label(r.bin), commodity: r.comm.slice(0, 32), 'EnVo balance': r.have, 'largest draw attempted': r.biggest, 'records blocked': r.refusals })))
+    console.table(rows.map(r => ({ location: label(r.bin), commodity: r.comm.slice(0, 28), 'here': r.have, 'in Main Store': r.bin === 'store' ? '—' : r.store,
+      'largest draw': r.biggest, blocked: r.refusals, 'intake needed first': r.bin !== 'store' && r.store < (r.biggest - r.have) ? 'YES' : '' })))
   } else {
     const byFac = {}
     for (const r of rows) { const v = byFac[r.fac] = byFac[r.fac] || { locations: 0, blocked: 0 }; v.locations++; v.blocked += r.refusals }
@@ -83,10 +94,15 @@ try {
       .map(([f, v]) => ({ facility: f.slice(0, 44), locations: v.locations, 'records blocked': v.blocked })))
   }
 
-  const hdr = ['Facility', 'Location', 'Commodity', 'Unit', 'EnVoBalance', 'LargestDrawAttempted', 'RecordsBlocked', 'ActionNeeded']
+  const hdr = ['Facility', 'Location', 'Commodity', 'Unit', 'LocationBalance', 'MainStoreBalance', 'LargestDrawAttempted', 'RecordsBlocked', 'ActionNeeded']
   const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-  const line = r => [r.fac, label(r.bin), r.comm, r.unit || '', r.have, r.biggest, r.refusals,
-    r.bin === 'store' ? 'Record the intake that brought this stock in' : 'Record the store→location redistribution'].map(esc).join(',')
+  // Two different instructions, and sending the wrong one wastes a store manager's
+  // time: a redistribution out of a store that cannot cover it is refused outright.
+  const action = r => r.bin === 'store' ? 'Record the intake that brought this stock in'
+    : (r.store >= r.biggest - r.have)
+      ? 'Record the store→location redistribution'
+      : 'FIRST record the intake into the Main Store, THEN the redistribution (the store cannot cover this yet)'
+  const line = r => [r.fac, label(r.bin), r.comm, r.unit || '', r.have, r.store, r.biggest, r.refusals, action(r)].map(esc).join(',')
 
   if (csvPath) {
     fs.writeFileSync(csvPath, [hdr.join(','), ...rows.map(line)].join('\r\n'))
