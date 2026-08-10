@@ -10,6 +10,29 @@ import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DailyTrendChart } from '../../components/DailyTrendChart'
 import { exportCsv, exportPdf } from '../../utils/download'
 
+// ── Reporting period ──────────────────────────────────────────────────────────
+// "Last N days" means N COMPLETE calendar days ending yesterday — local dates,
+// midnight to midnight. It deliberately excludes today, so a period is settled
+// and reproducible: the same selection queried twice returns the same number.
+//
+// It used to be a rolling `now - N days` with no upper bound, which meant the
+// oldest day was a partial (everything before the load time was missing) and the
+// newest was today-so-far. That is what made a "last 7 days" figure disagree with
+// a Mon–Sun export of the same week, and it let mis-keyed future dates (2027+)
+// count as consumption because nothing bounded the top of the range.
+const localDay = d => {
+  const t = new Date(d)
+  return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
+}
+// [start, end] covering the N complete days before today, inclusive. `end` is the
+// last instant of yesterday because the API's `to` bound is inclusive (<=).
+function periodWindow(days, from = new Date()) {
+  const midnightToday = new Date(from.getFullYear(), from.getMonth(), from.getDate())
+  const start = new Date(midnightToday); start.setDate(start.getDate() - days)
+  const end = new Date(midnightToday.getTime() - 1)
+  return { start, end }
+}
+
 export function Monitoring() {
   const store = useAppStore()
   const isAdm = store.isAdmin()
@@ -46,48 +69,68 @@ export function Monitoring() {
   useEffect(() => { loadConsumption() }, [scopeKey, period, catFilter])
   useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expCat, scopeKey])
 
+  // Stated on the card rather than left to the reader: this figure is live and is
+  // deliberately NOT part of the period total sitting beside it.
+  const todayHint = `${fmtDate(new Date())} — still running, counts from tomorrow`
+
   async function loadConsumption() {
     setLoading(true)
     setCatDrill(null); setCommDrill(null); setMetricDrill(null); setLgaDrill(null)
-    const start = new Date(); start.setDate(start.getDate()-period)
+    const { start, end } = periodWindow(period)
     const scopeParams = store.getAdminScopeParams()
 
     // Paginate — an admin over a long period easily exceeds the 1000-row cap,
     // which would otherwise silently understate totals and drill-downs.
-    const PAGE = 1000
-    let rows = []
-    for (let offset = 0; ; offset += PAGE) {
-      let data
-      try {
-        data = await api.dispense.history({
-          ...scopeParams,
-          // commodity scope is applied server-side via the section/category scope;
-          // enumerating every commodity id here would bloat the URL past proxy limits.
-          from: start.toISOString(),
-          section: commoditySection || undefined,
-          limit: PAGE, offset,
-        })
-      } catch { break }
-      if (!data || !data.length) break
-      rows = rows.concat(data)
-      if (data.length < PAGE) break
+    const fetchRows = async (from, to) => {
+      const PAGE = 1000
+      let out = []
+      for (let offset = 0; ; offset += PAGE) {
+        let data
+        try {
+          data = await api.dispense.history({
+            ...scopeParams,
+            // commodity scope is applied server-side via the section/category scope;
+            // enumerating every commodity id here would bloat the URL past proxy limits.
+            from: from.toISOString(),
+            to: to.toISOString(),
+            section: commoditySection || undefined,
+            limit: PAGE, offset,
+          })
+        } catch { break }
+        if (!data || !data.length) break
+        out = out.concat(data)
+        if (data.length < PAGE) break
+      }
+      // Narrow to a single commodity category if one is picked.
+      return catFilter ? out.filter(r => (r.commodities?.category || 'Other') === catFilter) : out
     }
 
-    // Narrow to a single commodity category if one is picked.
-    if (catFilter) rows = rows.filter(r => (r.commodities?.category || 'Other') === catFilter)
+    // Today is fetched separately and never merged into `rows`: it is shown as a
+    // running figure only, and must not move a period total that is meant to be
+    // settled. It joins the period tomorrow, once the day is complete.
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0)
+    const [rows, todayRows] = await Promise.all([
+      fetchRows(start, end),
+      fetchRows(todayStart, new Date()),
+    ])
 
     const byComm={}, byCat={}, daily={}
-    for(let i=period-1;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);daily[d.toISOString().split('T')[0]]=0}
+    // One bucket per day of the SAME window the totals use, keyed by local date —
+    // previously these were built from `now` in UTC, so the chart and the metric
+    // cards covered different days and their totals could not be reconciled.
+    for(let i=0;i<period;i++){const d=new Date(start);d.setDate(d.getDate()+i);daily[localDay(d)]=0}
     rows.forEach(r=>{
       const name=r.commodities?.name||r.commodity_id
       const cat=r.commodities?.category||'Other'
       if(!byComm[name]) byComm[name]={name,cat,unit:r.commodities?.unit||'',qty:0,txn:0,commodity_id:r.commodity_id}
       byComm[name].qty+=r.quantity; byComm[name].txn++
       byCat[cat]=(byCat[cat]||0)+r.quantity
-      const day=r.dispensed_at?.slice(0,10)
+      // Bucket by LOCAL date to match the keys above; slicing the ISO string used
+      // the UTC date, which lands WAT after-midnight entries on the previous day.
+      const day=r.dispensed_at?localDay(r.dispensed_at):null
       if(day&&daily[day]!==undefined) daily[day]+=r.quantity
     })
-    setCons({rows,byComm:Object.values(byComm).sort((a,b)=>b.qty-a.qty),byCat,daily,total:rows.reduce((s,r)=>s+r.quantity,0)})
+    setCons({rows,todayRows,byComm:Object.values(byComm).sort((a,b)=>b.qty-a.qty),byCat,daily,total:rows.reduce((s,r)=>s+r.quantity,0)})
     setLoading(false)
   }
 
@@ -242,6 +285,10 @@ export function Monitoring() {
               <option value={180}>Last 6 months</option>
               <option value={365}>Last 12 months</option>
             </select>
+            {/* Spell the window out — "last 7 days" alone gives no way to check a
+                figure against an export covering specific dates. */}
+            {(() => { const { start, end } = periodWindow(period)
+              return <span className="text-xs text-gray-500" title="Complete days only — today is excluded until it ends">{fmtDate(start)} – {fmtDate(end)}</span> })()}
             <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">Category</span>
             <select value={catFilter} onChange={e=>setCatFilter(e.target.value)}
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
@@ -301,11 +348,14 @@ export function Monitoring() {
             const cRows = consData.rows.filter(r => r.commodity_id === commDrill.id)
             const cTotal = cRows.reduce((s, r) => s + r.quantity, 0)
             const cFacs = new Set(cRows.map(r => r.facility_id)).size
+            const cToday = (consData.todayRows||[]).filter(r => r.commodity_id === commDrill.id)
+                             .reduce((s, r) => s + r.quantity, 0)
             return (
               <MetricGrid>
                 <Metric label={`${commDrill.name} — units consumed (${period}d)`} value={cTotal.toLocaleString()} color="green"/>
                 <Metric label="Facilities consuming" value={cFacs} color="blue"/>
                 <Metric label="Consumption records" value={cRows.length.toLocaleString()}/>
+                <Metric label="Consumed today" value={cToday.toLocaleString()} hint={todayHint}/>
               </MetricGrid>
             )
           })() : (
@@ -315,6 +365,7 @@ export function Monitoring() {
               onClick={isAdm?()=>setMetricDrill(metricDrill==='commodities'?null:'commodities'):undefined} active={metricDrill==='commodities'}/>
             <Metric label="Consumption records" value={consData.rows.length.toLocaleString()}
               onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='transactions'?null:'transactions')}:undefined} active={metricDrill==='transactions'}/>
+            <Metric label="Consumed today" value={(consData.todayRows||[]).reduce((s,r)=>s+r.quantity,0).toLocaleString()} hint={todayHint}/>
           </MetricGrid>
           )}
 
