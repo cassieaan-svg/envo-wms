@@ -211,8 +211,8 @@ export function Monitoring() {
       </div>
 
       <div style={{display:'flex',gap:0,marginBottom:'1.25rem',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'8px',overflow:'hidden',background:'rgba(255,255,255,0.03)'}}>
-        <TabBtn id="utilization" label="📊 Utilization"/>
-        <TabBtn id="expiry"      label="⏳ Expiry"/>
+        <TabBtn id="utilization" label="Utilization"/>
+        <TabBtn id="expiry"      label="Expiry"/>
       </div>
 
       {/* Admin location filter — State → LGA → Facility (self-hides for facility users) */}
