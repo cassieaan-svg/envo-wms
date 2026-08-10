@@ -15,9 +15,7 @@ export function MetricGrid({ children }) {
 // `loading` shows a placeholder instead of `value`. Use it whenever the number
 // would otherwise render before its data arrives — a premature 0 (or a count
 // derived from empty data) reads as a real figure and misleads.
-// `hint` is a small caption under the value, for a figure that needs a caveat to
-// be read correctly (e.g. a running total that is not part of the period above).
-export function Metric({ label, value, color = '', onClick, active = false, loading = false, hint = null }) {
+export function Metric({ label, value, color = '', onClick, active = false, loading = false }) {
   const colors = {
     green: 'text-green-400',
     red:   'text-red-400',
@@ -40,7 +38,6 @@ export function Metric({ label, value, color = '', onClick, active = false, load
       {loading
         ? <div className="h-8 w-12 rounded bg-white/10 animate-pulse" aria-label={`${label} loading`}/>
         : <div className={`text-2xl font-medium font-mono ${colors[color] || 'text-gray-100'}`}>{value}</div>}
-      {hint && !loading && <div className="mt-1 text-[11px] text-gray-500 leading-snug">{hint}</div>}
     </div>
   )
 }

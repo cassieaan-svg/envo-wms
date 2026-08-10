@@ -69,10 +69,6 @@ export function Monitoring() {
   useEffect(() => { loadConsumption() }, [scopeKey, period, catFilter])
   useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expCat, scopeKey])
 
-  // Stated on the card rather than left to the reader: this figure is live and is
-  // deliberately NOT part of the period total sitting beside it.
-  const todayHint = `${fmtDate(new Date())} — still running, counts from tomorrow`
-
   async function loadConsumption() {
     setLoading(true)
     setCatDrill(null); setCommDrill(null); setMetricDrill(null); setLgaDrill(null)
@@ -355,7 +351,7 @@ export function Monitoring() {
                 <Metric label={`${commDrill.name} — units consumed (${period}d)`} value={cTotal.toLocaleString()} color="green"/>
                 <Metric label="Facilities consuming" value={cFacs} color="blue"/>
                 <Metric label="Consumption records" value={cRows.length.toLocaleString()}/>
-                <Metric label="Consumed today" value={cToday.toLocaleString()} hint={todayHint}/>
+                <Metric label="Consumed today" value={cToday.toLocaleString()}/>
               </MetricGrid>
             )
           })() : (
@@ -365,7 +361,7 @@ export function Monitoring() {
               onClick={isAdm?()=>setMetricDrill(metricDrill==='commodities'?null:'commodities'):undefined} active={metricDrill==='commodities'}/>
             <Metric label="Consumption records" value={consData.rows.length.toLocaleString()}
               onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='transactions'?null:'transactions')}:undefined} active={metricDrill==='transactions'}/>
-            <Metric label="Consumed today" value={(consData.todayRows||[]).reduce((s,r)=>s+r.quantity,0).toLocaleString()} hint={todayHint}/>
+            <Metric label="Consumed today" value={(consData.todayRows||[]).reduce((s,r)=>s+r.quantity,0).toLocaleString()}/>
           </MetricGrid>
           )}
 
