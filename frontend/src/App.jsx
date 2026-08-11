@@ -79,6 +79,43 @@ const adminMap = {
   alerts: PharmAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
 }
 
+// ── Which pages still read the global stock array ────────────────────────────
+// Derived by auditing actual `store.stockData` reads, NOT by route name — the
+// same page key resolves to different components per role, and several pages
+// that call loadStock() never read the array at all.
+//
+//   pharmacy dispense = pages/pharmacy/RecordStock  → reads (lines 64, 72, 180)
+//   lab      dispense = pages/lab/RecordStock       → does NOT read
+//   pharmacy alerts   = pages/pharmacy/Alerts       → reads (line 648, drill-in)
+//   lab      alerts   = pages/lab/Alerts            → does NOT read (migrated)
+//
+// Everything absent here — dashboards, stock tables, monitoring, activity log,
+// CRRF, reports, intake, and every DSD/SDP page — derives its figures from the
+// summary endpoints and must not trigger the ~464 KB stock download.
+//
+// KEEP IN SYNC with the route maps above: adding a page that reads stockData
+// without listing it here shows that page an empty array.
+const STOCK_PAGES = {
+  pharm: new Set(['dispense', 'adjustment', 'transfers', 'alerts', 'all-facilities']),
+  lab:   new Set(['adjustment', 'transfers', 'all-facilities']),
+  admin: new Set(['alerts', 'all-facilities']),
+  dsd:   new Set(),
+  sdp:   new Set(),
+}
+
+// Resolve the active role's page set the same way PageRouter picks its map.
+function pageNeedsStockData({ page, section, accessLevel, facilityRole }) {
+  const isAdmin = ['overall_admin', 'state_admin', 'lga_admin'].includes(accessLevel)
+  const isDSD   = accessLevel === 'facility' && facilityRole === 'dsd'
+  const isSDP   = accessLevel === 'facility' && facilityRole === 'sdp'
+  const set = isSDP ? STOCK_PAGES.sdp
+            : isDSD ? STOCK_PAGES.dsd
+            : section === 'lab' ? STOCK_PAGES.lab
+            : isAdmin ? STOCK_PAGES.admin
+            : STOCK_PAGES.pharm
+  return set.has(page)
+}
+
 function PageRouter() {
   const section      = useAppStore(s => s.commoditySection)
   const page         = useAppStore(s => s.currentPage)
@@ -134,7 +171,14 @@ function AppContent() {
 
   const dark = theme === 'system' ? systemDark : theme !== 'light'
 
-  useRealtimeStock()
+  // Load (and keep live) the global stock array only while a page that actually
+  // reads it is open. Recomputed on navigation, so moving onto a page that needs
+  // it starts the load and moving off drops the subscription.
+  const page         = useAppStore(s => s.currentPage)
+  const section      = useAppStore(s => s.commoditySection)
+  const accessLevel  = useAppStore(s => s.accessLevel)
+  const facilityRole = useAppStore(s => s.facilityRole)
+  useRealtimeStock(pageNeedsStockData({ page, section, accessLevel, facilityRole }))
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)

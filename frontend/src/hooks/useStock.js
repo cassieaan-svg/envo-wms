@@ -59,11 +59,32 @@ export function useStock() {
   return { loadStock }
 }
 
-export function useRealtimeStock() {
+/**
+ * Keep the global stock array loaded and live — but only while a page that
+ * actually reads it is open (`enabled`).
+ *
+ * This used to run unconditionally for the whole session, so every page paid for
+ * the full scoped stock table even after the dashboards, stock tables and alert
+ * counts stopped reading it. Production timing showed why that matters: the
+ * response is ~464 KB (brotli) and the link to the VM runs at ~79 KB/s, so it
+ * costs ~5.9 s of content download on every page load — and only three pages
+ * still need it.
+ *
+ * `enabled` flips on navigation (see pageNeedsStockData in App.jsx). Leaving a
+ * stock page drops the subscription; the loaded array is deliberately NOT
+ * cleared, so nothing that reads it can observe an empty set. Re-entering
+ * refetches, because a write may have landed while we were unsubscribed —
+ * correctness over saving a request.
+ *
+ * This is an intermediate step. The global array itself, and this hook, go away
+ * once the remaining readers move to scoped lookups.
+ */
+export function useRealtimeStock(enabled = true) {
   const { loadStock } = useStock()
 
   useEffect(() => {
+    if (!enabled) return
     loadStock()
     return subscribeRealtime(['stock'], loadStock)
-  }, [])
+  }, [enabled])
 }
