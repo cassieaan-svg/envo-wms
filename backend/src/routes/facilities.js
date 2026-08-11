@@ -3,6 +3,7 @@ import { FacilityService } from '../services/facilityService.js';
 import { DispatchService } from '../services/dispatchService.js';
 import { fetchEnvoStock } from '../lib/envoClient.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { query } from '../db.js';
 
 const router = express.Router();
 
@@ -10,9 +11,20 @@ router.get('/', async (req, res, next) => {
   try {
     const facilities = await FacilityService.list({
       state: req.query.state || null,
+      lga: req.query.lga || null,
+      search: req.query.search || null,
       includeInactive: req.query.includeInactive === 'true',
     });
     return res.json(facilities);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Registered before /:id so "lgas" isn't parsed as a facility id.
+router.get('/lgas', async (req, res, next) => {
+  try {
+    return res.json(await FacilityService.listLgas({ state: req.query.state || null }));
   } catch (err) {
     return next(err);
   }
@@ -136,15 +148,41 @@ router.get('/:id/dispatch-orders', async (req, res, next) => {
 
 // Proxied from EnVo — mock data until the real API details are confirmed.
 router.get('/:id/stock', async (req, res, next) => {
+  const facilityId = Number(req.params.id);
   try {
     const facilities = await FacilityService.list({ includeInactive: true });
-    const facility = facilities.find((f) => f.id === Number(req.params.id));
+    const facility = facilities.find((f) => f.id === facilityId);
     if (!facility) return res.status(404).json({ error: 'facility not found' });
 
-    const stock = await fetchEnvoStock(facility.envo_facility_id || facility.id);
-    return res.json(stock);
+    try {
+      const stock = await fetchEnvoStock(facility.envo_facility_id || facility.id);
+      await query(
+        `INSERT INTO facility_stock_cache (facility_id, payload, fetched_at)
+              VALUES ($1, $2, now())
+         ON CONFLICT (facility_id)
+         DO UPDATE SET payload = EXCLUDED.payload, fetched_at = EXCLUDED.fetched_at`,
+        [facilityId, JSON.stringify(stock)]
+      );
+      return res.json({ ...stock, stale: false, asOf: new Date().toISOString() });
+    } catch (err) {
+      // EnVo is unreachable. Serve the last good answer if we have one, labelled stale,
+      // and only fail outright when this facility has never been fetched successfully.
+      const { rows } = await query(
+        'SELECT payload, fetched_at FROM facility_stock_cache WHERE facility_id = $1',
+        [facilityId]
+      );
+      if (!rows[0]) {
+        return res.status(502).json({ error: `could not reach EnVo: ${err.message}` });
+      }
+      return res.json({
+        ...rows[0].payload,
+        stale: true,
+        asOf: rows[0].fetched_at,
+        staleReason: err.message,
+      });
+    }
   } catch (err) {
-    return res.status(502).json({ error: `could not reach EnVo: ${err.message}` });
+    return next(err);
   }
 });
 

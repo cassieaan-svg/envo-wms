@@ -21,6 +21,26 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
+router.put('/password', authMiddleware, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'currentPassword and newPassword are required' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'new password must be at least 8 characters' });
+    }
+    if (newPassword === currentPassword) {
+      return res.status(400).json({ error: 'new password must differ from the current one' });
+    }
+
+    await UserService.changePassword(req.user.id, { currentPassword, newPassword });
+    return res.json({ changed: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.get('/me', authMiddleware, async (req, res, next) => {
   try {
     const user = await UserService.getById(req.user.id);

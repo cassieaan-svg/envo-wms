@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { auth } from '../lib/api.js';
-import { Banner, Field } from '../components/ui.jsx';
+import { Banner, Field, PasswordInput } from '../components/ui.jsx';
 
 export default function LoginPage({ onSignedIn }) {
   const [username, setUsername] = useState('');
@@ -25,7 +25,7 @@ export default function LoginPage({ onSignedIn }) {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <h1>
-          EnVo <span style={{ color: 'var(--accent)' }}>WMS</span>
+          EnVo <span style={{ color: 'var(--accent)' }}>Warehouse</span>
         </h1>
         <p className="sub">Central Medical Stores warehouse management</p>
 
@@ -35,11 +35,11 @@ export default function LoginPage({ onSignedIn }) {
           <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required />
         </Field>
         <Field label="Password">
-          <input
-            type="password"
+          <PasswordInput
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
+            autoComplete="current-password"
           />
         </Field>
         <button className="btn primary" type="submit" disabled={busy}>

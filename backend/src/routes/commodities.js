@@ -39,10 +39,17 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/', requireAdmin, async (req, res, next) => {
   try {
-    const { name } = req.body || {};
+    const { name, unitPrice } = req.body || {};
     if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
+    if (unitPrice != null && !(Number(unitPrice) >= 0)) {
+      return res.status(400).json({ error: 'unitPrice must be a non-negative number' });
+    }
 
-    const commodity = await CommodityService.create(req.body);
+    const commodity = await CommodityService.create({
+      ...req.body,
+      unitPrice: unitPrice == null || unitPrice === '' ? null : Number(unitPrice),
+      createdBy: req.user.username,
+    });
     return res.status(201).json(commodity);
   } catch (err) {
     return next(err);
@@ -82,17 +89,15 @@ router.get('/:id/prices', async (req, res, next) => {
   }
 });
 
+// Adjusting a price adds a new current row and retires the old one — see PriceService.
 router.put('/:id/prices', requireAdmin, async (req, res, next) => {
   try {
-    const { vendorId, unitPrice, brandName, effectiveDate } = req.body || {};
-    if (!vendorId) return res.status(400).json({ error: 'vendorId is required' });
+    const { unitPrice, effectiveDate } = req.body || {};
     if (unitPrice == null || Number.isNaN(Number(unitPrice)) || Number(unitPrice) < 0) {
       return res.status(400).json({ error: 'unitPrice must be a non-negative number' });
     }
 
     const price = await PriceService.setCurrentPrice(Number(req.params.id), {
-      vendorId: Number(vendorId),
-      brandName: brandName || null,
       unitPrice: Number(unitPrice),
       effectiveDate: effectiveDate || null,
       createdBy: req.user.username,

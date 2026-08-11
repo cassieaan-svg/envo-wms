@@ -1,14 +1,31 @@
 import { query, withTransaction } from '../db.js';
 
 export class FacilityService {
-  static async list({ state = null, includeInactive = false } = {}) {
+  static async list({ state = null, lga = null, search = null, includeInactive = false } = {}) {
     const { rows } = await query(
       `SELECT id, envo_facility_id, name, state, lga, is_active, created_at
          FROM facilities
         WHERE ($1 OR is_active)
           AND ($2::text IS NULL OR state = $2)
-        ORDER BY state, name`,
-      [includeInactive, state]
+          AND ($3::text IS NULL OR lga = $3)
+          AND ($4::text IS NULL OR name ILIKE '%' || $4 || '%')
+        ORDER BY state, lga NULLS LAST, name`,
+      [includeInactive, state, lga, search]
+    );
+    return rows;
+  }
+
+  // Drives the LGA filter on the facility pickers.
+  static async listLgas({ state = null } = {}) {
+    const { rows } = await query(
+      `SELECT lga, state, COUNT(*)::int AS facility_count
+         FROM facilities
+        WHERE is_active
+          AND lga IS NOT NULL
+          AND ($1::text IS NULL OR state = $1)
+        GROUP BY lga, state
+        ORDER BY lga`,
+      [state]
     );
     return rows;
   }

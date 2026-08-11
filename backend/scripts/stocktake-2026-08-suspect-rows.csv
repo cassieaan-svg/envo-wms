@@ -1,0 +1,56 @@
+line,description,corrected_qty,corrected_expiry,my_transcription_qty,my_transcription_expiry,issue
+39,Cytotec,(blank),(blank),368,2029-04,quantity removed - block above shifts down from here
+40,Calcium lactate 300mg,368,2029-04,1124,2028-02,holds the PREVIOUS commodity quantity
+41,Cap Astyfer,1124,2028-02,420,2027-09,holds the PREVIOUS commodity quantity
+42,Cap Astymin,420,2027-09,24,2028-02,holds the PREVIOUS commodity quantity
+43,Carbamazepine 200mg,24,2028-03,319,2027-08,holds the PREVIOUS commodity quantity
+44,Cefixime 400mg,319,2027-08,130,2029-03,holds the PREVIOUS commodity quantity
+45,Cefuroxime 500mg,130,2029-03,810,2029-05,holds the PREVIOUS commodity quantity
+47,Chlorpromazine 100mg,20,2029-05,1062,2028-08,holds the PREVIOUS commodity quantity
+48,Chlorpheniramine maleate 4mg,1062,2027-08,547,2028-10,holds the PREVIOUS commodity quantity
+49,Chymotrypsin 100000IU + Trypsin 1400IU,547,2028-08,790,2029-02,holds the PREVIOUS commodity quantity
+50,Clopidogrel 75mg,790,2028-12,11707,2028-07,holds the PREVIOUS commodity quantity
+51,Ciprofloxacin 500mg,11707,2029-02,419,2029-02,holds the PREVIOUS commodity quantity
+52,Cognitol,419,2028-07,243,2028-09,holds the PREVIOUS commodity quantity
+53,Cotrimoxazole 480mg,243,2029-02,200,2028-08,holds the PREVIOUS commodity quantity
+54,Cefixime 200mg,200,2028-09,130,2028-06,holds the PREVIOUS commodity quantity
+55,Clarithromycin 500mg,130,2028-08,875,2026-05,holds the PREVIOUS commodity quantity
+56,Chondroitin + Glucosamine,875,2028-06,466,2026-04,holds the PREVIOUS commodity quantity
+57,Cefuroxime 250mg,466,2028-05,150,2029-10,holds the PREVIOUS commodity quantity
+58,Cefadox 200mg,150,20284,273,2028-05,holds the PREVIOUS commodity quantity
+59,Cocodamol 8/500mg,273,2029-10,17,2028-08,holds the PREVIOUS commodity quantity
+60,Daravit woman,17,2028-05,3,2027-09,holds the PREVIOUS commodity quantity
+61,Daravit forte,3,2028-08,30,(blank),holds the PREVIOUS commodity quantity
+62,Daravit Joint active,30,2027-09,(blank),(blank),holds the PREVIOUS commodity quantity
+63,Daravit promo,(blank),(blank),15,2029-11,quantity removed - block above shifts down from here
+64,Diethylcarbamazine 50mg (Cenocide),15,2029-11,(blank),(blank),holds the PREVIOUS commodity quantity
+66,Doxazocin 4mg,(blank),(blank),323,2028-04,quantity removed - block above shifts down from here
+67,Diazepam 5mg,323,2028-04,422,2027-01,holds the PREVIOUS commodity quantity
+68,Diclofenac 75mg + misoprostol 200mcg,422,2027-01,1861,2029-08,holds the PREVIOUS commodity quantity
+69,Diclofenac potassium 50mg,1861,2029-08,727,2028-08,holds the PREVIOUS commodity quantity
+70,Diclofenac potassium 100mg,727,2028-08,188,2029-01,holds the PREVIOUS commodity quantity
+71,Digoxin 25mg,188,2029-01,(blank),(blank),holds the PREVIOUS commodity quantity
+72,DF118 30mg,(blank),(blank),966,2029-02,quantity removed - block above shifts down from here
+73,Doxycycline 100mg,966,2029-02,179,2028-05,holds the PREVIOUS commodity quantity
+75,Dolometa B,555,2028-07,(blank),(blank),holds the PREVIOUS commodity quantity
+171,Strimox 0.5mg,(blank),(blank),1370,2028-10,quantity removed - block above shifts down from here
+174,Telmisartan 40mg,266,2028-10,229,2028-10,holds the PREVIOUS commodity quantity
+175,Tetracycline 250mg,229,2028-10,(blank),(blank),holds the PREVIOUS commodity quantity
+178,Tadalis 5mg,(blank),(blank),41,2027-05,quantity removed - block above shifts down from here
+179,Trifluoperazine 5mg (Stelazine),41,2027-05,72,2028-12,holds the PREVIOUS commodity quantity
+180,Tranexamic Acid,72,2028-12,135,2028-10,holds the PREVIOUS commodity quantity
+181,Tamsulosin + Dutasteride,135,2028-10,105,2028-12,holds the PREVIOUS commodity quantity
+182,Torsemide 10mg,105,2028-12,89,2028-07,holds the PREVIOUS commodity quantity
+183,Torsemide 20mg,89,2028-07,(blank),(blank),holds the PREVIOUS commodity quantity
+205,Atropine 0.5mg/ml,451,2027-08,(blank),(blank),holds the PREVIOUS commodity quantity
+207,Azithromycin 500mg,(blank),(blank),4242,2027-06,quantity removed - block above shifts down from here
+208,Ceftriaxone 1g,4242,2027-10,70,2027-05,holds the PREVIOUS commodity quantity
+209,Chlorpromazine 50mg/2ml,70,2027-05,(blank),(blank),holds the PREVIOUS commodity quantity
+210,Calcium Gluconate,(blank),(blank),2008,2028-02,quantity removed - block above shifts down from here
+211,Carbetocin,2008,2028-02,(blank),(blank),holds the PREVIOUS commodity quantity
+214,Clindamycin 300mg,(blank),(blank),548,2027-10,quantity removed - block above shifts down from here
+215,Crystalline penicillin 1mu,548,2027-10,300,2028-10,holds the PREVIOUS commodity quantity
+216,Ceftriaxone 1g + Sulbactam 0.5g,300,2028-10,195,2027-08,holds the PREVIOUS commodity quantity
+217,Dexamethasone 4mg,195,2027-08,1452,2026-08,holds the PREVIOUS commodity quantity
+243,Meropenem,(blank),(blank),299,2028-11,quantity removed - block above shifts down from here
+246,Metoclopramide 50mg/2ml,(blank),(blank),2700,2027-06,quantity removed - block above shifts down from here

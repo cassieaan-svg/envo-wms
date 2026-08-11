@@ -1,7 +1,24 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
-import { Banner, Empty, Field, Modal, dateTime, qty } from '../components/ui.jsx';
+import { Banner, Empty, Field, Modal, dateOnly, dateTime, qty, qtyWithUnit } from '../components/ui.jsx';
+import DayHistory from '../components/DayHistory.jsx';
 import BatchTable from '../components/BatchTable.jsx';
+import { CommodityPicker } from '../components/pickers.jsx';
+import { reasonLabel } from '../lib/adjustments.js';
+import { downloadCsv, slug, stamp } from '../lib/download.js';
+
+
+// The day's receipts, shown the same way as every other Operations history.
+const RECEIPT_COLUMNS = [
+  { header: 'Time', value: (r) => dateTime(r.created_at), muted: true },
+  { header: 'Commodity', value: (r) => r.commodity_name, wrap: true },
+  { header: 'Intake batch no.', value: (r) => r.batch_number || '' },
+  { header: 'Expiry', value: (r) => dateOnly(r.expiry_date), muted: true },
+  { header: 'Quantity', value: (r) => qtyWithUnit(r.quantity, r.unit), align: 'right' },
+  { header: 'Vendor', value: (r) => r.vendor_name || '', muted: true },
+  { header: 'Note', value: (r) => r.note || '', wrap: true, muted: true },
+  { header: 'Received by', value: (r) => r.created_by || '', muted: true },
+];
 
 const BLANK_RECEIPT = {
   batchNumber: '',
@@ -85,8 +102,8 @@ export default function BatchesPage({ isAdmin }) {
     <>
       <div className="page-head">
         <div>
-          <h1>Batches</h1>
-          <p>Lot-level stock with expiry dates. Dispatch draws from these oldest-expiry-first.</p>
+          <h1>Intake Batches</h1>
+          <p>Intake batches: lot-level stock with expiry dates. Dispatch draws from these oldest-expiry-first.</p>
         </div>
       </div>
 
@@ -97,19 +114,9 @@ export default function BatchesPage({ isAdmin }) {
         {notice}
       </Banner>
 
-      <div className="toolbar">
-        <Field label="Commodity">
-          <select value={commodityId} onChange={(e) => setCommodityId(e.target.value)} style={{ minWidth: 280 }}>
-            <option value="">select a commodity…</option>
-            {commodities.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {c.category ? ` · ${c.category}` : ''}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <label className="muted" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <div className="card">
+        <CommodityPicker commodities={commodities} value={commodityId} onChange={setCommodityId} />
+        <label className="muted" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10 }}>
           <input
             type="checkbox"
             checked={includeDepleted}
@@ -118,6 +125,28 @@ export default function BatchesPage({ isAdmin }) {
           />
           show depleted batches
         </label>
+        <button
+          className="btn"
+          style={{ marginTop: 10 }}
+          onClick={async () => {
+            setCommodities(await api.commodities.list());
+            await loadBatches();
+          }}
+        >
+          Refresh
+        </button>
+        {(commodityId || includeDepleted) && (
+          <button
+            className="btn"
+            style={{ marginTop: 10 }}
+            onClick={() => {
+              setCommodityId('');
+              setIncludeDepleted(false);
+            }}
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {!commodityId ? (
@@ -145,9 +174,9 @@ export default function BatchesPage({ isAdmin }) {
 
           {isAdmin && (
             <form className="card" onSubmit={submitReceipt}>
-              <h2>Receive a batch</h2>
+              <h2>Receive an intake batch</h2>
               <div className="form-grid">
-                <Field label="Batch / lot number *">
+                <Field label="Intake batch number *">
                   <input
                     value={receipt.batchNumber}
                     onChange={(e) => setReceipt({ ...receipt, batchNumber: e.target.value })}
@@ -209,7 +238,32 @@ export default function BatchesPage({ isAdmin }) {
           )}
 
           <div className="card">
-            <h2>{selected?.name} — batches</h2>
+            <div className="card-head">
+              <h2>{selected?.name} — intake batches</h2>
+              {batches.length > 0 && (
+                <button
+                  className="btn small"
+                  onClick={() =>
+                    downloadCsv(
+                      `batches-${slug(selected?.name)}-${stamp()}.csv`,
+                      [
+                        { header: 'Intake batch no.', value: (b) => b.batch_number },
+                        { header: 'Expiry', value: (b) => b.expiry_date },
+                        { header: 'Days to expiry', value: (b) => b.days_to_expiry, align: 'right' },
+                        { header: 'Received', value: (b) => b.received_date },
+                        { header: 'Qty received', value: (b) => b.quantity_received, align: 'right' },
+                        { header: 'Qty remaining', value: (b) => b.quantity_remaining, align: 'right' },
+                        { header: 'Unit cost (NGN)', value: (b) => b.unit_cost ?? '', align: 'right' },
+                        { header: 'Vendor', value: (b) => b.vendor_name || '' },
+                      ],
+                      batches
+                    )
+                  }
+                >
+                  ⭳ CSV
+                </button>
+              )}
+            </div>
             <BatchTable batches={batches} onAdjust={isAdmin ? setAdjustTarget : null} />
             {batches.length > 0 && (
               <p className="muted" style={{ marginBottom: 0 }}>
@@ -223,7 +277,7 @@ export default function BatchesPage({ isAdmin }) {
             <div className="card">
               <h2>Movement ledger</h2>
               <div className="toolbar">
-                <Field label="Batch">
+                <Field label="Intake batch">
                   <select
                     value={movementsFor?.batchId || ''}
                     onChange={async (e) => {
@@ -256,6 +310,7 @@ export default function BatchesPage({ isAdmin }) {
                         <th className="num">Qty</th>
                         <th>Facility</th>
                         <th>Order line</th>
+                        <th>Reason</th>
                         <th className="wrap">Note</th>
                         <th>By</th>
                       </tr>
@@ -268,6 +323,7 @@ export default function BatchesPage({ isAdmin }) {
                           <td className="num">{qty(m.quantity)}</td>
                           <td>{m.facility_name || '—'}</td>
                           <td className="muted">{m.dispatch_order_item_id ?? '—'}</td>
+                          <td>{reasonLabel(m.reason) || <span className="muted">—</span>}</td>
                           <td className="wrap">{m.note || '—'}</td>
                           <td className="muted">{m.created_by || '—'}</td>
                         </tr>
@@ -296,21 +352,36 @@ export default function BatchesPage({ isAdmin }) {
           }}
         />
       )}
+
+      <DayHistory kind="receipt" noun="Receipt" columns={RECEIPT_COLUMNS} />
     </>
   );
 }
 
+// The reason carries the direction, so the quantity box takes a plain positive number for
+// everything except a recount — nobody has to reason about whether a loss is "-5" or "5",
+// which is where the old free-text version went wrong.
 function AdjustModal({ batch, onClose, onSaved, onError }) {
-  const [delta, setDelta] = useState('');
+  const [reasons, setReasons] = useState([]);
+  const [reason, setReason] = useState('');
+  const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.batches.adjustmentReasons().then(setReasons).catch((err) => onError(err.message));
+  }, []);
+
+  const rule = reasons.find((r) => r.code === reason);
+  const signed = !rule || !amount ? null : rule.direction === 0 ? Number(amount) : Math.abs(Number(amount)) * rule.direction;
+  const after = signed == null ? null : Number(batch.quantity_remaining) + signed;
 
   async function submit(event) {
     event.preventDefault();
     setBusy(true);
     try {
-      await api.batches.adjust(batch.id, { delta: Number(delta), note });
-      onSaved(`adjusted batch ${batch.batch_number} by ${delta}`);
+      await api.batches.adjust(batch.id, { quantity: Number(amount), reason, note });
+      onSaved(`${rule.label.toLowerCase()}: ${qty(Math.abs(signed))} on ${batch.batch_number || 'unlabelled batch'}`);
     } catch (err) {
       onError(err.message);
     } finally {
@@ -319,35 +390,57 @@ function AdjustModal({ batch, onClose, onSaved, onError }) {
   }
 
   return (
-    <Modal title="Adjust batch" subtitle={batch.batch_number} onClose={onClose}>
+    <Modal title="Adjust intake batch" subtitle={batch.batch_number || 'no batch number'} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="form-grid">
-          <Field label="Change in quantity *">
+          <Field label="Reason *">
+            <select value={reason} onChange={(e) => setReason(e.target.value)} required autoFocus>
+              <option value="">choose a reason…</option>
+              {reasons.map((r) => (
+                <option key={r.code} value={r.code}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={rule?.direction === 0 ? 'Change in quantity *' : 'Quantity *'}>
             <input
               type="number"
               step="0.01"
-              value={delta}
-              onChange={(e) => setDelta(e.target.value)}
-              placeholder="-5 or 12"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder={rule?.direction === 0 ? '-5 or 12' : 'how many'}
               required
-              autoFocus
+              disabled={!reason}
             />
           </Field>
-          <Field label="Reason *">
+          <Field label="Note">
             <input
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="damaged in store, recount…"
-              required
+              placeholder="optional detail"
             />
           </Field>
-          <button className="btn primary" type="submit" disabled={busy}>
+          <button className="btn primary" type="submit" disabled={busy || !reason || !amount}>
             {busy ? 'saving…' : 'Apply adjustment'}
           </button>
         </div>
+
         <p className="muted" style={{ marginBottom: 0 }}>
-          Currently {qty(batch.quantity_remaining)} remaining. Negative values reduce stock; the
-          balance cannot go below zero.
+          {rule?.direction === 0
+            ? 'A recount can go either way — enter a negative number to reduce stock.'
+            : rule
+              ? `${rule.label} ${rule.direction < 0 ? 'takes stock off' : 'puts stock back on'} this batch.`
+              : 'Pick what happened to the stock.'}{' '}
+          Currently {qty(batch.quantity_remaining)} remaining
+          {after != null && Number.isFinite(after) && (
+            <>
+              {' → '}
+              <strong style={{ color: after < 0 ? 'var(--danger)' : 'inherit' }}>{qty(after)}</strong>
+              {after < 0 && ' — the balance cannot go below zero'}
+            </>
+          )}
+          .
         </p>
       </form>
     </Modal>

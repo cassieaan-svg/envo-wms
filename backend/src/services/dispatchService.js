@@ -47,54 +47,168 @@ export class DispatchService {
         );
         const itemId = itemResult.rows[0].id;
 
-        // Lock this commodity's usable batches in FEFO order for the duration of the
-        // transaction so two concurrent dispatches can't both claim the same stock.
-        const batches = await client.query(
-          `SELECT b.id, b.batch_number, b.quantity_remaining, c.name AS commodity_name
-             FROM commodity_batches b
-             JOIN commodities c ON c.id = b.commodity_id
-            WHERE b.commodity_id = $1
-              AND b.quantity_remaining > 0
-              AND b.expiry_date >= CURRENT_DATE
-            ORDER BY b.expiry_date, b.id
-              FOR UPDATE OF b`,
-          [line.commodityId]
-        );
-
-        const available = batches.rows.reduce((sum, b) => sum + Number(b.quantity_remaining), 0);
-        if (available < line.quantity) {
-          const name = batches.rows[0]?.commodity_name || `commodity #${line.commodityId}`;
-          const err = new Error(
-            `insufficient stock for ${name}: requested ${line.quantity}, available ${available}`
-          );
-          err.status = 400;
-          throw err;
-        }
-
-        let outstanding = line.quantity;
-        for (const batch of batches.rows) {
-          if (outstanding <= 0) break;
-
-          const take = Math.min(outstanding, Number(batch.quantity_remaining));
-
-          await client.query(
-            'UPDATE commodity_batches SET quantity_remaining = quantity_remaining - $2 WHERE id = $1',
-            [batch.id, take]
-          );
-
-          await client.query(
-            `INSERT INTO batch_movements
-               (batch_id, movement_type, quantity, facility_id, dispatch_order_item_id, created_by)
-             VALUES ($1, 'dispatch', $2, $3, $4, $5)`,
-            [batch.id, -take, facilityId, itemId, dispatchedBy ?? null]
-          );
-
-          outstanding = round2(outstanding - take);
-        }
+        await this.allocateFefo(client, {
+          commodityId: line.commodityId,
+          quantity: line.quantity,
+          facilityId,
+          itemId,
+          actor: dispatchedBy,
+        });
       }
 
       return this.getOrder(order.id, client);
     });
+  }
+
+  // Correct an already-dispatched order.
+  //
+  // The stock has physically moved, so this is not a document edit: the original
+  // quantities go back into the exact lots they came from, the order's lines are rewritten,
+  // and the new quantities are drawn again FEFO. All in one transaction — a half-applied
+  // correction would leave the ledger disagreeing with the shelves.
+  static async updateOrder(orderId, { items, notes, editedBy }) {
+    return withTransaction(async (client) => {
+      const { rows: existing } = await client.query(
+        'SELECT * FROM dispatch_orders WHERE id = $1 FOR UPDATE', [orderId]);
+      const order = existing[0];
+      if (!order) { const e = new Error('dispatch order not found'); e.status = 404; throw e; }
+
+      const lines = items.map((item) => {
+        const quantity = Number(item.quantity);
+        const unitPrice = Number(item.unitPrice);
+        return {
+          commodityId: Number(item.commodityId),
+          quantity,
+          unitPrice,
+          lineTotal: round2(quantity * unitPrice),
+        };
+      });
+
+      // Return everything first, so the re-allocation below sees true availability —
+      // otherwise reducing a line could fail for lack of stock the order itself is holding.
+      await this.reverseOrder(client, orderId, editedBy);
+
+      // The old lines go, along with the ledger's link to them; the reversal rows above
+      // already recorded what came back, so history isn't lost.
+      await client.query(
+        'UPDATE batch_movements SET dispatch_order_item_id = NULL WHERE dispatch_order_item_id IN (SELECT id FROM dispatch_order_items WHERE dispatch_order_id = $1)',
+        [orderId]
+      );
+      await client.query('DELETE FROM dispatch_order_items WHERE dispatch_order_id = $1', [orderId]);
+
+      for (const line of lines) {
+        const { rows: item } = await client.query(
+          `INSERT INTO dispatch_order_items (dispatch_order_id, commodity_id, quantity, unit_price, line_total)
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [orderId, line.commodityId, line.quantity, line.unitPrice, line.lineTotal]
+        );
+        await this.allocateFefo(client, {
+          commodityId: line.commodityId,
+          quantity: line.quantity,
+          facilityId: order.facility_id,
+          itemId: item[0].id,
+          actor: editedBy,
+        });
+      }
+
+      const totalAmount = round2(lines.reduce((sum, l) => sum + l.lineTotal, 0));
+      await client.query(
+        `UPDATE dispatch_orders
+            SET total_amount = $2,
+                notes = $3,
+                edited_at = now(),
+                edited_by = $4,
+                edit_count = edit_count + 1
+          WHERE id = $1`,
+        [orderId, totalAmount, notes ?? order.notes, editedBy ?? null]
+      );
+
+      return this.getOrder(orderId, client);
+    });
+  }
+
+  // Take `quantity` of a commodity out of stock, oldest-expiry-first, writing one ledger
+  // row per lot touched. Shared by dispatching and by re-applying an edited order so the
+  // two can never drift apart.
+  static async allocateFefo(client, { commodityId, quantity, facilityId, itemId, actor }) {
+    // Locking the usable lots for the transaction stops two concurrent dispatches both
+    // claiming the same stock.
+    const batches = await client.query(
+      `SELECT b.id, b.batch_number, b.quantity_remaining, c.name AS commodity_name
+         FROM commodity_batches b
+         JOIN commodities c ON c.id = b.commodity_id
+        WHERE b.commodity_id = $1
+          AND b.quantity_remaining > 0
+          AND b.expiry_date >= CURRENT_DATE
+        ORDER BY b.expiry_date, b.id
+          FOR UPDATE OF b`,
+      [commodityId]
+    );
+
+    const available = batches.rows.reduce((sum, b) => sum + Number(b.quantity_remaining), 0);
+    if (available < quantity) {
+      const name = batches.rows[0]?.commodity_name || `commodity #${commodityId}`;
+      const err = new Error(
+        `insufficient stock for ${name}: requested ${quantity}, available ${available}`
+      );
+      err.status = 400;
+      throw err;
+    }
+
+    let outstanding = quantity;
+    for (const batch of batches.rows) {
+      if (outstanding <= 0) break;
+      const take = Math.min(outstanding, Number(batch.quantity_remaining));
+
+      await client.query(
+        'UPDATE commodity_batches SET quantity_remaining = quantity_remaining - $2 WHERE id = $1',
+        [batch.id, take]
+      );
+      await client.query(
+        `INSERT INTO batch_movements
+           (batch_id, movement_type, quantity, facility_id, dispatch_order_item_id, created_by)
+         VALUES ($1, 'dispatch', $2, $3, $4, $5)`,
+        [batch.id, -take, facilityId, itemId, actor ?? null]
+      );
+      outstanding = round2(outstanding - take);
+    }
+  }
+
+  // Put an order's dispatched quantities back into the exact lots they came from. Read
+  // from the ledger rather than re-deriving, so stock returns where it actually left —
+  // FEFO at edit time could pick different lots entirely.
+  static async reverseOrder(client, orderId, actor) {
+    const { rows: moves } = await client.query(
+      `SELECT m.id, m.batch_id, m.quantity, m.facility_id, m.dispatch_order_item_id
+         FROM batch_movements m
+         JOIN dispatch_order_items i ON i.id = m.dispatch_order_item_id
+        WHERE i.dispatch_order_id = $1
+          AND m.movement_type = 'dispatch'
+          AND NOT EXISTS (
+            SELECT 1 FROM batch_movements r
+             WHERE r.movement_type = 'reversal'
+               AND r.dispatch_order_item_id = m.dispatch_order_item_id
+               AND r.batch_id = m.batch_id
+          )
+        ORDER BY m.id`,
+      [orderId]
+    );
+
+    for (const move of moves) {
+      const back = Math.abs(Number(move.quantity));
+      await client.query(
+        'UPDATE commodity_batches SET quantity_remaining = quantity_remaining + $2 WHERE id = $1',
+        [move.batch_id, back]
+      );
+      await client.query(
+        `INSERT INTO batch_movements
+           (batch_id, movement_type, quantity, facility_id, dispatch_order_item_id, note, created_by)
+         VALUES ($1, 'reversal', $2, $3, $4, $5, $6)`,
+        [move.batch_id, back, move.facility_id, move.dispatch_order_item_id,
+         `reversed by edit of order #${orderId}`, actor ?? null]
+      );
+    }
+    return moves.length;
   }
 
   static async getOrder(orderId, client = null) {
@@ -102,7 +216,8 @@ export class DispatchService {
 
     const orderResult = await run(
       `SELECT o.id, o.facility_id, f.name AS facility_name, f.state, f.lga,
-              o.total_amount, o.dispatched_by, o.dispatched_at, o.notes
+              o.total_amount, o.dispatched_by, o.dispatched_at, o.notes,
+              o.edited_at, o.edited_by, o.edit_count
          FROM dispatch_orders o
          JOIN facilities f ON f.id = o.facility_id
         WHERE o.id = $1`,
@@ -142,22 +257,35 @@ export class DispatchService {
     return { ...order, items: itemsResult.rows };
   }
 
-  static async listForFacility(facilityId) {
+  // The dispatch log. Unfiltered by default — "what went out" is the usual question, not
+  // "what went out to this one site" — with an optional facility filter to narrow it.
+  static async list({ facilityId = null, limit = 200 } = {}) {
     const { rows } = await query(
       `SELECT o.id,
+              o.facility_id,
+              f.name AS facility_name,
+              f.lga,
               o.total_amount,
               o.dispatched_by,
               o.dispatched_at,
               o.notes,
+              o.edited_at,
+              o.edit_count,
               COUNT(i.id)::int AS line_count,
               COALESCE(SUM(i.quantity), 0) AS total_quantity
          FROM dispatch_orders o
+         JOIN facilities f ON f.id = o.facility_id
          LEFT JOIN dispatch_order_items i ON i.dispatch_order_id = o.id
-        WHERE o.facility_id = $1
-        GROUP BY o.id
-        ORDER BY o.dispatched_at DESC`,
-      [facilityId]
+        WHERE ($1::int IS NULL OR o.facility_id = $1)
+        GROUP BY o.id, f.name, f.lga
+        ORDER BY o.dispatched_at DESC
+        LIMIT $2`,
+      [facilityId, limit]
     );
     return rows;
+  }
+
+  static listForFacility(facilityId) {
+    return this.list({ facilityId });
   }
 }

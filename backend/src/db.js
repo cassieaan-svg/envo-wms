@@ -1,7 +1,17 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import dotenv from 'dotenv';
 
-dotenv.config();
+// Resolved from this file rather than cwd, so scripts run from the repo root pick up the
+// same .env as the server.
+dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '..', '.env') });
+
+// A DATE has no time and no timezone, but node-postgres turns it into a JS Date at local
+// midnight — so 2028-06-30 becomes 2028-06-29T23:00Z in WAT, and anything formatting it
+// through toISOString() reports the day before. Expiry dates matter far too much for that.
+// Keep DATE (oid 1082) as the literal 'YYYY-MM-DD' string it already is.
+pg.types.setTypeParser(1082, (value) => value);
 
 const pool = new pg.Pool({
   host: process.env.PGHOST,

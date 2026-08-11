@@ -1,8 +1,7 @@
-import { query } from '../db.js';
+import { query, withTransaction } from '../db.js';
 
-// Current prices and on-hand quantity are aggregated per commodity. On-hand deliberately
-// excludes expired batches — expired stock is still on the shelf but is not dispensable,
-// and counting it would mask an understock alert.
+// On-hand deliberately excludes expired batches — expired stock is still on the shelf but
+// isn't dispensable, and counting it would mask an understock alert.
 const LIST_SQL = `
   SELECT c.id,
          c.envo_commodity_id,
@@ -13,30 +12,29 @@ const LIST_SQL = `
          c.reorder_level,
          c.max_level,
          COALESCE(b.on_hand, 0) AS on_hand,
-         COALESCE(p.prices, '[]'::json) AS current_prices
+         COALESCE(b.batch_count, 0)::int AS batch_count,
+         b.nearest_expiry,
+         b.nearest_batch_number,
+         p.unit_price AS current_price,
+         p.effective_date AS price_effective_date
     FROM commodities c
     LEFT JOIN (
-      SELECT commodity_id, SUM(quantity_remaining) AS on_hand
+      -- One row per commodity: usable stock, how many lots it sits in, and the lot that
+      -- expires first — enough for the list to show a batch column without a second query.
+      SELECT commodity_id,
+             SUM(quantity_remaining) AS on_hand,
+             COUNT(*) AS batch_count,
+             MIN(expiry_date) AS nearest_expiry,
+             (ARRAY_AGG(batch_number ORDER BY expiry_date, id))[1] AS nearest_batch_number,
+             COUNT(*) FILTER (WHERE batch_number IS NULL)::int AS unlabelled_count
         FROM commodity_batches
        WHERE quantity_remaining > 0
          AND expiry_date >= CURRENT_DATE
        GROUP BY commodity_id
     ) b ON b.commodity_id = c.id
-    LEFT JOIN (
-      SELECT cp.commodity_id,
-             json_agg(json_build_object(
-               'priceId', cp.id,
-               'vendorId', cp.vendor_id,
-               'vendorName', v.name,
-               'brandName', cp.brand_name,
-               'unitPrice', cp.unit_price,
-               'effectiveDate', cp.effective_date
-             ) ORDER BY v.name) AS prices
-        FROM commodity_prices cp
-        JOIN vendors v ON v.id = cp.vendor_id
-       WHERE cp.is_current
-       GROUP BY cp.commodity_id
-    ) p ON p.commodity_id = c.id
+    LEFT JOIN commodity_prices p
+           ON p.commodity_id = c.id
+          AND p.is_current
 `;
 
 export class CommodityService {
@@ -57,14 +55,29 @@ export class CommodityService {
     return rows[0] || null;
   }
 
-  static async create({ name, category, unit, envoCommodityId, reorderLevel, maxLevel }) {
-    const { rows } = await query(
-      `INSERT INTO commodities (name, category, unit, envo_commodity_id, reorder_level, max_level)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, category, unit, envo_commodity_id, reorder_level, max_level, is_active, created_at`,
-      [name, category || null, unit || null, envoCommodityId || null, reorderLevel ?? null, maxLevel ?? null]
-    );
-    return rows[0];
+  // Category and unit price are the substance of a new commodity, so the price is written
+  // in the same transaction rather than left for a second step.
+  static async create({ name, category, unit, unitPrice, envoCommodityId, reorderLevel, maxLevel, createdBy }) {
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO commodities (name, category, unit, envo_commodity_id, reorder_level, max_level)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, name, category, unit, envo_commodity_id, reorder_level, max_level, is_active, created_at`,
+        [name, category || null, unit || null, envoCommodityId || null, reorderLevel ?? null, maxLevel ?? null]
+      );
+      const commodity = rows[0];
+
+      if (unitPrice != null) {
+        await client.query(
+          `INSERT INTO commodity_prices (commodity_id, unit_price, is_current, created_by)
+           VALUES ($1, $2, TRUE, $3)`,
+          [commodity.id, unitPrice, createdBy ?? null]
+        );
+        commodity.current_price = unitPrice;
+      }
+
+      return commodity;
+    });
   }
 
   static async update(id, { name, category, unit, isActive }) {
@@ -82,8 +95,7 @@ export class CommodityService {
   }
 
   // Thresholds drive the understock/overstock alerts. Passing null clears a threshold,
-  // which switches that alert off for the commodity, so these are set explicitly rather
-  // than COALESCEd.
+  // switching that alert off, so these are set explicitly rather than COALESCEd.
   static async setStockLevels(id, { reorderLevel, maxLevel }) {
     const { rows } = await query(
       `UPDATE commodities

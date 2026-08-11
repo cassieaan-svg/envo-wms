@@ -11,7 +11,7 @@ export default function BatchTable({ batches, onAdjust, showCommodity = false })
         <thead>
           <tr>
             {showCommodity && <th className="wrap">Commodity</th>}
-            <th>Batch no.</th>
+            <th>Intake batch no.</th>
             <th>Expiry</th>
             <th />
             <th className="num">Received</th>

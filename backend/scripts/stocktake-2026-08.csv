@@ -1,0 +1,273 @@
+page,sn,section,description,pack_size,icc,physical_stock,quantity,on_hand,expiry_1,expiry_2,confidence,note
+1,1,tablets,Acetylsalicylic Acid 75mg,100,724,724,,724,2028-12,,high,
+1,2,tablets,Aceclofenac 100mg,10,,660,661,661,2027-11,,high,quantity 661 supersedes physical 660
+1,3,tablets,Acetazolamide,,,,,,,,high,no stock recorded
+1,4,tablets,Albendazole 200mg,2,,2852,,2852,2028-06,2030-04,check,two expiry dates on one quantity
+1,5,tablets,Albendazole 400mg,1,,3994,,3994,2029-03,,high,
+1,6,tablets,Amlodipine 5mg,28,,1440,,1440,2028-06,,high,
+1,7,tablets,Amlodipine 10mg,28,,3979,,3979,2029-04,,check,expiry overwritten on paper
+1,8,tablets,Amlodipine + losartan (5mg + 50mg),,,,,,,,high,no stock recorded
+1,9,tablets,Amiloride + Hydrochlorothiazide (2.5mg + 25mg),,,,,,,,high,no stock recorded
+1,10,tablets,Amoxicillin 250mg + clavulanic acid 125mg,14,,552,,552,2029-02,2027-06,check,two expiry dates on one quantity
+1,11,tablets,Ampicillin 500mg,100,,250,,250,2028-03,,high,
+1,12,tablets,Amoxicillin 500mg,100,,391,,391,2028-02,,high,
+1,13,tablets,Amoxicillin 250mg,100,,718,,718,2028-02,,high,
+1,14,tablets,Amoxicillin 250mg (Dispersible),10,,606,,606,2028-04,,high,
+1,15,tablets,Amoxicillin 500mg + clavulanic acid 125mg,14,,2180,,2180,2028-03,,high,
+1,16,tablets,Ampicillin 250mg + cloxacillin 250mg,100,,1065,,1065,2027-08,,high,
+1,17,tablets,Artane 5mg (Benzhexol),,,,,,,,high,no stock recorded
+1,18,tablets,Amitriptyline 25mg,500,,46,,46,2028-03,,high,
+1,19,tablets,Ascorbic acid 100mg,1000,625,1484,,1484,2029-05,,high,
+1,20,tablets,Azithromycin 500mg,10,,240,,240,2028-09,2028-10,check,figure struck through and rewritten; two expiries
+1,21,tablets,Amiodarone 200mg,,,,,,,,high,no stock recorded
+1,22,tablets,Atorvastatin 10mg,30,,52,,52,2028-04,,high,
+1,23,tablets,Atorvastatin 20mg,,,,,,,,high,no stock recorded
+1,24,tablets,Bromazepam 3mg,30,,795,,795,2030-08,,high,
+1,25,tablets,Betahistine 6mg,,,,,,,,high,no stock recorded
+1,26,tablets,Biopentin Plain 300mg,,,,,,,,high,no stock recorded
+1,27,tablets,Biopentin NT 400mg,,,,,,,,high,no stock recorded
+1,28,tablets,Bisoprolol 2.5mg,28,,149,,149,2030-09,,high,
+1,,tablets,Ampicillin 250mg (tab),100,,150,,150,2028-02,,check,written in the page footer - unnumbered
+2,29,tablets,Bisoprolol 1.5mg,,,,,,,,high,no stock recorded
+2,30,tablets,Calcium D3,,,,,,,,high,no stock recorded
+2,31,tablets,Candesartan 8mg,,,,,,,,high,no stock recorded
+2,32,tablets,Cephalexin 500mg,,,,,,,,high,no stock recorded
+2,33,tablets,Carvedilol 6.25mg,,,,,,,,high,no stock recorded
+2,34,tablets,Cilostazol 10mg,,,,,,,,high,no stock recorded
+2,35,tablets,Clonazepam 1mg,,,,,,,,high,no stock recorded
+2,36,tablets,Co Approvet 150mg,,,,,,,,high,no stock recorded
+2,37,tablets,Cytotec,,,368,,368,2029-04,,check,figure faint; could be 363 or 368
+2,38,tablets,Calcium lactate 300mg,1000,,1124,,1124,2028-02,,high,
+2,39,tablets,Cap Astyfer,30,,420,,420,2027-09,,high,
+2,40,tablets,Cap Astymin,20,,24,,24,2028-02,,high,
+2,41,tablets,Carbamazepine 200mg,100,,319,,319,2027-08,,high,
+2,42,tablets,Cefixime 400mg,10,,130,,130,2029-03,,high,
+2,43,tablets,Cefuroxime 500mg,10,,810,,810,2029-05,,check,figure struck through and rewritten
+2,44,tablets,Celecoxib 200mg,10,,20,,20,2027-08,2028-01,check,two expiry dates on one quantity
+2,45,tablets,Chlorpromazine 100mg,1000,1062,1062,,1062,2028-08,,high,
+2,46,tablets,Chlorpheniramine maleate 4mg,100,,547,,547,2028-10,,high,
+2,47,tablets,Chymotrypsin 100000IU + Trypsin 1400IU,30,,790,,790,2029-02,,high,
+2,48,tablets,Clopidogrel 75mg,30,,11707,,11707,2028-07,,high,
+2,49,tablets,Ciprofloxacin 500mg,10,,419,,419,2029-02,,high,
+2,50,tablets,Cognitol,30,,243,,243,2028-09,,high,
+2,51,tablets,Cotrimoxazole 480mg,1000,,200,,200,2028-08,,high,
+2,52,tablets,Cefixime 200mg,10,,130,,130,2028-06,,high,
+2,53,tablets,Clarithromycin 500mg,10,,875,,875,2026-05,,check,expiry reads 5/26 - already past
+2,54,tablets,Chondroitin + Glucosamine,30,,466,,466,2026-04,,check,expiry reads 4/26 - already past
+2,55,tablets,Cefuroxime 250mg,10,,150,,150,2029-10,,high,
+2,56,tablets,Cefadox 200mg,10,,273,,273,2028-05,,high,
+2,57,tablets,Cocodamol 8/500mg,100,,17,,17,2028-08,,high,
+2,58,tablets,Daravit woman,30,,3,,3,2027-09,,high,
+2,59,tablets,Daravit forte,60,,30,,30,,,check,expiry cell empty
+2,60,tablets,Daravit Joint active,30,,,,,,,high,no stock recorded
+2,61,tablets,Daravit promo,,,,15,15,2029-11,,high,quantity column only
+2,62,tablets,Diethylcarbamazine 50mg (Cenocide),100,,,,,,,high,no stock recorded
+3,63,tablets,Diamicron 60mg,,,,,,,,high,no stock recorded
+3,64,tablets,Doxazocin 4mg,,,323,,323,2028-04,,high,
+3,65,tablets,Diazepam 5mg,1000,,422,,422,2027-01,,high,
+3,66,tablets,Diclofenac 75mg + misoprostol 200mcg,100,,1861,,1861,2029-08,2028-08,check,two expiry dates on one quantity
+3,67,tablets,Diclofenac potassium 50mg,100,,727,,727,2028-08,,check,figure struck through and rewritten
+3,68,tablets,Diclofenac potassium 100mg,20,,188,,188,2029-01,,high,
+3,69,tablets,Digoxin 25mg,50,,,,,,,high,no stock recorded
+3,70,tablets,DF118 30mg,,,966,,966,2029-02,,high,
+3,71,tablets,Doxycycline 100mg,100,,179,,179,2028-05,,high,
+3,72,tablets,Dexamethasone 1mg,100,,555,,555,2028-07,,high,
+3,73,tablets,Dolometa B,100,,,,,,,high,no stock recorded
+3,74,tablets,Ecoslim 100mg,,,,,,,,high,no stock recorded
+3,75,tablets,Empiget 10mg,,,,,,,,high,no stock recorded
+3,76,tablets,Eliquis 5mg,,,,,,,,high,no stock recorded
+3,77,tablets,Empiget 25mg,,,,,,,,high,no stock recorded
+3,78,tablets,Esofag Kit,,,,,,,,high,no stock recorded
+3,79,tablets,Exforge 10/160/12.5mg,,,,,,2028-08,,check,ROW OFFSET - expiry 8/28 may belong here or to sn 80
+3,80,tablets,Erythromycin stearate 500mg,100,,2138,,2138,2028-08,,check,ROW OFFSET - see sn 79
+3,81,tablets,Erythromycin stearate 250mg,100,,,,,2028-10,,check,physical stock written as '69 + 50 pcs' - needs a single number
+3,82,tablets,Enzoron,30,,466,,466,2028-04,,high,
+3,83,tablets,Evening Primrose,30,,200,,200,2028-02,,high,
+3,84,tablets,Fluoxetine 20mg,,,,,,,,high,no stock recorded
+3,85,tablets,Ferobin Plus,30,,282,,282,2028-04,,high,
+3,86,tablets,Ferrous sulphate 200mg,1000,,1586,,1586,2030-01,,high,
+3,87,tablets,Finasteride 5mg,28,,490,,490,2028-09,,high,
+3,88,tablets,Fluconazole 200mg,100,,91,,91,2028-02,,high,
+3,89,tablets,Fluconazole 150mg,10,,640,,640,2027-03,,high,
+3,90,tablets,Folic acid 5mg,1000,2058,21510,,21510,2027-04,2029-05,check,ICC struck through; two expiry dates
+3,91,tablets,Frusemide 40mg,30,,190,,190,2028-07,,high,
+3,92,tablets,Glasodex 50mg,,,,,,,,high,no stock recorded
+3,93,tablets,Glibenclamide 5mg,100,,914,,914,2028-02,2028-04,check,two expiry dates on one quantity
+3,94,tablets,Glimepiride 4mg,30,,157,,157,2028-01,,check,figure struck through and rewritten
+3,95,tablets,Haloperidol 5mg,1000,,14,,14,2027-04,,check,two expiries partly illegible
+3,96,tablets,Haloperidol 10mg,1000,,42,,42,2029-02,,check,second expiry partly illegible
+3,97,tablets,Hemoforce Forte,30,,978,,978,2028-12,,high,
+4,98,tablets,Hydrochlorothiazide 25mg,,,1279,,1279,2029-03,,high,
+4,99,tablets,Hyoscine-N-Butyl Bromide,100,,453,,453,2028-03,,high,
+4,100,tablets,Ibuprofen 200mg,100,,6418,,6418,2029-01,,high,
+4,101,tablets,Ibuprofen 400mg,20,,2057,,2057,2027-12,,high,
+4,102,tablets,Indapamide 1.5mg,,,,,,,,high,no stock recorded
+4,103,tablets,Ivermectin 3mg,500,,50,,50,2028-07,,high,
+4,104,tablets,Jawaron,,,,,,,,high,no stock recorded
+4,105,tablets,Kotase,,,834,,834,2028-03,,high,
+4,106,tablets,Ketoconazole 200mg,10,,200,,200,2027-06,,high,
+4,107,tablets,Levofloxacin 750mg,10,,,,,,,high,no stock recorded
+4,108,tablets,Levetiracetam 500mg,,,,,,,,high,no stock recorded
+4,109,tablets,Linagliptin 5mg,,,,,,,,high,no stock recorded
+4,110,tablets,Livolyn Forte,,,,,,,,high,no stock recorded
+4,111,tablets,Lisinopril 10mg,28,,9804,,9804,2029-05,,check,second expiry illegible
+4,112,tablets,Lisinopril 5mg,20,,1609,,1609,2029-02,,check,second expiry illegible
+4,113,tablets,Loperamide 2mg,100,,688,,688,2028-01,,high,
+4,114,tablets,Loratadine 10mg,100,,850,,850,2028-05,,high,
+4,115,tablets,Levofloxacin 500mg,10,,7077,,7077,2028-12,,high,
+4,116,tablets,Losartan sodium 50mg,28,,585,,585,2028-12,,high,
+4,117,tablets,Losartan sodium 100mg,,,,,,,,high,no stock recorded
+4,118,tablets,Losartan sodium + hydrochlorothiazide (50mg + 12.5mg),,,,,,,,high,no stock recorded
+4,119,tablets,Metoprolol 50mg,,,,,,,,high,no stock recorded
+4,120,tablets,Montelukast 10mg,,,,,,,,high,no stock recorded
+4,121,tablets,Meconerv forte,,,,,,,,high,no stock recorded
+4,122,tablets,Magnavite,,,,,,,,high,no stock recorded
+4,123,tablets,Metformin 500mg,84,,8245,1144,1144,2030-07,2029-05,check,physical struck through; quantity 1144 taken as correct
+4,124,tablets,Methocarbamol 500mg,100,,1030,,1030,2028-04,,check,figure could be 1030 or 1090
+4,125,tablets,Methyldopa 250mg,100,,259,,259,2028-05,,high,
+4,126,tablets,Metoclopramide 10mg,100,,57,,57,2029-11,,high,
+4,127,tablets,Metronidazole 200mg,100,,1060,,1060,2028-06,,high,
+4,128,tablets,Metronidazole 200mg,1000,,871,,871,2030-03,2029-11,check,duplicate description of sn 127 with different pack size
+4,129,tablets,Metronidazole 400mg,100,,464,,464,2028-06,,high,
+4,130,tablets,Mebendazole 100mg,6,,2352,1458,1458,2029-11,,check,physical struck through; quantity 1458 taken as correct
+4,131,tablets,Misoprostol 200mcg,4,,457,,457,2028-08,,high,
+5,132,tablets,Magnesium trisilicate (MMT),1000,,318,,318,2029-03,,check,second expiry overwritten and illegible
+5,133,tablets,Multivite,1000,,1333,,1333,2028-05,,high,
+5,134,tablets,Moduretic,100,,796,,796,2028-02,,high,
+5,135,tablets,Mic Attix,30,,895,,895,2028-06,,high,
+5,136,tablets,Natrixam 1.5mg/10mg,,,,,,,,high,no stock recorded
+5,137,tablets,Neurocalm 75mg,,,,,,,,high,no stock recorded
+5,138,tablets,Neurozam,,,,,,,,high,no stock recorded
+5,139,tablets,Nifecard 30mg,,,,,,,,high,no stock recorded
+5,140,tablets,Nimodipine 30mg,,,,,,,,high,no stock recorded
+5,141,tablets,Nitrofurantoin 100mg,100,,119,,119,2028-08,,high,
+5,142,tablets,Nifedipine 20mg,150,,737,,737,2028-04,,check,pack size could be 100 or 150
+5,143,tablets,Neurovite forte,,,,,,,,high,no stock recorded
+5,144,tablets,Ofloxacin 400mg,60,,288,,288,2027-06,,high,
+5,145,tablets,Omeprazole 20mg,14,,1505,,1505,2027-11,,high,
+5,146,tablets,Olanzapine 5mg,,,,,,,,high,no stock recorded
+5,147,tablets,Olanzapine 10mg,,,,,,,,high,no stock recorded
+5,148,tablets,Paracetamol 500mg,1000,,2582,,2582,2029-02,2029-05,check,two expiry dates on one quantity
+5,149,tablets,Pardopa 275mg,,,,,,,,high,no stock recorded
+5,150,tablets,Propranolol 40mg,,,,,,,,high,no stock recorded
+5,151,tablets,Phenytoin 10mg,,,,,,,,high,no stock recorded
+5,152,tablets,Phenobarbitone 30mg,,,,,,,,high,no stock recorded
+5,153,tablets,Pregabalin 75mg,15,,154,,154,2028-10,,check,pack size unclear
+5,154,tablets,Prednisolone 5mg,100,,442,,442,2029-03,,high,
+5,155,tablets,Pyrantel Pamoate 15mg,6,,260,,260,2029-09,,high,
+5,156,tablets,Piroxicam 20mg,100,,147,,147,2028-07,,high,
+5,157,tablets,Ramipril 10mg,,,,,,,,high,no stock recorded
+5,158,tablets,Rosuvastatin 10mg,,,,,,,,high,no stock recorded
+5,159,tablets,Rosuvastatin 20mg,,,,,,,,high,no stock recorded
+5,160,tablets,Sulphadoxine 500mg + Pyrimethamine 25mg,,,,,,,,high,no stock recorded
+5,161,tablets,Sirdalud 4mg,30,,187,,187,2029-01,,high,
+5,162,tablets,Salbutamol 4mg,1000,,231,,231,2027-06,,high,
+5,163,tablets,Spironolactone 25mg,28,,82,,82,2028-08,,high,
+5,164,tablets,Stugeron 25mg (Cinnarizine),50,,200,,200,2029-02,,check,pack size struck through
+5,165,tablets,Sertraline 50mg,,,,,,,,high,no stock recorded
+5,166,tablets,Slow K 600mg,,,,,,,,high,no stock recorded
+6,167,tablets,Solifenacin 10mg,,,,,,,,high,no stock recorded
+6,168,tablets,Spirocard 25mg,,,,,,,,high,no stock recorded
+6,169,tablets,Strimox 0.5mg,,,1370,,1370,2028-10,2028-12,check,figure struck through; reads 1370 or 1350
+6,170,tablets,Tamsulosin 0.4mg,30,,2495,,2495,2028-11,,high,
+6,171,tablets,Telmisartan 80mg,30,,266,,266,2028-10,,high,
+6,172,tablets,Telmisartan 40mg,30,,229,,229,2028-10,,high,
+6,173,tablets,Tetracycline 250mg,100,,,,,,,high,no stock recorded
+6,174,tablets,Tinidazole 20mg,,,,,,,,high,no stock recorded
+6,175,tablets,Tadalis 20mg,,,,,,,,high,no stock recorded
+6,176,tablets,Tadalis 5mg,100,,41,,41,2027-05,,check,ROW OFFSET - values on this page sit low against the S/N column
+6,177,tablets,Trifluoperazine 5mg (Stelazine),20,,72,,72,2028-12,,check,ROW OFFSET - see sn 176
+6,178,tablets,Tranexamic Acid,30,,135,,135,2028-10,,check,ROW OFFSET - see sn 176
+6,179,tablets,Tamsulosin + Dutasteride,30,,105,,105,2028-12,,check,sheet numbers this 178 as well - duplicate S/N
+6,180,tablets,Torsemide 10mg,30,,89,,89,2028-07,,check,ROW OFFSET - see sn 176
+6,181,tablets,Torsemide 20mg,30,,,,,,,check,quantity may have shifted to sn 180
+6,182,tablets,Vilget 50/1000mg,,,,,,,,high,no stock recorded
+6,183,tablets,Vitamin C 500mg,,,,,,,,high,no stock recorded
+6,184,tablets,Vitamin B-complex,1000,,1456,,1456,2028-06,,high,
+6,185,tablets,Vitamin A 100000IU,30,,381,,381,2028-10,,high,
+6,186,tablets,Vitamin E 1000IU,100,,181,,181,2028-10,,high,
+6,187,tablets,Vitamin K,,,,,,,,high,no stock recorded
+6,188,tablets,Well rose,,,,,,,,high,no stock recorded
+6,189,tablets,Zinc gluconate 20mg,,,,,,,,high,no stock recorded
+6,,tablets,Telmisartan 40mg + Hydrochlorothiazide 12.5mg,28,,240,,240,2028-11,,check,handwritten insert - unnumbered
+6,1,injections,Adrenaline HCL,,,420,,420,2028-02,2028-09,check,two expiry dates on one quantity
+6,2,injections,Aminophylline 250mg,,,1415,,1415,2028-01,,high,
+6,3,injections,Amoxicillin 500mg,,,217,,217,2027-11,,high,
+6,4,injections,Antisnake Venom,,,,,,,,high,no stock recorded
+6,5,injections,Antirabies Vaccine,,,,,,,,high,no stock recorded
+6,6,injections,Amoxiclav 1.2g,,,170,,170,2028-10,,high,
+6,7,injections,ATS 1500IU,,,,,,,,high,no stock recorded
+6,8,injections,Antitetanus 1500IU,,,,,,,,high,no stock recorded
+6,9,injections,Amiodarone 150mg,,,,,,,,high,no stock recorded
+6,10,injections,Astymin IV,,,,,,,,high,no stock recorded
+6,,injections,Cefpodoxime 200mg,,,150,,,2028-04,,check,entire footer line struck through - excluded from on_hand
+7,11,injections,Actrapid Insulin 100iu,,,451,,451,2027-08,,high,
+7,12,injections,Atropine 0.5mg/ml,,,,,,,,high,no stock recorded
+7,13,injections,Atracurium,,,,,,,,high,no stock recorded
+7,14,injections,Azithromycin 500mg,,,4242,,4242,2027-06,,high,
+7,15,injections,Ceftriaxone 1g,,,70,,70,2027-05,,high,
+7,16,injections,Chlorpromazine 50mg/2ml,,,,,,,,high,no stock recorded
+7,17,injections,Calcium Gluconate,,,2008,,2008,2028-02,,high,
+7,18,injections,Carbetocin,,,,,,,,high,no stock recorded
+7,19,injections,Ceftazidime,,,,,,,,high,no stock recorded
+7,20,injections,Cefuroxime 750mg,,,,,,,,high,no stock recorded
+7,21,injections,Clindamycin 300mg,,,548,,548,2027-10,,high,
+7,22,injections,Crystalline penicillin 1mu,,,300,,300,2028-10,,high,
+7,23,injections,Ceftriaxone 1g + Sulbactam 0.5g,,,195,,195,2027-08,,check,ROW OFFSET - 195 sits between sn 23 and 24
+7,24,injections,Dexamethasone 4mg,,,1452,,1452,2026-08,2027-04,check,ROW OFFSET - see sn 23; first expiry already past
+7,25,injections,Diazepam 10mg,,,,,,,,check,ROW OFFSET - 80506 may belong here rather than sn 26
+7,26,injections,Diclofenac Sodium 75mg/3ml,,,80506,,80506,2028-04,,check,ROW OFFSET - see sn 25
+7,27,injections,Dobutamine 250mg,,,,,,,,high,no stock recorded
+7,28,injections,Dopamine 200mg,,,,,,,,high,no stock recorded
+7,29,injections,Erythropoietin 40mg,,,,,,,,high,no stock recorded
+7,30,injections,Ergometrine 0.5mg/ml,,,555,,555,2028-06,2028-11,check,two expiry dates on one quantity
+7,31,injections,Frusemide 20mg/2ml,,,87190,,87190,2028-06,2028-04,check,two expiry dates on one quantity
+7,32,injections,Fentanyl,,,,,,,,high,no stock recorded
+7,33,injections,Fluconazole 200mg,,,,,,,,high,no stock recorded
+7,34,injections,Fluphenazine,10,,200,,200,2027-02,,high,
+7,35,injections,Glycopyrrolate,,,,,,,,high,no stock recorded
+7,36,injections,Gentamycin 80mg/2ml,,,13540,,13540,2028-08,,high,
+7,37,injections,Haloperidol,,,400,,400,2029-07,,high,
+7,38,injections,Hydrocortisone 100mg,,,15024,,15024,2027-12,,high,
+7,39,injections,Hyoscine N-Butyl Bromide 20mg/ml,,,,,,,,high,no stock recorded
+7,40,injections,Heparin,,,,,,,,high,no stock recorded
+7,41,injections,Heavy Vaccine,,,235,375,375,2027-02,,check,physical struck through; quantity 375 taken as correct
+7,42,injections,Iron Sucrose,,,,,,,,high,no stock recorded
+7,43,injections,Isoflurane,,,,,,,,high,no stock recorded
+7,44,injections,Isoplama,,,,,,,,high,no stock recorded
+7,45,injections,Ketamine,,,,,,,,check,cells contain faint marks - confirm nil
+8,46,injections,Lantus,,,,,,,,high,no stock recorded
+8,47,injections,Labetalol,,,,,,,,high,no stock recorded
+8,48,injections,Lidocaine + Adrenaline,,,834,,834,2028-01,,high,
+8,49,injections,Lidocaine 2% 20mg/ml,,,600,,600,2027-12,,high,
+8,50,injections,Meropenem,,,299,,299,2028-11,2028-04,check,two expiry dates plus a trailing '31' that is unclear
+8,51,injections,Methylprednisolone 500mg,,,,,,,,high,no stock recorded
+8,52,injections,Magnesium sulphate 50% in 10ml,,,350,353,353,2028-12,2028-07,check,physical struck through; quantity 353 taken as correct
+8,53,injections,Metoclopramide 50mg/2ml,,,2700,,2700,2027-06,,high,
+8,54,injections,Mixtard,,,,,,,,high,no stock recorded
+8,55,injections,Morphine,,,,,,,,high,no stock recorded
+8,56,injections,Neostigmine 2.5mg,,,,,,,,high,no stock recorded
+8,57,injections,Noradrenaline,,,,,,,,high,no stock recorded
+8,58,injections,Ondansetron 8mg,,,,,,,,high,no stock recorded
+8,59,injections,Oxytocin 10iu,,,43,,43,2028-09,,high,
+8,60,injections,Omeprazole 40mg,,,1208,,1208,2029-07,,high,
+8,61,injections,Pancuronium,,,,,,,,high,no stock recorded
+8,62,injections,Pethidine,,,,,,,,high,no stock recorded
+8,63,injections,Phenytoin 250mg,,,,,,,,high,no stock recorded
+8,64,injections,Plain Marcaine,,,,,,,,high,no stock recorded
+8,65,injections,Potassium chloride 20%,,,,,,,,high,no stock recorded
+8,66,injections,Propofol,,,,,,,,high,no stock recorded
+8,68,injections,Paracetamol 300mg/2ml,,,78290,,78290,2028-01,,high,sheet skips sn 67
+8,69,injections,Pentazocine 30mg/ml,,,2163,,2163,2027-08,2028-02,check,two expiry dates on one quantity
+8,70,injections,Paraldehyde,,,95,,95,2027-04,,high,
+8,71,injections,Promethazine,,,1442,,1442,2027-07,,check,ROW OFFSET - 1442 may belong to sn 72 Rocephin
+8,72,injections,Rocephin,,,,,,,,check,ROW OFFSET - see sn 71
+8,73,injections,Quinine 300mg/ml,,,100,,100,2027-07,,high,
+8,74,injections,Rabies vaccine,,,35,,35,2029-01,2027-12,check,two expiry dates on one quantity
+8,75,injections,Sodium Bicarbonate,,,,,,,,high,no stock recorded
+8,76,injections,Sodium Valproate,,,,,,,,high,no stock recorded
+8,77,injections,Suxamethonium,,,,,,,,high,no stock recorded
+8,78,injections,Syschol 500mg,,,,,,,,high,no stock recorded
+8,79,injections,Tramadol,,,,,,,,high,no stock recorded
+8,80,injections,Triamcinolone 40mg,,,,,,,,high,no stock recorded
+8,81,injections,Tetanus Toxoid 0.5ml,,,90,,90,2027-10,,high,

@@ -38,4 +38,29 @@ export class UserService {
     );
     return rows[0] || null;
   }
+
+  // Requires the current password, so a borrowed session can't lock the real owner out.
+  static async changePassword(id, { currentPassword, newPassword }) {
+    const { rows } = await query(
+      'SELECT id, password_hash FROM users WHERE id = $1 AND is_active',
+      [id]
+    );
+    const user = rows[0];
+    if (!user) {
+      const err = new Error('user not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const ok = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!ok) {
+      const err = new Error('current password is incorrect');
+      err.status = 400;
+      throw err;
+    }
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    await query('UPDATE users SET password_hash = $2 WHERE id = $1', [id, hash]);
+    return true;
+  }
 }

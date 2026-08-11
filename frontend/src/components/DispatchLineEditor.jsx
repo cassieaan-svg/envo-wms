@@ -1,43 +1,23 @@
 import { money, qty } from './ui.jsx';
 
-// One commodity line on the dispatch form. Unit price is prefilled from the commodity's
-// current catalogue price but stays editable, since a dispatch may be priced differently.
-export default function DispatchLineEditor({ line, commodities, onChange, onRemove, disabled }) {
-  const commodity = commodities.find((c) => String(c.id) === String(line.commodityId));
+// One commodity line on the dispatch form. The commodity itself is chosen from the picker
+// above rather than a per-row dropdown, so here it's just a label. Unit price is prefilled
+// from the catalogue price but stays editable, since a dispatch may be priced differently.
+export default function DispatchLineEditor({ line, commodity, onChange, onRemove, disabled }) {
   const onHand = commodity ? Number(commodity.on_hand) : null;
   const quantity = Number(line.quantity) || 0;
   const lineTotal = quantity * (Number(line.unitPrice) || 0);
   const short = onHand != null && quantity > onHand;
 
-  function pickCommodity(id) {
-    const picked = commodities.find((c) => String(c.id) === String(id));
-    // Default to the cheapest current price when a commodity has several vendors.
-    const prices = picked?.current_prices || [];
-    const best = prices.length
-      ? prices.reduce((a, b) => (Number(a.unitPrice) <= Number(b.unitPrice) ? a : b))
-      : null;
-    onChange({ ...line, commodityId: id, unitPrice: best ? String(best.unitPrice) : line.unitPrice });
-  }
-
   return (
     <tr>
       <td className="wrap">
-        <select
-          value={line.commodityId}
-          onChange={(e) => pickCommodity(e.target.value)}
-          disabled={disabled}
-          style={{ minWidth: 240 }}
-        >
-          <option value="">select commodity…</option>
-          {commodities.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-              {c.category ? ` · ${c.category}` : ''}
-            </option>
-          ))}
-        </select>
+        <div>{commodity?.name || '—'}</div>
+        {commodity?.category && <div className="muted small">{commodity.category}</div>}
       </td>
-      <td className="num muted">{onHand == null ? '—' : qty(onHand)}</td>
+      <td className="num muted">
+        {onHand == null ? '—' : `${qty(onHand)} ${commodity?.unit || ''}`.trim()}
+      </td>
       <td>
         <input
           type="number"

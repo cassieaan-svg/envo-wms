@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api.js';
-import { Banner, Empty, Field, Modal, dateTime, qty } from '../components/ui.jsx';
+import { Banner, Empty, Field, Modal, dateTime, money, qty, unitLabel } from '../components/ui.jsx';
+import { downloadCsv, slug, stamp } from '../lib/download.js';
 
-const BLANK = { name: '', state: '', lga: '', envoFacilityId: '' };
+// Only Akwa Ibom is in scope for now, so there's no state filter — every facility in the
+// register belongs to it.
+const STATE = 'Akwa Ibom';
 
 export default function FacilitiesPage({ isAdmin }) {
   const [facilities, setFacilities] = useState([]);
-  const [stateFilter, setStateFilter] = useState('');
-  const [form, setForm] = useState(BLANK);
-  const [editingId, setEditingId] = useState(null);
-  const [assignFor, setAssignFor] = useState(null);
+  const [lgas, setLgas] = useState([]);
+  const [lgaFilter, setLgaFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [stockFor, setStockFor] = useState(null);
+  const [historyFor, setHistoryFor] = useState(null);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -18,7 +21,12 @@ export default function FacilitiesPage({ isAdmin }) {
   async function load() {
     setLoading(true);
     try {
-      setFacilities(await api.facilities.list({ state: stateFilter }));
+      const [list, lgaList] = await Promise.all([
+        api.facilities.list({ lga: lgaFilter, search }),
+        api.facilities.lgas(),
+      ]);
+      setFacilities(list);
+      setLgas(lgaList);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -29,47 +37,7 @@ export default function FacilitiesPage({ isAdmin }) {
 
   useEffect(() => {
     load();
-  }, [stateFilter]);
-
-  // Derived from the loaded rows rather than a dedicated endpoint — the facility list is
-  // small enough that a separate round trip isn't worth it.
-  const [allStates, setAllStates] = useState([]);
-  useEffect(() => {
-    if (!stateFilter) setAllStates([...new Set(facilities.map((f) => f.state))].sort());
-  }, [facilities, stateFilter]);
-
-  function startEdit(facility) {
-    setEditingId(facility.id);
-    setForm({
-      name: facility.name || '',
-      state: facility.state || '',
-      lga: facility.lga || '',
-      envoFacilityId: facility.envo_facility_id || '',
-    });
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setForm(BLANK);
-  }
-
-  async function submit(event) {
-    event.preventDefault();
-    setError(null);
-    try {
-      if (editingId) {
-        await api.facilities.update(editingId, form);
-        setNotice(`updated ${form.name}`);
-      } else {
-        await api.facilities.create(form);
-        setNotice(`added ${form.name}`);
-      }
-      cancelEdit();
-      await load();
-    } catch (err) {
-      setError(err.message);
-    }
-  }
+  }, [lgaFilter, search]);
 
   return (
     <>
@@ -88,56 +56,63 @@ export default function FacilitiesPage({ isAdmin }) {
       </Banner>
 
       <div className="toolbar">
-        <Field label="State">
-          <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-            <option value="">all states</option>
-            {allStates.map((s) => (
-              <option key={s} value={s}>
-                {s}
+        <Field label="Search">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="facility name…"
+          />
+        </Field>
+        <Field label="LGA">
+          <select value={lgaFilter} onChange={(e) => setLgaFilter(e.target.value)}>
+            <option value="">all LGAs</option>
+            {lgas.map((l) => (
+              <option key={l.lga} value={l.lga}>
+                {l.lga} ({l.facility_count})
               </option>
             ))}
           </select>
         </Field>
+        <button className="btn" onClick={load} disabled={loading}>
+          {loading ? 'refreshing…' : 'Refresh'}
+        </button>
+        {(search || lgaFilter) && (
+          <button
+            className="btn"
+            onClick={() => {
+              setSearch('');
+              setLgaFilter('');
+            }}
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
-      {isAdmin && (
-        <form className="card" onSubmit={submit}>
-          <h2>{editingId ? 'Edit facility' : 'Add facility'}</h2>
-          <div className="form-grid">
-            <Field label="Name *">
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-            </Field>
-            <Field label="State *">
-              <input value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} required />
-            </Field>
-            <Field label="LGA">
-              <input value={form.lga} onChange={(e) => setForm({ ...form, lga: e.target.value })} />
-            </Field>
-            <Field label="EnVo facility ID">
-              <input
-                value={form.envoFacilityId}
-                onChange={(e) => setForm({ ...form, envoFacilityId: e.target.value })}
-                placeholder="for the EnVo stock lookup"
-              />
-            </Field>
-            <div className="row-actions">
-              <button className="btn primary" type="submit">
-                {editingId ? 'Save changes' : 'Add facility'}
-              </button>
-              {editingId && (
-                <button className="btn" type="button" onClick={cancelEdit}>
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-        </form>
-      )}
-
       <div className="card">
-        <h2>
-          {facilities.length} facilit{facilities.length === 1 ? 'y' : 'ies'}
-        </h2>
+        <div className="card-head">
+          <h2>
+            {facilities.length} facilit{facilities.length === 1 ? 'y' : 'ies'}
+          </h2>
+          {facilities.length > 0 && (
+            <button
+              className="btn small"
+              onClick={() =>
+                downloadCsv(
+                  `facilities-${stamp()}.csv`,
+                  [
+                    { header: 'Facility', value: (f) => f.name },
+                    { header: 'State', value: (f) => f.state },
+                    { header: 'LGA', value: (f) => f.lga || '' },
+                  ],
+                  facilities
+                )
+              }
+            >
+              ⭳ CSV
+            </button>
+          )}
+        </div>
         {loading ? (
           <Empty>loading…</Empty>
         ) : facilities.length === 0 ? (
@@ -148,9 +123,7 @@ export default function FacilitiesPage({ isAdmin }) {
               <thead>
                 <tr>
                   <th className="wrap">Name</th>
-                  <th>State</th>
                   <th>LGA</th>
-                  <th>EnVo ID</th>
                   <th />
                 </tr>
               </thead>
@@ -158,22 +131,15 @@ export default function FacilitiesPage({ isAdmin }) {
                 {facilities.map((facility) => (
                   <tr key={facility.id}>
                     <td className="wrap">{facility.name}</td>
-                    <td>{facility.state}</td>
                     <td>{facility.lga || '—'}</td>
-                    <td className="muted">{facility.envo_facility_id || '—'}</td>
                     <td>
                       <div className="row-actions">
-                        <button className="btn small" onClick={() => setAssignFor(facility)}>
+                        <button className="btn small" onClick={() => setStockFor(facility)}>
                           commodities
                         </button>
-                        <button className="btn small" onClick={() => setStockFor(facility)}>
-                          EnVo stock
+                        <button className="btn small" onClick={() => setHistoryFor(facility)}>
+                          dispatch history
                         </button>
-                        {isAdmin && (
-                          <button className="btn small" onClick={() => startEdit(facility)}>
-                            edit
-                          </button>
-                        )}
                       </div>
                     </td>
                   </tr>
@@ -184,146 +150,326 @@ export default function FacilitiesPage({ isAdmin }) {
         )}
       </div>
 
-      {assignFor && (
-        <AssignmentModal
-          facility={assignFor}
-          isAdmin={isAdmin}
-          onClose={() => setAssignFor(null)}
-          onError={setError}
-        />
-      )}
-
       {stockFor && <StockModal facility={stockFor} onClose={() => setStockFor(null)} />}
+
+      {historyFor && (
+        <FacilityHistoryModal facility={historyFor} onClose={() => setHistoryFor(null)} />
+      )}
     </>
   );
 }
 
-function AssignmentModal({ facility, isAdmin, onClose, onError }) {
-  const [assigned, setAssigned] = useState([]);
-  const [commodities, setCommodities] = useState([]);
-  const [search, setSearch] = useState('');
-  const [busy, setBusy] = useState(false);
+// What a facility has taken from the store, and what it cost them. Covers both routes
+// stock leaves by — ad-hoc dispatches and fulfilled requests — so the totals are what the
+// facility actually received, not just one half of it.
+function FacilityHistoryModal({ facility, onClose }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [period, setPeriod] = useState({ from: '2020-01-01', to: today });
+  const [lines, setLines] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+  // Selecting a dispatch or a commodity narrows everything below, the totals included.
+  const [selected, setSelected] = useState(null); // { kind: 'order'|'commodity', key }
 
   async function load() {
+    setLoading(true);
     try {
-      const [assignedRows, all] = await Promise.all([
-        api.facilities.commodities(facility.id),
-        api.commodities.list(),
-      ]);
-      setAssigned(assignedRows);
-      setCommodities(all);
+      const data = await api.monitoring.facility(facility.id, period);
+      setLines(data.lines);
+      setSelected(null);
+      setError(null);
     } catch (err) {
-      onError(err.message);
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => {
     load();
-  }, [facility.id]);
+  }, [facility.id, period.from, period.to]);
 
-  const assignedIds = useMemo(() => new Set(assigned.map((a) => a.commodity_id)), [assigned]);
-  const available = useMemo(
-    () =>
-      commodities
-        .filter((c) => !assignedIds.has(c.id))
-        .filter((c) => !search || c.name.toLowerCase().includes(search.toLowerCase()))
-        .slice(0, 100),
-    [commodities, assignedIds, search]
+  const all = lines || [];
+  const refOf = (l) => l.source + '-' + l.order_ref;
+
+  // Every view below is a grouping of the same lines, so a selection just narrows the set
+  // they are grouped from — no refetch, and the totals stay consistent with the tables.
+  const shown = useMemo(() => {
+    if (!selected) return all;
+    if (selected.kind === 'order') return all.filter((l) => refOf(l) === selected.key);
+    return all.filter((l) => String(l.commodity_id) === String(selected.key));
+  }, [all, selected]);
+
+  const totals = useMemo(
+    () => ({
+      value: shown.reduce((sum, l) => sum + Number(l.line_value), 0),
+      quantity: shown.reduce((sum, l) => sum + Number(l.quantity), 0),
+      dispatches: new Set(shown.map(refOf)).size,
+      commodities: new Set(shown.map((l) => l.commodity_id)).size,
+    }),
+    [shown]
   );
 
-  async function guard(fn) {
-    setBusy(true);
-    try {
-      await fn();
-      await load();
-    } catch (err) {
-      onError(err.message);
-    } finally {
-      setBusy(false);
+  const history = useMemo(() => {
+    const map = new Map();
+    for (const l of all) {
+      const key = refOf(l);
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          source: l.source,
+          ref: l.order_ref,
+          at: l.dispatched_at,
+          by: l.dispatched_by,
+          lines: [],
+          quantity: 0,
+          value: 0,
+        });
+      }
+      const order = map.get(key);
+      order.lines.push(l);
+      order.quantity += Number(l.quantity);
+      order.value += Number(l.line_value);
     }
+    return [...map.values()];
+  }, [all]);
+
+  const commodities = useMemo(() => {
+    const map = new Map();
+    for (const l of shown) {
+      if (!map.has(l.commodity_id)) {
+        map.set(l.commodity_id, {
+          id: l.commodity_id,
+          name: l.commodity_name,
+          category: l.category,
+          quantity: 0,
+          value: 0,
+          orders: new Set(),
+        });
+      }
+      const c = map.get(l.commodity_id);
+      c.quantity += Number(l.quantity);
+      c.value += Number(l.line_value);
+      c.orders.add(refOf(l));
+    }
+    return [...map.values()].sort((a, b) => b.value - a.value);
+  }, [shown]);
+
+  function toggle(kind, key) {
+    setSelected((cur) =>
+      cur && cur.kind === kind && String(cur.key) === String(key) ? null : { kind, key }
+    );
   }
+
+  const chosenOrder = selected?.kind === 'order' ? history.find((h) => h.key === selected.key) : null;
+  const selectionLabel = !selected
+    ? null
+    : chosenOrder
+      ? (chosenOrder.source === 'request' ? 'Request #' : 'Dispatch #') + chosenOrder.ref
+      : commodities.find((c) => String(c.id) === String(selected.key))?.name;
 
   return (
     <Modal
-      title="Assigned commodities"
-      subtitle={`${facility.name} · this is a default list, not a restriction`}
+      title={facility.name}
+      subtitle={[facility.lga, facility.state].filter(Boolean).join(', ')}
       onClose={onClose}
     >
-      <div className="card">
-        <h2>Assigned ({assigned.length})</h2>
-        {assigned.length === 0 ? (
-          <Empty>Nothing assigned yet.</Empty>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th className="wrap">Commodity</th>
-                  <th>Category</th>
-                  <th>Source</th>
-                  {isAdmin && <th />}
-                </tr>
-              </thead>
-              <tbody>
-                {assigned.map((row) => (
-                  <tr key={row.id}>
-                    <td className="wrap">{row.name}</td>
-                    <td className="muted">{row.category || '—'}</td>
-                    <td>
-                      {row.is_default ? (
-                        <span className="badge default">standard</span>
-                      ) : (
-                        <span className="badge manual">added</span>
-                      )}
-                    </td>
-                    {isAdmin && (
-                      <td>
-                        <button
-                          className="btn small danger"
-                          disabled={busy}
-                          onClick={() =>
-                            guard(() => api.facilities.removeCommodity(facility.id, row.commodity_id))
-                          }
-                        >
-                          remove
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <Banner kind="error" onDismiss={() => setError(null)}>
+        {error}
+      </Banner>
+
+      <div className="toolbar">
+        <Field label="From">
+          <input
+            type="date"
+            value={period.from}
+            onChange={(e) => setPeriod({ ...period, from: e.target.value })}
+          />
+        </Field>
+        <Field label="To">
+          <input
+            type="date"
+            value={period.to}
+            onChange={(e) => setPeriod({ ...period, to: e.target.value })}
+          />
+        </Field>
+        <button className="btn" onClick={load} disabled={loading}>
+          {loading ? 'refreshing...' : 'Refresh'}
+        </button>
+        {(period.from !== '2020-01-01' || period.to !== today || selected) && (
+          <button
+            className="btn"
+            onClick={() => {
+              setPeriod({ from: '2020-01-01', to: today });
+              setSelected(null);
+            }}
+          >
+            Clear filters
+          </button>
         )}
       </div>
 
-      {isAdmin && (
-        <div className="card">
-          <h2>Available to add</h2>
-          <Field label="Search">
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="commodity name…" />
-          </Field>
-          {available.length === 0 ? (
-            <Empty>Nothing left to add.</Empty>
-          ) : (
-            <div className="table-wrap" style={{ maxHeight: 260, overflowY: 'auto' }}>
+      {loading || !lines ? (
+        <Empty>loading...</Empty>
+      ) : all.length === 0 ? (
+        <Empty>Nothing dispatched to this facility in this period.</Empty>
+      ) : (
+        <>
+          {selected && (
+            <Banner kind="success" onDismiss={() => setSelected(null)}>
+              Showing {selectionLabel} only — dismiss to see the whole period.
+            </Banner>
+          )}
+
+          <div className="stat-row">
+            <div className="stat">
+              <div className="label">Value dispatched</div>
+              <div className="value">{money(totals.value)}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Quantity</div>
+              <div className="value">{qty(totals.quantity)}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Dispatches</div>
+              <div className="value">{totals.dispatches}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Commodities</div>
+              <div className="value">{totals.commodities}</div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h2>Dispatch history</h2>
+            <div className="table-wrap">
               <table>
+                <thead>
+                  <tr>
+                    <th>Reference</th>
+                    <th>When</th>
+                    <th>By</th>
+                    <th className="num">Lines</th>
+                    <th className="num">Quantity</th>
+                    <th className="num">Value</th>
+                    <th />
+                  </tr>
+                </thead>
                 <tbody>
-                  {available.map((c) => (
-                    <tr key={c.id}>
+                  {history.map((h) => {
+                    const isOpen = selected?.kind === 'order' && selected.key === h.key;
+                    return (
+                      <Fragment key={h.key}>
+                        <tr
+                          onClick={() => toggle('order', h.key)}
+                          className={isOpen ? 'row-selected' : ''}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <td>
+                            {h.source === 'request' ? 'Request' : 'Dispatch'} #{h.ref}
+                          </td>
+                          <td>{dateTime(h.at)}</td>
+                          <td className="muted">{h.by || '—'}</td>
+                          <td className="num">{h.lines.length}</td>
+                          <td className="num">{qty(h.quantity)}</td>
+                          <td className="num">{money(h.value)}</td>
+                          <td>
+                            {/* The row is clickable, but a button says so — not everyone
+                                will think to try. */}
+                            <button
+                              className="btn small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggle('order', h.key);
+                              }}
+                            >
+                              {isOpen ? 'hide' : 'view'}
+                            </button>
+                          </td>
+                        </tr>
+                        {isOpen &&
+                          h.lines.map((l) => (
+                            <tr key={h.key + '-' + l.commodity_id} className="row-child">
+                              <td colSpan={3} className="wrap">
+                                {l.commodity_name}
+                                <span className="muted"> · {l.category || 'uncategorised'}</span>
+                              </td>
+                              <td className="num muted">{money(l.unit_price)}</td>
+                              <td className="num">{qty(l.quantity)}</td>
+                              <td className="num">{money(l.line_value)}</td>
+                              <td />
+                            </tr>
+                          ))}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-head">
+              <h2>Commodities received</h2>
+              <button
+                className="btn small"
+                onClick={() =>
+                  downloadCsv(
+                    'facility-commodities-' + slug(facility.name) + '-' + stamp() + '.csv',
+                    [
+                      { header: 'Commodity', value: (c) => c.name },
+                      { header: 'Category', value: (c) => c.category || '' },
+                      { header: 'Quantity', value: (c) => c.quantity, align: 'right' },
+                      { header: 'Value (NGN)', value: (c) => c.value, align: 'right' },
+                      { header: 'Dispatches', value: (c) => c.orders.size, align: 'right' },
+                    ],
+                    commodities
+                  )
+                }
+              >
+                &#11015; CSV
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th className="wrap">Commodity</th>
+                    <th>Category</th>
+                    <th className="num">Quantity</th>
+                    <th className="num">Value</th>
+                    <th className="num">Dispatches</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {commodities.map((c) => (
+                    <tr
+                      key={c.id}
+                      onClick={() => toggle('commodity', c.id)}
+                      className={
+                        selected?.kind === 'commodity' && String(selected.key) === String(c.id)
+                          ? 'row-selected'
+                          : ''
+                      }
+                      style={{ cursor: 'pointer' }}
+                    >
                       <td className="wrap">{c.name}</td>
                       <td className="muted">{c.category || '—'}</td>
+                      <td className="num">{qty(c.quantity)}</td>
+                      <td className="num">{money(c.value)}</td>
+                      <td className="num">{c.orders.size}</td>
                       <td>
                         <button
                           className="btn small"
-                          disabled={busy}
-                          onClick={() =>
-                            guard(() =>
-                              api.facilities.addCommodity(facility.id, { commodityId: c.id, isDefault: false })
-                            )
-                          }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggle('commodity', c.id);
+                          }}
                         >
-                          add
+                          {selected?.kind === 'commodity' && String(selected.key) === String(c.id)
+                            ? 'clear'
+                            : 'view'}
                         </button>
                       </td>
                     </tr>
@@ -331,12 +477,61 @@ function AssignmentModal({ facility, isAdmin, onClose, onError }) {
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
+          </div>
+        </>
       )}
     </Modal>
   );
 }
+
+// What a facility currently holds, read live from EnVo — this is EnVo's record, not the
+// warehouse's, so there is nothing to add or remove here.
+const STOCK_COLUMNS = [
+  { header: 'Commodity', value: (r) => r.name },
+  { header: 'Unit', value: (r) => r.unit || '' },
+  { header: 'On hand', value: (r) => r.quantityOnHand, align: 'right' },
+  { header: 'AMC', value: (r) => r.amc ?? '', align: 'right' },
+  { header: 'MOS', value: (r) => r.mos ?? '', align: 'right' },
+  { header: 'Status', value: (r) => r.status },
+];
+
+// The AMC window as the facility actually has it configured, e.g. "May – Jun 2026" for the
+// default quarterly window, or "May, Jul 2026" when a facility has picked its own months.
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatAmcMonths(win) {
+  const months = win.monthsUsed || [];
+  if (months.length === 0) return `${win.months} month${win.months === 1 ? '' : 's'}`;
+
+  const parts = months.map((ym) => {
+    const [y, m] = ym.split('-').map(Number);
+    return { label: MONTH_NAMES[m - 1], year: y };
+  });
+  const sameYear = parts.every((p) => p.year === parts[0].year);
+
+  // Contiguous runs read better as a range than a list.
+  const contiguous = months.every((ym, i) => {
+    if (i === 0) return true;
+    const [py, pm] = months[i - 1].split('-').map(Number);
+    const [cy, cm] = ym.split('-').map(Number);
+    return cy * 12 + cm === py * 12 + pm + 1;
+  });
+
+  if (parts.length === 1) return `${parts[0].label} ${parts[0].year}`;
+  if (contiguous && sameYear) {
+    return `${parts[0].label} – ${parts[parts.length - 1].label} ${parts[0].year}`;
+  }
+  if (sameYear) return `${parts.map((p) => p.label).join(', ')} ${parts[0].year}`;
+  return parts.map((p) => `${p.label} ${p.year}`).join(', ');
+}
+
+const STATUS_BADGE = {
+  out: 'expired',
+  low: 'soon',
+  ok: 'ok',
+  over: 'manual',
+  unknown: 'inactive',
+};
 
 function StockModal({ facility, onClose }) {
   const [stock, setStock] = useState(null);
@@ -349,41 +544,92 @@ function StockModal({ facility, onClose }) {
       .catch((err) => setError(err.message));
   }, [facility.id]);
 
+  const win = stock?.amcWindow;
+
   return (
-    <Modal title="Facility stock from EnVo" subtitle={facility.name} onClose={onClose}>
+    <Modal
+      title="Commodities at this facility"
+      subtitle={`${facility.name} · ${stock?.stale ? 'last known figures' : 'live from EnVo'}`}
+      onClose={onClose}
+    >
       <Banner kind="error">{error}</Banner>
+
+      {stock?.stale && (
+        <Banner kind="warn">
+          EnVo is unreachable, so these are the last figures we retrieved, from{' '}
+          {dateTime(stock.asOf)}. Stock may have moved at the facility since.
+        </Banner>
+      )}
 
       {!stock && !error ? (
         <Empty>loading…</Empty>
       ) : (
         stock && (
           <>
-            {stock.isMockData && (
-              <Banner kind="warn">
-                Placeholder data — the live EnVo stock API is not wired in yet.
-              </Banner>
-            )}
-            <p className="muted">As of {dateTime(stock.asOf)}</p>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th className="wrap">Commodity</th>
-                    <th className="num">On hand</th>
-                    <th>Unit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stock.items.map((item) => (
-                    <tr key={item.commodityId}>
-                      <td className="wrap">{item.name}</td>
-                      <td className="num">{qty(item.quantityOnHand)}</td>
-                      <td>{item.unit}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="card-head">
+              <p className="muted" style={{ margin: 0 }}>
+                {win && (
+                  <>
+                    AMC over {formatAmcMonths(win)}
+                    {win.custom ? ' · facility-set window' : ''}
+                  </>
+                )}
+              </p>
+              {stock.items.length > 0 && (
+                <button
+                  className="btn small"
+                  onClick={() =>
+                    downloadCsv(
+                      `facility-stock-${slug(facility.name)}-${stamp()}.csv`,
+                      STOCK_COLUMNS,
+                      stock.items
+                    )
+                  }
+                >
+                  ⭳ CSV
+                </button>
+              )}
             </div>
+
+            {stock.items.length === 0 ? (
+              <Empty>
+                EnVo has no Essential Commodities stock recorded for this facility yet.
+              </Empty>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th className="wrap">Commodity</th>
+                      <th>Unit</th>
+                      <th className="num">On hand</th>
+                      <th className="num">AMC</th>
+                      <th className="num">MOS</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stock.items.map((item) => (
+                      <tr key={item.commodityId}>
+                        <td className="wrap">{item.name}</td>
+                        <td>{unitLabel(item.unit) || '—'}</td>
+                        <td className="num">{qty(item.quantityOnHand)}</td>
+                        <td className="num">{item.amc ? qty(item.amc) : <span className="muted">—</span>}</td>
+                        <td className="num">
+                          {item.mos == null ? <span className="muted">—</span> : item.mos}
+                        </td>
+                        <td>
+                          <span className={`badge ${STATUS_BADGE[item.status] || 'inactive'}`}>
+                            {item.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
           </>
         )
       )}

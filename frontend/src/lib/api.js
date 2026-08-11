@@ -1,4 +1,7 @@
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// `??` rather than `||` so an explicitly empty VITE_API_URL means "same origin" — the
+// tunnel/demo case, where requests go through the dev proxy — instead of silently falling
+// back to localhost, which would be the viewer's own machine.
+const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5100';
 const TOKEN_KEY = 'envo_wms_token';
 const USER_KEY = 'envo_wms_user';
 
@@ -16,16 +19,16 @@ function clearSession() {
   localStorage.removeItem(USER_KEY);
 }
 
-async function request(path, { method = 'GET', body, isUpload = false } = {}) {
+async function request(path, { method = 'GET', body } = {}) {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (body && !isUpload) headers['Content-Type'] = 'application/json';
+  if (body) headers['Content-Type'] = 'application/json';
 
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers,
-    body: isUpload ? body : body ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
 
   if (res.status === 401) {
@@ -50,6 +53,8 @@ export const auth = {
   },
   logout: clearSession,
   me: () => request('/api/auth/me'),
+  changePassword: (currentPassword, newPassword) =>
+    request('/api/auth/password', { method: 'PUT', body: { currentPassword, newPassword } }),
 };
 
 const qs = (params) => {
@@ -81,9 +86,12 @@ export const api = {
     receive: (body) => request('/api/batches', { method: 'POST', body }),
     movements: (id) => request(`/api/batches/${id}/movements`),
     adjust: (id, body) => request(`/api/batches/${id}/adjust`, { method: 'POST', body }),
+    adjustmentReasons: () => request('/api/batches/adjustment-reasons'),
+    setNumber: (id, body) => request(`/api/batches/${id}/number`, { method: 'PUT', body }),
   },
   facilities: {
     list: (params) => request(`/api/facilities${qs(params)}`),
+    lgas: (params) => request(`/api/facilities/lgas${qs(params)}`),
     create: (body) => request('/api/facilities', { method: 'POST', body }),
     update: (id, body) => request(`/api/facilities/${id}`, { method: 'PUT', body }),
     commodities: (id) => request(`/api/facilities/${id}/commodities`),
@@ -96,25 +104,36 @@ export const api = {
       request(`/api/facilities/${id}/dispatch-orders`, { method: 'POST', body }),
   },
   dispatchOrders: {
+    list: (params) => request(`/api/dispatch-orders${qs(params)}`),
     get: (id) => request(`/api/dispatch-orders/${id}`),
+    update: (id, body) => request(`/api/dispatch-orders/${id}`, { method: 'PUT', body }),
+  },
+  requests: {
+    list: (params) => request(`/api/requests${qs(params)}`),
+    get: (id) => request(`/api/requests/${id}`),
+    markPicking: (id, body) => request(`/api/requests/${id}/picking`, { method: 'PATCH', body }),
+    fulfil: (id, body) => request(`/api/requests/${id}/fulfil`, { method: 'POST', body }),
+    recordReceipt: (id, body) => request(`/api/requests/${id}/receipt`, { method: 'POST', body }),
+  },
+  monitoring: {
+    facility: (id, params) => request(`/api/monitoring/facilities/${id}${qs(params)}`),
+    summary: (params) => request(`/api/monitoring/summary${qs(params)}`),
+    daily: (params) => request(`/api/monitoring/daily${qs(params)}`),
+    byCategory: (params) => request(`/api/monitoring/by-category${qs(params)}`),
+    byFacility: (params) => request(`/api/monitoring/by-facility${qs(params)}`),
+    byCommodity: (params) => request(`/api/monitoring/by-commodity${qs(params)}`),
+    commodity: (id, params) => request(`/api/monitoring/commodities/${id}${qs(params)}`),
+    commodityHistory: (id, params) =>
+      request(`/api/monitoring/commodities/${id}/history${qs(params)}`),
+    activity: (params) => request(`/api/monitoring/activity${qs(params)}`),
+    adjustments: (params) => request(`/api/monitoring/adjustments${qs(params)}`),
+    day: (params) => request(`/api/monitoring/day${qs(params)}`),
+  },
+  sync: {
+    status: () => request('/api/sync/status'),
   },
   alerts: {
     expiry: (params) => request(`/api/alerts/expiry${qs(params)}`),
     stock: () => request('/api/alerts/stock'),
-  },
-  priceListImports: {
-    list: () => request('/api/price-list-imports'),
-    get: (id) => request(`/api/price-list-imports/${id}`),
-    upload: (file, notes) => {
-      const form = new FormData();
-      form.append('file', file);
-      if (notes) form.append('notes', notes);
-      return request('/api/price-list-imports', { method: 'POST', body: form, isUpload: true });
-    },
-    updateRow: (importId, rowId, body) =>
-      request(`/api/price-list-imports/${importId}/rows/${rowId}`, { method: 'PUT', body }),
-    assignVendor: (importId, body) =>
-      request(`/api/price-list-imports/${importId}/vendor`, { method: 'PUT', body }),
-    commit: (importId) => request(`/api/price-list-imports/${importId}/commit`, { method: 'POST' }),
   },
 };

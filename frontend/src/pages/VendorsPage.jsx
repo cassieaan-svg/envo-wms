@@ -101,6 +101,9 @@ export default function VendorsPage({ isAdmin }) {
           />
           show inactive
         </label>
+        <button className="btn" onClick={load} disabled={loading}>
+          {loading ? 'refreshing…' : 'Refresh'}
+        </button>
       </div>
 
       <Banner kind="error" onDismiss={() => setError(null)}>

@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
-import { Banner, Empty, Field, Modal, dateOnly, money } from './ui.jsx';
+import { Banner, Empty, Field, dateOnly, money } from './ui.jsx';
 
-// Shows the full price trail for a commodity and lets an admin set a new current price.
-// Setting a price never edits an existing row — the old one is marked not-current.
-export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose, onSaved }) {
+// The price trail for a commodity, and the form to adjust it. Rendered as a section of the
+// commodity's edit modal rather than a modal of its own. Adjusting never edits an existing
+// row — the old one is kept, marked not-current.
+export default function PriceSection({ commodity, isAdmin, onSaved }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [form, setForm] = useState({ vendorId: '', brandName: '', unitPrice: '', effectiveDate: '' });
+  const [form, setForm] = useState({ unitPrice: '', effectiveDate: '' });
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -33,12 +34,10 @@ export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose
     setError(null);
     try {
       await api.commodities.setPrice(commodity.id, {
-        vendorId: Number(form.vendorId),
-        brandName: form.brandName || null,
         unitPrice: Number(form.unitPrice),
         effectiveDate: form.effectiveDate || null,
       });
-      setForm({ vendorId: '', brandName: '', unitPrice: '', effectiveDate: '' });
+      setForm({ unitPrice: '', effectiveDate: '' });
       await load();
       onSaved?.();
     } catch (err) {
@@ -49,37 +48,16 @@ export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose
   }
 
   return (
-    <Modal title={commodity.name} subtitle={commodity.category || 'uncategorised'} onClose={onClose}>
+    <>
       <Banner kind="error" onDismiss={() => setError(null)}>
         {error}
       </Banner>
 
       {isAdmin && (
         <form className="card" onSubmit={submit}>
-          <h2>Set new current price</h2>
+          <h2>Adjust price</h2>
           <div className="form-grid">
-            <Field label="Vendor *">
-              <select
-                value={form.vendorId}
-                onChange={(e) => setForm({ ...form, vendorId: e.target.value })}
-                required
-              >
-                <option value="">select vendor…</option>
-                {vendors.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Brand (optional)">
-              <input
-                value={form.brandName}
-                onChange={(e) => setForm({ ...form, brandName: e.target.value })}
-                placeholder="generic"
-              />
-            </Field>
-            <Field label="Unit price (₦) *">
+            <Field label={`New unit price (₦) per ${commodity.unit || 'unit'} *`}>
               <input
                 type="number"
                 min="0"
@@ -87,6 +65,7 @@ export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose
                 value={form.unitPrice}
                 onChange={(e) => setForm({ ...form, unitPrice: e.target.value })}
                 required
+                autoFocus
               />
             </Field>
             <Field label="Effective date">
@@ -97,11 +76,13 @@ export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose
               />
             </Field>
             <button className="btn primary" type="submit" disabled={saving}>
-              {saving ? 'saving…' : 'Add price'}
+              {saving ? 'saving…' : 'Save new price'}
             </button>
           </div>
           <p className="muted" style={{ margin: '10px 0 0' }}>
-            The existing current price for this vendor and brand is kept as history, not overwritten.
+            Current price:{' '}
+            {commodity.current_price == null ? 'not set' : money(commodity.current_price)}. The old price
+            is kept as history, not overwritten.
           </p>
         </form>
       )}
@@ -117,8 +98,6 @@ export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose
             <table>
               <thead>
                 <tr>
-                  <th>Vendor</th>
-                  <th>Brand</th>
                   <th className="num">Unit price</th>
                   <th>Effective</th>
                   <th>Status</th>
@@ -128,8 +107,6 @@ export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose
               <tbody>
                 {history.map((row) => (
                   <tr key={row.id}>
-                    <td>{row.vendor_name}</td>
-                    <td>{row.brand_name || <span className="muted">generic</span>}</td>
                     <td className="num">{money(row.unit_price)}</td>
                     <td>{dateOnly(row.effective_date)}</td>
                     <td>
@@ -147,6 +124,6 @@ export default function PriceHistoryModal({ commodity, vendors, isAdmin, onClose
           </div>
         )}
       </div>
-    </Modal>
+    </>
   );
 }
