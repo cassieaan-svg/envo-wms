@@ -9,7 +9,7 @@ import { fmtStockQty } from '../utils/helpers'
 // quantity, amc, mos, status, _isLab.
 
 const statusBadge = { out:'out', low:'low', ok:'ok', over:'over', unknown:'unknown' }
-const statusLabel = { out:'Out of stock', low:'Low stock', ok:'In stock', over:'Overstock', unknown:'No AMC data' }
+const statusLabel = { out:'Out of stock', low:'Low stock', ok:'Optimal', over:'Overstock', unknown:'No AMC data' }
 const mosColor    = { out:'text-red-400', low:'text-red-400', ok:'text-green-400', over:'text-blue-400', unknown:'text-gray-500' }
 
 function buildCols(items) {
