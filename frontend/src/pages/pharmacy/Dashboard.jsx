@@ -11,7 +11,7 @@ import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DispatchAlertBanner } from '../../components/DispatchAlertBanner'
 import { exportCsv, exportPdf } from '../../utils/download'
 
-const STATUS_LABEL = { ok: 'Optimal', low: 'Low stock', out: 'Out of stock', over: 'Overstock' }
+const STATUS_LABEL = { ok: 'Optimal', low: 'Low stock', out: 'Out of stock', over: 'Overstock', unknown: 'No AMC' }
 
 export function Dashboard() {
   const store            = useAppStore()
@@ -197,6 +197,9 @@ export function Dashboard() {
         <Metric label="Low stock"     value={enrichedAll.filter(r=>r.status==='low').length}  color="amber" loading={stockPending} onClick={()=>setSts(s=>s==='low'?'':'low')}   active={stsFilter==='low'} />
         <Metric label="Out of stock"  value={enrichedAll.filter(r=>r.status==='out').length}  color="red"   loading={stockPending} onClick={()=>setSts(s=>s==='out'?'':'out')}   active={stsFilter==='out'} />
         <Metric label="Overstock"     value={enrichedAll.filter(r=>r.status==='over').length} color="blue"  loading={stockPending} onClick={()=>setSts(s=>s==='over'?'':'over')} active={stsFilter==='over'} />
+        {/* Commodities holding stock but with no consumption on record, so no AMC
+            and therefore no MOS or status. Not a stockout — an unmeasurable one. */}
+        <Metric label="No AMC" value={enrichedAll.filter(r=>r.status==='unknown').length} loading={stockPending} onClick={()=>setSts(s=>s==='unknown'?'':'unknown')} active={stsFilter==='unknown'} />
       </MetricGrid>
 
       {/* Out-of-stock only: split the zero balances into ones this facility
