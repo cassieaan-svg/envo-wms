@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
-import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, groupStockByComm, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DispatchAlertBanner } from '../../components/DispatchAlertBanner'
 import { exportCsv, exportPdf } from '../../utils/download'
@@ -16,7 +15,6 @@ const STATUS_LABEL = { ok: 'Optimal', low: 'Low stock', out: 'Out of stock', ove
 
 export function Dashboard() {
   const store            = useAppStore()
-  const { loadStock }    = useStock()
   const commoditySection = store.commoditySection
   const [amcMap, setAmcMap]   = useState({})
   // Commodity ids ever transacted here (any intake/dispense, however old) — the
@@ -28,13 +26,15 @@ export function Dashboard() {
   // Sub-filter of the Out-of-stock view only: '' | 'inuse' | 'unused'. Cleared
   // whenever the status filter moves off 'out', so the two cards disappear with it.
   const [useFilter, setUseFilter] = useState('')
-  const [sdpMap, setSdpMap]   = useState({})
-  const [dsdMap, setDsdMap]   = useState({})
+  // Per-commodity stock rollup from the server (store/dispensary/DSD/SDP totals,
+  // baseline AMC, has_stock), keyed by commodity_id. Replaces downloading every
+  // stock/DSD/SDP row and reducing them here.
+  const [summary, setSummary] = useState(null)
   const [drill, setDrill]     = useState(null)
   const [loading, setLoading] = useState(true)
-  // Stock-derived status counts are meaningless until the stock payload lands —
-  // an empty stockData makes every commodity look out-of-stock.
-  const stockPending = loading || !store.stockLoaded
+  // Stock-derived status counts are meaningless until the rollup lands — an empty
+  // map makes every commodity look out-of-stock.
+  const stockPending = loading || !summary
 
   // Admin facility scope: a single facility, an LGA/state worth of facilities,
   // or all (resolved from the hierarchical filter). Facility users get their own.
@@ -50,60 +50,60 @@ export function Dashboard() {
 
   async function loadData() {
     setLoading(true)
-    await loadStock()
 
-    // Aggregate DSD (pharmacy) and SDP (lab) stock by commodity. With a facility
-    // scoped, use it; for an admin viewing all facilities, aggregate across the
-    // whole scope (paginated past the 1000-row cap).
-    const aggSiteStock = async (listFn) => {
-      const map = {}
-      for (let offset = 0; ; offset += 1000) {
-        let data
-        try {
-          data = await listFn({
-            facility_id: fid || undefined,
-            facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-            limit: 1000, offset,
-          })
-        } catch { break }
-        if (!data || !data.length) break
-        data.forEach(d => { map[d.commodity_id] = (map[d.commodity_id] || 0) + d.quantity })
-        if (data.length < 1000) break
-      }
-      return map
-    }
-    const [dsdAgg, sdpAgg] = await Promise.all([aggSiteStock(api.stock.dsd.list), aggSiteStock(api.stock.sdp.list)])
-    setDsdMap(dsdAgg)
-    setSdpMap(sdpAgg)
-
-    // Single facility → its custom window; multi-facility/admin scope → the
-    // default window with consumption aggregated across the whole scope so the
-    // AMC (and the status counts in the cards above) matches the summed stock.
+    // Stage 1 — everything the cards and the table need, fetched in PARALLEL.
+    // These two are independent (the AMC window is derived from the scope, not
+    // from the stock), so there is no reason to await them in sequence.
+    //
+    // The rollup replaces three downloads: the full stock table plus the DSD and
+    // SDP row dumps that were only ever summed per commodity here. The server
+    // does the same sums, so the response is one row per commodity.
     const amcWin = resolveAmcWindow(fid ? store.amcWindows[fid] : null)
     const commIds = store.allCommodities.map(c => c.id)
-    const amc = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
+    const [rows, amc] = await Promise.all([
+      api.stock.summary({
+        facility_id: fid || undefined,
+        facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+        commodity_ids: commoditySection ? commIds : undefined,
+      }).catch(() => []),
+      loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection }),
+    ])
+    const byComm = {}
+    ;(rows || []).forEach(r => { byComm[r.commodity_id] = r })
+    setSummary(byComm)
     setAmcMap(amc)
+    // Cards and table are now complete — release them before the non-critical
+    // fetch below, so the dashboard is usable while it lands.
+    setLoading(false)
+
+    // Stage 2 — non-critical. `transacted` only refines the in-use / not-in-use
+    // split inside the Out-of-stock view (which the user has to click into), so
+    // it must not gate the initial render.
     const everUsed = await api.commodities.transacted(store.getAdminScopeParams()).catch(() => [])
     setTransacted(new Set(everUsed || []))
-    setLoading(false)
   }
 
   const getAMC = r => amcMap[r.commodity_id] && amcMap[r.commodity_id] > 0 ? amcMap[r.commodity_id] : (r.baseline_amc || 0)
 
-  const grouped = groupStockByComm(store.stockData)
-  const gMap = {}
-  grouped.forEach(g => { gMap[g.commodity_id] = g })
+  const gMap = summary || {}
 
-  // Base on every tracked commodity so zero-stock items / categories appear.
+  // In the Essential Commodities module a facility only handles the items it has
+  // taken in, so the dashboard shows just those (any commodity with a stock record).
+  // The HIV module keeps the full catalogue so zero-stock items / categories appear.
+  // `has_stock` is the server's equivalent of the old "a stock row exists" test.
+  const catalogue = store.module === 'essential'
+    ? store.allCommodities.filter(c => gMap[c.id]?.has_stock)
+    : store.allCommodities
+
   // Lab total = store + SDP; pharmacy total = store + dispensary + DSD.
-  const enrichedAll = store.allCommodities.map(c => {
+  const enrichedAll = catalogue.map(c => {
     const g             = gMap[c.id] || {}
-    const comm          = g.commodities || c
-    const storeQty      = g.storeQty || 0
-    const dispensaryQty = g.dispensaryQty || 0
+    const comm          = c
+    const storeQty      = g.store_qty || 0
+    const dispensaryQty = g.dispensary_qty || 0
     const lab           = isLabCategory(comm?.category)
-    const dsdQty        = dsdMap[c.id] || 0
-    const sdpQty        = sdpMap[c.id] || 0
+    const dsdQty        = g.dsd_qty || 0
+    const sdpQty        = g.sdp_qty || 0
     const quantity      = lab ? (storeQty + sdpQty) : (storeQty + dispensaryQty + dsdQty)
     const amc           = getAMC({ commodity_id: c.id, baseline_amc: g.baseline_amc || 0 })
     return {
@@ -114,7 +114,7 @@ export function Dashboard() {
       // or dispense record however old, or it holds (or once held) stock, or has
       // consumption in the AMC window. Everything else is tracked network-wide but
       // never used or reported here, so its zero balance is not a real stockout.
-      inUse: !!gMap[c.id] || (amcMap[c.id] || 0) > 0 || transacted.has(c.id),
+      inUse: !!gMap[c.id]?.has_stock || (amcMap[c.id] || 0) > 0 || transacted.has(c.id),
     }
   })
 

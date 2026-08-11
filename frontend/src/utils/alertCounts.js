@@ -1,8 +1,5 @@
 import { api } from '../lib/api'
-import {
-  groupStockByComm, resolveAmcWindow, amcMapFromRows,
-  getStockStatus,
-} from './helpers'
+import { resolveAmcWindow, amcMapFromRows, getStockStatus } from './helpers'
 
 // Counts expiry / low-stock / overstock alerts for a single facility.
 // Out-of-stock is intentionally excluded (by request). Mirrors the Alerts page
@@ -13,17 +10,16 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
   if (!fid || !allCommodities?.length) return empty
   const commIds = allCommodities.map(c => c.id)
 
-  // Store stock for this facility (one big page).
-  const stockData = await api.stock.list({
-    facility_ids: [fid],
+  // Per-commodity rollup for this facility: store + SDP totals and the baseline
+  // AMC, in one response. This used to pull every stock row for the facility
+  // (limit 50000) plus the SDP rows, purely to sum them per commodity here — for
+  // a nav badge showing three numbers.
+  const summary = await api.stock.summary({
+    facility_id: fid,
     commodity_ids: commoditySection ? commIds : undefined,
-    limit: 50000,
   }).catch(() => [])
-
-  // SDP site stock — facility total = store + SDP, matching the Dashboard.
-  const sdpData = await api.stock.sdp.list({ facility_id: fid }).catch(() => [])
-  const sdpMap = {}
-  ;(sdpData || []).forEach(d => { sdpMap[d.commodity_id] = (sdpMap[d.commodity_id] || 0) + d.quantity })
+  const gMap = {}
+  ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })
 
   // Average monthly consumption window → AMC per commodity.
   const amcWin = resolveAmcWindow(amcWindows[fid])
@@ -37,13 +33,10 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
     amcMap = amcMapFromRows(disp, amcWin)
   }
 
-  const gMap = {}
-  groupStockByComm(stockData).forEach(g => { gMap[g.commodity_id] = g })
-
   let low = 0, over = 0
   allCommodities.forEach(c => {
     const g = gMap[c.id] || {}
-    const quantity = (g.storeQty || 0) + (sdpMap[c.id] || 0)
+    const quantity = (g.store_qty || 0) + (g.sdp_qty || 0)
     const amc = amcMap[c.id] && amcMap[c.id] > 0 ? amcMap[c.id] : (g.baseline_amc || 0)
     const status = getStockStatus(quantity, amc)
     if (status === 'low') low++

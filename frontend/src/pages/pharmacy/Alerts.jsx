@@ -10,7 +10,7 @@ import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, isLabCategory, transferReason } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, isLabCategory, transferReason } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
 
 export function Alerts() {
@@ -284,43 +284,44 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       amcMap = amcMapFromRows(data, amcWin)
     }
 
-    // Aggregate DSD (pharmacy) and SDP (lab) stock so the total matches the Dashboard.
-    let dsdMap = {}, sdpMap = {}
-    if (fid) {
-      const [dsdData, sdpData] = await Promise.all([
-        api.stock.dsd.list({ facility_id: fid }).catch(() => []),
-        api.stock.sdp.list({ facility_id: fid }).catch(() => []),
-      ])
-      ;(dsdData||[]).forEach(d=>{ dsdMap[d.commodity_id]=(dsdMap[d.commodity_id]||0)+d.quantity })
-      ;(sdpData||[]).forEach(d=>{ sdpMap[d.commodity_id]=(sdpMap[d.commodity_id]||0)+d.quantity })
-    }
-
-    // Commodity ids this scope has ever transacted (any intake/dispense, however
-    // old) — one of the "in use here" signals, mirroring the Dashboard.
-    const everUsed = await api.commodities.transacted(store.getAdminScopeParams()).catch(() => [])
+    // Per-commodity rollup for the current scope (store / dispensary / DSD / SDP
+    // totals and baseline AMC) plus the ever-transacted ids, in parallel. The
+    // overall admin can narrow to one state from the stock-tab State filter;
+    // everyone else sees their whole scope — the same narrowing that used to be
+    // applied by filtering the full stock array client-side.
+    const [summary, everUsed] = await Promise.all([
+      api.stock.summary({
+        facility_id: scopeFid || undefined,
+        facility_ids: (!scopeFid && scopeIdList && scopeIdList.length) ? scopeIdList : undefined,
+      }).catch(() => []),
+      // Commodity ids this scope has ever transacted (any intake/dispense, however
+      // old) — one of the "in use here" signals, mirroring the Dashboard.
+      api.commodities.transacted(store.getAdminScopeParams()).catch(() => []),
+    ])
     const transacted = new Set(everUsed || [])
-
-    // Overall admin can narrow the aggregate to one state (from the stock-tab
-    // State filter); everyone else sees their whole scope.
-    const scopedStock = scopeSet ? store.stockData.filter(r => scopeSet.has(r.facility_id)) : store.stockData
-    const grouped = groupStockByComm(scopedStock)
     const gMap = {}
-    grouped.forEach(g=>{ gMap[g.commodity_id]=g })
+    ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })
+    // DSD/SDP site stock is only folded in when a single facility is in view, as before.
+    const dsdMap = {}, sdpMap = {}
+    if (fid) (summary || []).forEach(r => {
+      dsdMap[r.commodity_id] = r.dsd_qty || 0
+      sdpMap[r.commodity_id] = r.sdp_qty || 0
+    })
 
     // Seed from every tracked commodity (not just those with a stock row) so
     // zero-stock / out-of-stock items are counted — keeps these alerts
     // consistent with the Dashboard.
     const enriched = store.allCommodities.map(c=>{
       const g             = gMap[c.id] || {}
-      const comm          = g.commodities || c
-      const storeQty      = g.storeQty || 0
-      const dispensaryQty = g.dispensaryQty || 0
+      const comm          = c
+      const storeQty      = g.store_qty || 0
+      const dispensaryQty = g.dispensary_qty || 0
       const lab           = isLabCategory(comm?.category)
       const quantity      = lab ? (storeQty + (sdpMap[c.id]||0)) : (storeQty + dispensaryQty + (dsdMap[c.id]||0))
       const amc           = amcMap[c.id]&&amcMap[c.id]>0?amcMap[c.id]:(g.baseline_amc||0)
       // "In use here" = a stock row exists (holds/once held stock), or there is
       // AMC-window consumption, or it was ever transacted. Same rule as the Dashboard.
-      const inUse         = !!gMap[c.id] || (amcMap[c.id]||0) > 0 || transacted.has(c.id)
+      const inUse         = !!gMap[c.id]?.has_stock || (amcMap[c.id]||0) > 0 || transacted.has(c.id)
       return { id:c.id, commodity_id:c.id, commodities:comm, storeQty, dispensaryQty, quantity, inUse,
                _amc:amc, _mos:getMOS(quantity,amc), _status:getStockStatus(quantity,amc) }
     })
@@ -336,12 +337,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   useEffect(()=>{ if(tab!=='out') setUseFilter('') },[tab])
   // Recompute the out/low/over aggregates when the overall admin picks a state.
   useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
-  // The /api/stock payload is large (~4.5 MB for an admin) and lands well after
-  // mount. Until it does, stockData is empty and every commodity derives as
-  // out-of-stock, so recompute once it arrives. Keyed on the false→true flip
-  // (once per session) rather than on stockData itself, so routine realtime
-  // stock updates don't re-fire these queries.
-  useEffect(()=>{ if(stockLoaded) loadAll() },[stockLoaded])
+  // (The recompute that used to wait for the large app-wide stock payload is
+  // gone: the alert figures now come from the scoped rollup fetched in loadAll
+  // itself, so there is nothing to wait for and no second pass to run.)
   useEffect(()=>{ if(store.isAdmin() && reqView==='history') loadHistory() },[reqView, histFrom, histTo])
   useEffect(()=>{ if(store.isAdmin() && reqView==='inflight') loadInflight() },[reqView])
 
@@ -447,7 +445,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const outNotInUse = shownOut.filter(r => !r.inUse)
 
   // Stock-derived counts are only meaningful once the stock payload has landed.
-  const stockPending = loading || !stockLoaded
+  // The alert figures come from loadAll's own scoped rollup now, so `loading`
+  // alone is the correct gate — there is no separate app-wide payload to await.
+  const stockPending = loading
 
   const today = new Date()
   const urgency = r => {
@@ -516,8 +516,8 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       <FacilityPicker />
 
       <MetricGrid>
-        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" loading={loadingFacReq} onClick={()=>{setTab('fac-requests');setReqView('active')}} active={tab==='fac-requests'&&reqView==='active'}/>}
-        {store.isAdmin() && !store.isOverallAdmin() && <Metric label="In progress" value={inflightReqs.length} color="blue" loading={loadingInflight} onClick={()=>{setTab('fac-requests');setReqView('inflight')}} active={tab==='fac-requests'&&reqView==='inflight'}/>}
+        {store.module !== 'essential' && store.isAdmin() && !store.isOverallAdmin() && <Metric label="Requests" value={facReqAlerts.length} color="amber" loading={loadingFacReq} onClick={()=>{setTab('fac-requests');setReqView('active')}} active={tab==='fac-requests'&&reqView==='active'}/>}
+        {store.module !== 'essential' && store.isAdmin() && !store.isOverallAdmin() && <Metric label="In progress" value={inflightReqs.length} color="blue" loading={loadingInflight} onClick={()=>{setTab('fac-requests');setReqView('inflight')}} active={tab==='fac-requests'&&reqView==='inflight'}/>}
         <Metric label="Out of stock"   value={stockRows.out.length}   color="red"   loading={stockPending} onClick={()=>setTab('out')}       active={tab==='out'}/>
         <Metric label="Low stock"      value={stockRows.low.length}   color="amber" loading={stockPending} onClick={()=>setTab('low')}       active={tab==='low'}/>
         <Metric label="Overstock"      value={stockRows.over.length}  color="blue"  loading={stockPending} onClick={()=>setTab('overstock')} active={tab==='overstock'}/>
@@ -529,7 +529,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
         <TabBtn id="out"       label={`Out of stock${stockPending ? '' : ` (${stockRows.out.length})`}`}/>
         <TabBtn id="low"       label={`Low stock${stockPending ? '' : ` (${stockRows.low.length})`}`}/>
         <TabBtn id="overstock" label={`Overstock${stockPending ? '' : ` (${stockRows.over.length})`}`}/>
-        {!store.isOverallAdmin() && (
+        {!store.isOverallAdmin() && store.module !== 'essential' && (
           <button onClick={()=>setTab('fac-requests')}
             className={`px-4 py-2 text-sm rounded-lg border transition-colors flex items-center gap-2 ${tab==='fac-requests'?'bg-white/8 border-white/15 text-gray-100 font-medium':'border-white/10 text-gray-400 hover:text-gray-200'}`}>
             Request alerts

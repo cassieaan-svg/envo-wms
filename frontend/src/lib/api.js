@@ -96,6 +96,14 @@ export const api = {
     // / aggregate views). Other params: commodity_id, commodity_ids, location_type,
     // limit, offset.
     list:   (params)        => get('/stock', params),
+    // PER-COMMODITY rollup across the caller's scope — one row per commodity
+    // ({ commodity_id, store_qty, dispensary_qty, dsd_qty, sdp_qty, baseline_amc,
+    // has_stock }) instead of every raw stock/DSD/SDP row for the browser to
+    // reduce. Use this for anything that only needs totals (dashboards, stock
+    // tables, alert counts): the payload tracks the commodity catalogue, not the
+    // number of stock rows, so it stays flat as the database grows.
+    // params: facility_id | facility_ids | state/lga, commodity_ids.
+    summary: (params)       => get('/stock/summary', params),
     // On-hand lots of one bin (batch/expiry balances) for the dispense picker.
     // params: facility_id, commodity_id, location_type, site_name (dsd/sdp).
     lots:   (params)        => get('/stock/lots', params),

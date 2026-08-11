@@ -10,7 +10,7 @@ import { exportCsv } from '../../utils/download'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, groupStockByComm, transferReason } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, transferReason } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -199,36 +199,38 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       amcMap = amcMapFromRows(data, amcWin)
     }
 
-    // Aggregate SDP stock (lab total = store + SDP) so totals match the Dashboard.
-    let sdpMap = {}
-    if (fid) {
-      const sdpData = await api.stock.sdp.list({ facility_id: fid }).catch(() => [])
-      ;(sdpData||[]).forEach(d=>{ sdpMap[d.commodity_id]=(sdpMap[d.commodity_id]||0)+d.quantity })
-    }
-
-    // Commodity ids this scope has ever transacted (any intake/dispense, however
-    // old) — one of the "in use here" signals, mirroring the Dashboard.
-    const everUsed = await api.commodities.transacted(store.getAdminScopeParams()).catch(() => [])
+    // Per-commodity rollup for the current scope (store + SDP totals, baseline
+    // AMC) and the ever-transacted ids, in parallel. Admins see their whole scope;
+    // the FacilityPicker narrows it to an LGA/facility — the same narrowing that
+    // used to be applied by filtering the full stock array client-side.
+    const [summary, everUsed] = await Promise.all([
+      api.stock.summary({
+        facility_id: scopeFid || undefined,
+        facility_ids: (!scopeFid && scopeIdList && scopeIdList.length) ? scopeIdList : undefined,
+      }).catch(() => []),
+      // Commodity ids this scope has ever transacted (any intake/dispense, however
+      // old) — one of the "in use here" signals, mirroring the Dashboard.
+      api.commodities.transacted(store.getAdminScopeParams()).catch(() => []),
+    ])
     const transacted = new Set(everUsed || [])
-
-    // Admins see their whole scope; the FacilityPicker narrows it to an LGA/facility.
-    const scopedStock = scopeSet ? store.stockData.filter(r => scopeSet.has(r.facility_id)) : store.stockData
-    const grouped = groupStockByComm(scopedStock)
     const gMap = {}
-    grouped.forEach(g=>{ gMap[g.commodity_id]=g })
+    ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })
+    // SDP stock is only folded in when a single facility is in view, as before.
+    const sdpMap = {}
+    if (fid) (summary || []).forEach(r => { sdpMap[r.commodity_id] = r.sdp_qty || 0 })
 
     // Seed from every tracked commodity (not just those with a stock row) so
     // zero-stock / out-of-stock items are counted — keeps these alerts
     // consistent with the Dashboard.
     const enriched = store.allCommodities.map(c=>{
       const g        = gMap[c.id] || {}
-      const comm     = g.commodities || c
-      const storeQty = g.storeQty || 0
+      const comm     = c
+      const storeQty = g.store_qty || 0
       const quantity = storeQty + (sdpMap[c.id]||0)
       const amc      = amcMap[c.id]&&amcMap[c.id]>0?amcMap[c.id]:(g.baseline_amc||0)
       // "In use here" = a stock row exists (holds/once held stock), or there is
       // AMC-window consumption, or it was ever transacted. Same rule as the Dashboard.
-      const inUse    = !!gMap[c.id] || (amcMap[c.id]||0) > 0 || transacted.has(c.id)
+      const inUse    = !!gMap[c.id]?.has_stock || (amcMap[c.id]||0) > 0 || transacted.has(c.id)
       return { id:c.id, commodity_id:c.id, commodities:comm, storeQty, quantity, inUse,
                _amc:amc, _mos:getMOS(quantity,amc), _status:getStockStatus(quantity,amc) }
     })
@@ -242,10 +244,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   // Recompute the out/low/over aggregates when an admin narrows the location scope.
   useEffect(()=>{ if(store.isAdmin()) loadStockAlerts() },[scopeKey])
-  // The stock payload lands well after mount; until it does stockData is empty
-  // and every commodity derives as out-of-stock. Recompute once it arrives
-  // (the false→true flip fires once, so realtime updates don't re-query).
-  useEffect(()=>{ if(store.stockLoaded) loadAll() },[store.stockLoaded])
+  // (The recompute that used to wait for the app-wide stock payload is gone: the
+  // alert figures now come from the scoped rollup fetched in loadAll itself, so
+  // there is nothing to wait for and no second pass to run.)
   // Load resolved request history when the admin opens that sub-view.
   useEffect(()=>{ if(store.isAdmin() && tab==='fac-requests' && reqSubView==='history') loadHistory() },[tab, reqSubView, histFrom, histTo])
   // The in-use split belongs to the Out-of-stock tab; drop it when the tab moves.
@@ -287,7 +288,9 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     </button>
   )
 
-  const stockPending = loading || !store.stockLoaded
+  // The alert figures come from loadAll's own scoped rollup now, so `loading`
+  // alone is the correct gate — there is no separate app-wide payload to await.
+  const stockPending = loading
 
   // Out-of-stock rows divided into in-use (a real stockout) and not-in-use.
   const outInUse    = stockRows.out.filter(r => r.inUse)

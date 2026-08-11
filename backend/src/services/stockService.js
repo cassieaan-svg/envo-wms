@@ -77,6 +77,107 @@ export class StockService {
   }
 
   /**
+   * PER-COMMODITY stock rollup across a scope — one row per commodity instead of
+   * one row per (facility, commodity, location). This is what every dashboard /
+   * stock-table / alert view actually needs: the raw rows were only ever
+   * downloaded so the browser could reduce them to these same numbers
+   * (groupStockByComm + the DSD/SDP sum loops), which made the payload scale with
+   * the database instead of with what's on screen.
+   *
+   * Returns, per commodity: store_qty, dispensary_qty (from `stock`), dsd_qty
+   * (dsd_stock), sdp_qty (sdp_stock), baseline_amc, and has_stock.
+   *
+   * Semantics are a deliberate, test-locked reproduction of the client-side path:
+   *  - store_qty / dispensary_qty sum `stock.quantity` by location_type, exactly
+   *    as groupStockByComm does.
+   *  - baseline_amc is a PER-FACILITY figure duplicated across a facility's
+   *    store/dispensary rows, so take one value per facility (max, guarding a
+   *    duplicate disagreement) and sum across facilities — a multi-facility scope
+   *    gets a true scope-wide baseline, not one facility's. Summed as `numeric`
+   *    (exact) and converted once at the end; the browser's float accumulation
+   *    across hundreds of facilities drifted ~1e-11, below the .toFixed(1) display.
+   *  - has_stock mirrors `!!gMap[c.id]` — a `stock` row exists in scope, at ANY
+   *    location_type — which the callers use for the "in use here" signal and the
+   *    Essential-module catalogue filter.
+   *  - a commodity with only DSD/SDP site stock and no `stock` row still appears
+   *    (has_stock false), matching the client-side union of the three sources.
+   *
+   * Scoping mirrors getScopedStock: `facilityIds` null = all (unconstrained),
+   * an array = only those, [] = short-circuit to none. `commodityIds` narrows to a
+   * section-filtered catalogue; `categories` enforces the caller's section.
+   */
+  static async getScopedStockSummary({ facilityIds = null, commodityIds = null, categories = null } = {}) {
+    if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+    // One parameter list shared by all four branches, so the same filter lands on
+    // `stock`, `dsd_stock` and `sdp_stock` identically.
+    const params = []
+    const facIdx = Array.isArray(facilityIds) ? (params.push(facilityIds), params.length) : null
+    const commIdx = (Array.isArray(commodityIds) && commodityIds.length) ? (params.push(commodityIds), params.length) : null
+    const catIdx = (Array.isArray(categories) && categories.length) ? (params.push(categories), params.length) : null
+
+    // `t` is the aliased source table in each branch.
+    const filt = t => [
+      facIdx ? ` and ${t}.facility_id = any($${facIdx})` : '',
+      commIdx ? ` and ${t}.commodity_id = any($${commIdx})` : '',
+      catIdx ? ` and c.category = any($${catIdx})` : '',
+    ].join('')
+
+    const sql = `
+      with s as (
+        select st.commodity_id,
+               sum(st.quantity) filter (where st.location_type = 'store')::int      as store_qty,
+               sum(st.quantity) filter (where st.location_type = 'dispensary')::int as dispensary_qty,
+               count(*)::int as stock_rows
+          from stock st
+          join commodities c on c.id = st.commodity_id
+         where true${filt('st')}
+         group by st.commodity_id
+      ),
+      b as (
+        select commodity_id, sum(fac_amc) as baseline_amc
+          from (
+            select st.commodity_id, st.facility_id, max(st.baseline_amc) as fac_amc
+              from stock st
+              join commodities c on c.id = st.commodity_id
+             where st.baseline_amc > 0${filt('st')}
+             group by st.commodity_id, st.facility_id
+          ) per_facility
+         group by commodity_id
+      ),
+      d as (
+        select dd.commodity_id, sum(dd.quantity)::int as qty
+          from dsd_stock dd
+          join commodities c on c.id = dd.commodity_id
+         where true${filt('dd')}
+         group by dd.commodity_id
+      ),
+      p as (
+        select sp.commodity_id, sum(sp.quantity)::int as qty
+          from sdp_stock sp
+          join commodities c on c.id = sp.commodity_id
+         where true${filt('sp')}
+         group by sp.commodity_id
+      )
+      select c.id                              as commodity_id,
+             coalesce(s.store_qty, 0)          as store_qty,
+             coalesce(s.dispensary_qty, 0)     as dispensary_qty,
+             coalesce(d.qty, 0)                as dsd_qty,
+             coalesce(p.qty, 0)                as sdp_qty,
+             coalesce(b.baseline_amc, 0)::float8 as baseline_amc,
+             coalesce(s.stock_rows, 0) > 0     as has_stock
+        from commodities c
+        left join s on s.commodity_id = c.id
+        left join b on b.commodity_id = c.id
+        left join d on d.commodity_id = c.id
+        left join p on p.commodity_id = c.id
+       where coalesce(s.stock_rows, 0) > 0 or d.qty is not null or p.qty is not null`
+
+    const { rows } = await query(sql, params)
+    return rows
+  }
+
+  /**
    * On-hand lots (per-batch balances) across a scope, from the AUTHORITATIVE lot
    * ledger (stock_lot) — the same source the dispense picker uses, so an expiry
    * view built on this matches what a store manager can actually dispatch. Unlike

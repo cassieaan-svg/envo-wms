@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
-import { useStock } from '../../hooks/useStock'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { BatchBreakdownModal } from '../../components/BatchBreakdownModal'
-import { getMOS, getStockStatus, fmtStockQty, groupStockByComm, SECTION_CATEGORIES, resolveAmcWindow, loadConsumptionAmcMap } from '../../utils/helpers'
+import { getMOS, getStockStatus, fmtStockQty, SECTION_CATEGORIES, resolveAmcWindow, loadConsumptionAmcMap } from '../../utils/helpers'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
 export function Stock() {
   const store         = useAppStore()
-  const { loadStock } = useStock()
   const commoditySection = store.commoditySection
   const [rows, setRows]       = useState([])
   const [loading, setLoading] = useState(true)
@@ -51,41 +49,38 @@ export function Stock() {
       return
     }
 
-    await loadStock()
-    // Read the just-loaded stock FRESH from the store, not the render-time
-    // snapshot captured in `store` (still empty if the page rendered before the
-    // slow stock fetch resolved, which would build the whole list at 0).
-    const stockData = useAppStore.getState().stockData
-
-    // Scope the AMC the same way the stock was loaded (single facility, LGA/state,
+    // Scope the AMC the same way the stock is loaded (single facility, LGA/state,
     // or all): single facility → its custom window; multi-facility/admin scope →
     // the default window with consumption aggregated across the whole scope so the
     // AMC matches the summed stock below.
     const { fid: amcFid, scopeIds } = store.getAdminStockScope()
+
+    // Per-commodity rollup for this scope (store + SDP totals and baseline AMC) in
+    // one response, replacing the full stock-table download plus the SDP row dump
+    // that was only summed per commodity here.
+    const summary = await api.stock.summary({
+      facility_id: amcFid || undefined,
+      facility_ids: (!amcFid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+    }).catch(() => [])
+    const gMap = {}
+    ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })
+
     const amcWin = resolveAmcWindow(amcFid ? store.amcWindows[amcFid] : null)
-    const commIds = stockData.map(r => r.commodity_id)
+    const commIds = (summary || []).map(r => r.commodity_id)
     const amcMap = await loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection })
 
-    // Fetch SDP stock data and aggregate by commodity
-    let sdpMap = {}
-    if (fid) {
-      const sdpData = await api.stock.sdp.list({ facility_id: fid }).catch(() => [])
-      ;(sdpData || []).forEach(d => {
-        sdpMap[d.commodity_id] = (sdpMap[d.commodity_id] || 0) + d.quantity
-      })
-    }
-
-    const grouped = groupStockByComm(stockData)
-    const gMap = {}
-    grouped.forEach(g => { gMap[g.commodity_id] = g })
-
-    // Base the list on every tracked commodity (not just those with stock), so
+    // Essential: show only commodities the facility has taken in (has a stock record).
+    // HIV: base the list on every tracked commodity (not just those with stock), so
     // zero-stock / out-of-stock items still appear — mirrors the admin view.
-    const enriched = store.allCommodities.map(c => {
+    const catalogue = store.module === 'essential'
+      ? store.allCommodities.filter(c => gMap[c.id]?.has_stock)
+      : store.allCommodities
+    const enriched = catalogue.map(c => {
       const g        = gMap[c.id] || {}
-      const comm     = g.commodities || c
-      const storeQty = g.storeQty || 0
-      const sdpQty   = sdpMap[c.id] || 0
+      const comm     = c
+      const storeQty = g.store_qty || 0
+      // SDP stock is only folded in when a single facility is in view, as before.
+      const sdpQty   = fid ? (g.sdp_qty || 0) : 0
       const calcAmc  = amcMap[c.id]
       const amc      = calcAmc && calcAmc > 0 ? +calcAmc.toFixed(1) : +(g.baseline_amc || 0).toFixed(1)
       // Lab has no dispensary — total is store + SDP only

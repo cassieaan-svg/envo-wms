@@ -36,7 +36,6 @@ export function Transfers() {
   const currentFacility  = useAppStore(s => s.currentFacility)
   const allCommodities   = useAppStore(s => s.allCommodities)
   const allFacilities    = useAppStore(s => s.allFacilities)
-  const stockData        = useAppStore(s => s.stockData)
   const accessLevel      = useAppStore(s => s.accessLevel)
   const facilityRole     = useAppStore(s => s.facilityRole)
   const sdpName          = useAppStore(s => s.sdpName)

@@ -3,6 +3,7 @@ dotenv.config()
 
 import express from 'express'
 import cors from 'cors'
+import compression from 'compression'
 
 import { authMiddleware } from './middleware/auth.js'
 import { attachScope } from './middleware/scope.js'
@@ -26,6 +27,29 @@ const PORT = process.env.PORT || 5000
 
 // Middleware
 app.use(cors())
+
+// Gzip every API response above 1 KB. The JSON here is highly repetitive and
+// compresses ~7.6x (a 5.58 MB stock payload measured at 0.73 MB), which is the
+// difference between a multi-second transfer and a fast one on a field connection.
+//
+// Level 6 (the default) rather than Brotli deliberately: Brotli-4 gave a further
+// ~27% off that payload but cost ~26% more CPU (100 ms vs 79 ms measured on a
+// 5.4 MB body), and this is a single-threaded Node process — compression CPU
+// blocks the event loop for every other request. The 1 KB threshold keeps the
+// small responses (the new /stock/summary is ~17 KB, most others are far less)
+// from paying setup cost for nothing.
+//
+// The SSE stream MUST be excluded explicitly. compression's default filter falls
+// back to a `^text/` match, which accepts text/event-stream — it would then buffer
+// the stream and realtime events would stop arriving until the buffer flushed.
+app.use(compression({
+  threshold: 1024,
+  filter: (req, res) => {
+    if ((res.getHeader('Content-Type') || '').toString().includes('text/event-stream')) return false
+    return compression.filter(req, res)
+  },
+}))
+
 app.use(express.json())
 
 // Health check endpoint

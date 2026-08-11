@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection, locationFacilityIds } from '../middleware/scope.js'
+import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection, locationFacilityIds, resolveListFacilityIds } from '../middleware/scope.js'
 import { categoriesForSection } from '../constants/sections.js'
 import { StockService } from '../services/stockService.js'
 
@@ -86,6 +86,60 @@ router.get('/', async (req, res) => {
       error: err.message,
       code: 'FETCH_ERROR'
     })
+  }
+})
+
+/**
+ * GET /api/stock/summary - PER-COMMODITY stock rollup across the caller's scope.
+ *
+ * Replaces the "download every stock/dsd/sdp row and reduce it in the browser"
+ * pattern behind the dashboards, stock tables and alert counts: those views only
+ * ever needed one row per commodity, so this returns exactly that (~17 KB for an
+ * overall admin, vs ~5.6 MB of raw rows + ~1.1 MB of DSD/SDP pages). The response
+ * size tracks the commodity catalogue, not the number of stock rows, so it stays
+ * flat as the database grows.
+ *
+ * Query params (all optional): facility_id (single-facility path), facility_ids
+ * (CSV view-filter), state / lga (compact location view-filter), commodity_ids
+ * (CSV, e.g. a section-filtered catalogue).
+ *
+ * Scoping is identical to GET /api/stock: the token's readable facility set for
+ * the `stock` table, INTERSECTED with any client view-filter, so a narrowed admin
+ * can never widen their access by passing ids outside their scope. Note this
+ * applies the `stock` scope to the dsd_stock / sdp_stock aggregates too — those
+ * list endpoints are public-read (RLS USING true) and filtered by the client
+ * filter alone. That is never WIDER than the existing endpoints, and the callers
+ * being migrated already pass their own scope ids, so the numbers are unchanged.
+ * Section enforcement uses req.scope.sectionCategories, as elsewhere.
+ *
+ * Declared before '/:id' so it isn't shadowed.
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, commodity_ids } = req.query
+    const csv = v => v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null
+
+    let facilityIds
+    if (facility_id) {
+      // Single-facility path: enforce read on that one facility, then scope to it.
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      if (!(await enforceFacilityRead(req, res, facility_id, 'stock'))) return
+      facilityIds = [facility_id]
+    } else {
+      // Multi-facility scoped path (admin/aggregate), mirroring GET /stock.
+      facilityIds = await resolveListFacilityIds(req, 'stock', facility_ids)
+    }
+
+    const summary = await StockService.getScopedStockSummary({
+      facilityIds,
+      commodityIds: csv(commodity_ids),
+      categories: req.scope.sectionCategories,
+    })
+
+    res.json({ success: true, data: summary, count: summary.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching stock summary:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
   }
 })
 
