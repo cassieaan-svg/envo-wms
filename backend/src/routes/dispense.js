@@ -1,7 +1,7 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
 import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection } from '../middleware/scope.js'
-import { LogService } from '../services/logService.js'
+import { LogService, DISPENSE_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
@@ -156,16 +156,58 @@ router.get('/', async (req, res) => {
 })
 
 /**
- * GET /api/dispense/summary - consumption summed by commodity + UTC month.
- * The AMC aggregate for dashboards: a few dozen rows instead of every dispense
- * row. Query params mirror the history route (facility_id | facility_ids |
- * state / lga, from, to, commodity_ids, section).
+ * GET /api/dispense/summary - consumption aggregated server-side.
+ *
+ * Returns a few dozen to a few hundred rows instead of every dispense row, so the
+ * caller never downloads the log to sum it. Monitoring used to drain dispense_log
+ * at 1000 rows a page (~23 SEQUENTIAL requests, ~17 MB, ~25 s in production) purely
+ * to compute totals, a per-commodity table, a daily series and a facility
+ * breakdown — all of which are sums.
+ *
+ * `group_by` selects one of an explicit ALLOWLIST of shapes (see
+ * DISPENSE_GROUP_BY in logService.js); it is not a generic GROUP BY and arbitrary
+ * values are rejected. Default is 'commodity,month', the original AMC shape, so
+ * existing dashboard callers are unaffected.
+ *
+ * Query params: facility_id | facility_ids | state / lga, from, to, commodity_ids,
+ * section (all as before), plus group_by, commodity_id / category (drill-in
+ * narrowing) and tz (timezone for day buckets; UTC when omitted).
+ *
+ * Every row carries qty (sum) and txn (count) — txn is what Monitoring's
+ * "Consumption records" figure counts.
  */
 router.get('/summary', async (req, res) => {
   try {
-    const { facility_id, facility_ids, from, to, commodity_ids, section } = req.query
+    const { facility_id, facility_ids, from, to, commodity_ids, section,
+            group_by, commodity_id, category, tz } = req.query
     const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
-    const base = { from, to, commodityIds, categories: req.scope.sectionCategories, section }
+
+    // Only the allowlisted groupings are servable. Anything else is a 400 rather
+    // than an attempt to build SQL from the query string.
+    const groupBy = group_by ? String(group_by) : 'commodity,month'
+    if (!DISPENSE_GROUP_BY_KEYS.includes(groupBy)) {
+      return sendValidationError(res,
+        `Unsupported group_by. Must be one of: ${DISPENSE_GROUP_BY_KEYS.join(' | ')}`, 'group_by')
+    }
+    if (commodity_id && !validators.isUUID(commodity_id)) {
+      return sendValidationError(res, 'Invalid commodity_id format', 'commodity_id')
+    }
+    // tz reaches SQL as a bind parameter, never interpolated; still validated so a
+    // bad zone is a clear 400 instead of a Postgres error surfacing as a 500.
+    if (tz && !/^[A-Za-z][A-Za-z0-9_+\-/]{0,63}$/.test(String(tz))) {
+      return sendValidationError(res, 'Invalid tz', 'tz')
+    }
+
+    // A `category` drill must stay inside the caller's section, never widen it.
+    const tokenCats = req.scope.sectionCategories
+    if (category && Array.isArray(tokenCats) && !tokenCats.includes(String(category))) {
+      return res.json({ success: true, data: [], count: 0, timestamp: new Date().toISOString() })
+    }
+
+    const base = {
+      from, to, commodityIds, categories: tokenCats, section,
+      groupBy, commodityId: commodity_id || null, category: category || null, tz: tz || null,
+    }
     let rows
     if (facility_id) {
       if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')

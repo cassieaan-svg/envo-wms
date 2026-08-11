@@ -44,6 +44,9 @@ export function Monitoring() {
   const [loading, setLoading] = useState(false)
   const [catDrill, setCatDrill]   = useState(null)  // category drilled into
   const [commDrill, setCommDrill] = useState(null)  // { id, name, unit } drilled into
+  // Drill-in aggregates, fetched on click instead of sliced from a full download.
+  const [commDetail, setCommDetail] = useState(null)  // { id, byFac[], byDay[] }
+  const [catDetail, setCatDetail]   = useState(null)  // { cat, byFac[] }
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
   const [lgaDrill, setLgaDrill] = useState(null)  // LGA name drilled into within a by-LGA breakdown
   const [catHover, setCatHover] = useState(null)  // category hovered in the donut (highlight only)
@@ -68,6 +71,9 @@ export function Monitoring() {
 
   useEffect(() => { loadConsumption() }, [scopeKey, period, catFilter])
   useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expCat, scopeKey])
+  // Drill-ins load their own breakdown; clearing the drill drops it again.
+  useEffect(() => { if (commDrill?.id) loadCommodityDrill(commDrill.id); else setCommDetail(null) }, [commDrill?.id])
+  useEffect(() => { if (catDrill) loadCategoryDrill(catDrill); else setCatDetail(null) }, [catDrill])
 
   async function loadConsumption() {
     setLoading(true)
@@ -75,59 +81,98 @@ export function Monitoring() {
     const { start, end } = periodWindow(period)
     const scopeParams = store.getAdminScopeParams()
 
-    // Paginate — an admin over a long period easily exceeds the 1000-row cap,
-    // which would otherwise silently understate totals and drill-downs.
-    const fetchRows = async (from, to) => {
-      const PAGE = 1000
-      let out = []
-      for (let offset = 0; ; offset += PAGE) {
-        let data
-        try {
-          data = await api.dispense.history({
-            ...scopeParams,
-            // commodity scope is applied server-side via the section/category scope;
-            // enumerating every commodity id here would bloat the URL past proxy limits.
-            from: from.toISOString(),
-            to: to.toISOString(),
-            section: commoditySection || undefined,
-            limit: PAGE, offset,
-          })
-        } catch { break }
-        if (!data || !data.length) break
-        out = out.concat(data)
-        if (data.length < PAGE) break
-      }
-      // Narrow to a single commodity category if one is picked.
-      return catFilter ? out.filter(r => (r.commodities?.category || 'Other') === catFilter) : out
+    // Every figure on this page is a sum or a count, so the server does the
+    // grouping and we fetch four small aggregates IN PARALLEL — instead of
+    // draining dispense_log 1000 rows at a time (≈23 sequential requests, ~17 MB
+    // and ~25 s in production) only to reduce it here.
+    //
+    // The category narrowing is a server-side filter now too; it used to download
+    // everything and drop the unwanted rows client-side.
+    const base = {
+      ...scopeParams,
+      section: commoditySection || undefined,
+      category: catFilter || undefined,
     }
+    const inPeriod = { ...base, from: start.toISOString(), to: end.toISOString() }
 
-    // Today is fetched separately and never merged into `rows`: it is shown as a
-    // running figure only, and must not move a period total that is meant to be
-    // settled. It joins the period tomorrow, once the day is complete.
+    // Day buckets are built in the BROWSER's timezone so they match the local-date
+    // keys seeded below. (The per-commodity chart still buckets by UTC — see
+    // loadCommodityDrill. Standardising both on Africa/Lagos is a follow-up; this
+    // release deliberately moves no figure.)
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+
+    // Today is fetched separately and never merged into the period: it is a running
+    // figure only, and must not move a total that is meant to be settled. It joins
+    // the period tomorrow, once the day is complete.
     const todayStart = new Date(); todayStart.setHours(0,0,0,0)
-    const [rows, todayRows] = await Promise.all([
-      fetchRows(start, end),
-      fetchRows(todayStart, new Date()),
+
+    const [commRows, facRows, dayRows, todayRows] = await Promise.all([
+      api.dispense.summary({ ...inPeriod, group_by: 'commodity' }).catch(() => []),
+      api.dispense.summary({ ...inPeriod, group_by: 'facility' }).catch(() => []),
+      api.dispense.summary({ ...inPeriod, group_by: 'day', tz }).catch(() => []),
+      api.dispense.summary({ ...base, group_by: 'commodity',
+        from: todayStart.toISOString(), to: new Date().toISOString() }).catch(() => []),
     ])
 
-    const byComm={}, byCat={}, daily={}
-    // One bucket per day of the SAME window the totals use, keyed by local date —
-    // previously these were built from `now` in UTC, so the chart and the metric
-    // cards covered different days and their totals could not be reconciled.
+    // Commodity metadata comes from the catalogue already in the store, rather
+    // than being repeated on every one of thousands of log rows.
+    const commMeta = {}
+    store.allCommodities.forEach(c => { commMeta[c.id] = c })
+
+    const byCat={}, daily={}
+    // One bucket per day of the SAME window the totals use, keyed by local date.
     for(let i=0;i<period;i++){const d=new Date(start);d.setDate(d.getDate()+i);daily[localDay(d)]=0}
-    rows.forEach(r=>{
-      const name=r.commodities?.name||r.commodity_id
-      const cat=r.commodities?.category||'Other'
-      if(!byComm[name]) byComm[name]={name,cat,unit:r.commodities?.unit||'',qty:0,txn:0,commodity_id:r.commodity_id}
-      byComm[name].qty+=r.quantity; byComm[name].txn++
-      byCat[cat]=(byCat[cat]||0)+r.quantity
-      // Bucket by LOCAL date to match the keys above; slicing the ISO string used
-      // the UTC date, which lands WAT after-midnight entries on the previous day.
-      const day=r.dispensed_at?localDay(r.dispensed_at):null
-      if(day&&daily[day]!==undefined) daily[day]+=r.quantity
+    ;(dayRows||[]).forEach(r=>{ if(daily[r.day]!==undefined) daily[r.day]+=r.qty })
+
+    const byComm=(commRows||[]).map(r=>{
+      const c=commMeta[r.commodity_id]
+      const cat=c?.category||'Other'
+      byCat[cat]=(byCat[cat]||0)+r.qty
+      return {name:c?.name||r.commodity_id,cat,unit:c?.unit||'',qty:r.qty,txn:r.txn,commodity_id:r.commodity_id}
+    }).sort((a,b)=>b.qty-a.qty)
+
+    const todayByComm={}
+    ;(todayRows||[]).forEach(r=>{ todayByComm[r.commodity_id]=r.qty })
+
+    setCons({
+      byComm, byCat, daily,
+      byFac: facRows||[],
+      total: (commRows||[]).reduce((s,r)=>s+r.qty,0),
+      txnTotal: (commRows||[]).reduce((s,r)=>s+r.txn,0),
+      todayTotal: (todayRows||[]).reduce((s,r)=>s+r.qty,0),
+      todayByComm,
     })
-    setCons({rows,todayRows,byComm:Object.values(byComm).sort((a,b)=>b.qty-a.qty),byCat,daily,total:rows.reduce((s,r)=>s+r.quantity,0)})
     setLoading(false)
+  }
+
+  // Drill-in detail is fetched ON CLICK rather than sliced out of a full download.
+  // Each is one small aggregate, so the initial load stays flat as data grows.
+  async function loadCommodityDrill(commodityId) {
+    setCommDetail(null)
+    const { start, end } = periodWindow(period)
+    const q = {
+      ...store.getAdminScopeParams(), section: commoditySection || undefined,
+      from: start.toISOString(), to: end.toISOString(), commodity_id: commodityId,
+    }
+    // NOTE: no `tz` on the daily series. The per-commodity chart buckets by UTC
+    // today (dispensed_at.slice(0,10)) while the section chart uses local dates.
+    // Preserved exactly so this change moves no figure; a follow-up standardises both.
+    const [byFac, byDay] = await Promise.all([
+      api.dispense.summary({ ...q, group_by: 'commodity,facility' }).catch(() => []),
+      api.dispense.summary({ ...q, group_by: 'commodity,day' }).catch(() => []),
+    ])
+    setCommDetail({ id: commodityId, byFac: byFac||[], byDay: byDay||[] })
+  }
+
+  async function loadCategoryDrill(cat) {
+    setCatDetail(null)
+    const { start, end } = periodWindow(period)
+    const byFac = await api.dispense.summary({
+      ...store.getAdminScopeParams(), section: commoditySection || undefined,
+      from: start.toISOString(), to: end.toISOString(),
+      group_by: 'facility', category: cat,
+    }).catch(() => [])
+    setCatDetail({ cat, byFac: byFac||[] })
   }
 
   async function loadExpiry() {
@@ -164,22 +209,22 @@ export function Monitoring() {
   const palette=['#3fb950','#58a6ff','#d29922','#bc8cff','#f778ba','#e3826b','#39c5cf','#a371f7']
   const catColor=(cat,i=0)=>catColors[cat]||palette[i%palette.length]
 
-  // Aggregate loaded dispense rows by a key (facility id / LGA) for drill-downs.
-  const aggRows = (rows, keyFn) => {
+  // Roll server-side aggregate rows ({ facility_id, qty, txn }) up by a key
+  // (facility id / LGA). Summing pre-summed buckets gives the same totals the old
+  // per-row reduction did.
+  const aggRows = (rows, keyFn, field='qty') => {
     const m={}
-    rows.forEach(r=>{ const k=keyFn(r); if(k==null) return; m[k]=(m[k]||0)+r.quantity })
+    ;(rows||[]).forEach(r=>{ const k=keyFn(r); if(k==null) return; m[k]=(m[k]||0)+(r[field]||0) })
     return Object.entries(m).sort((a,b)=>b[1]-a[1])
   }
 
-  // Breakdown of the loaded rows by LGA + facility, either summing units
-  // (mode='units') or counting transactions (mode='count').
+  // Breakdown by LGA + facility over the server's per-facility aggregate, either
+  // summing units (mode='units') or consumption records (mode='count'). `txn` is
+  // the server's count(*), which is exactly what rows.length used to be.
   const FacilityLgaBreakdown = ({ rows, mode, unitsLabel }) => {
-    const aggBy = keyFn => {
-      const m={}
-      rows.forEach(r=>{ const k=keyFn(r); if(k==null) return; m[k]=(m[k]||0)+(mode==='count'?1:r.quantity) })
-      return Object.entries(m).sort((a,b)=>b[1]-a[1])
-    }
-    const total = (mode==='count' ? rows.length : rows.reduce((s,r)=>s+r.quantity,0)) || 1
+    const field = mode==='count' ? 'txn' : 'qty'
+    const aggBy = keyFn => aggRows(rows, keyFn, field)
+    const total = (rows||[]).reduce((s,r)=>s+(r[field]||0),0) || 1
     const byLga = aggBy(r=>facMeta[r.facility_id]?.lga || '—')
     const byFac = aggBy(r=>r.facility_id).map(([id,v])=>({id,v,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
     return (
@@ -341,11 +386,10 @@ export function Monitoring() {
           {commDrill ? (() => {
             // Drilled into one commodity → scope the summary cards to it, so the totals
             // read as "this commodity" rather than the whole section.
-            const cRows = consData.rows.filter(r => r.commodity_id === commDrill.id)
-            const cTotal = cRows.reduce((s, r) => s + r.quantity, 0)
-            const cFacs = new Set(cRows.map(r => r.facility_id)).size
-            const cToday = (consData.todayRows||[]).filter(r => r.commodity_id === commDrill.id)
-                             .reduce((s, r) => s + r.quantity, 0)
+            const cFacRows = commDetail?.id === commDrill.id ? commDetail.byFac : []
+            const cTotal = cFacRows.reduce((s, r) => s + r.qty, 0)
+            const cFacs = cFacRows.length
+            const cToday = consData.todayByComm[commDrill.id] || 0
             return (
               <MetricGrid>
                 <Metric label={`${commDrill.name} — units consumed (${period}d)`} value={cTotal.toLocaleString()} color="green"/>
@@ -359,9 +403,9 @@ export function Monitoring() {
             <Metric label={`Units consumed (${period}d)`} value={consData.total.toLocaleString()} color="green"/>
             <Metric label="Commodities consumed" value={consData.byComm.length} color="blue"
               onClick={isAdm?()=>setMetricDrill(metricDrill==='commodities'?null:'commodities'):undefined} active={metricDrill==='commodities'}/>
-            <Metric label="Consumption records" value={consData.rows.length.toLocaleString()}
+            <Metric label="Consumption records" value={consData.txnTotal.toLocaleString()}
               onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='transactions'?null:'transactions')}:undefined} active={metricDrill==='transactions'}/>
-            <Metric label="Consumed today" value={(consData.todayRows||[]).reduce((s,r)=>s+r.quantity,0).toLocaleString()}/>
+            <Metric label="Consumed today" value={consData.todayTotal.toLocaleString()}/>
           </MetricGrid>
           )}
 
@@ -395,7 +439,7 @@ export function Monitoring() {
                   </table></div>
                 )
               ) : (
-                <FacilityLgaBreakdown rows={consData.rows} mode={metricDrill==='transactions'?'count':'units'} unitsLabel={metricDrill==='transactions'?'Consumption records':'Units Consumed'}/>
+                <FacilityLgaBreakdown rows={consData.byFac} mode={metricDrill==='transactions'?'count':'units'} unitsLabel={metricDrill==='transactions'?'Consumption records':'Units Consumed'}/>
               )}
             </Card>
           )}
@@ -407,10 +451,12 @@ export function Monitoring() {
                 {(() => {
                   // Drilled into one commodity → rebuild the daily series from just its
                   // rows, reusing the section's ordered date buckets and day-key logic.
+                  // Per-commodity series comes from the server's commodity,day
+                  // aggregate, which (deliberately, for now) buckets by UTC — the
+                  // same keys r.dispensed_at.slice(0,10) produced here before.
                   const daily = commDrill
-                    ? consData.rows.filter(r => r.commodity_id === commDrill.id).reduce((m, r) => {
-                        const day = r.dispensed_at?.slice(0, 10)
-                        if (day && m[day] !== undefined) m[day] += r.quantity
+                    ? (commDetail?.id === commDrill.id ? commDetail.byDay : []).reduce((m, r) => {
+                        if (m[r.day] !== undefined) m[r.day] += r.qty
                         return m
                       }, Object.fromEntries(Object.keys(consData.daily).map(k => [k, 0])))
                     : consData.daily
@@ -485,8 +531,8 @@ export function Monitoring() {
             {isAdm && commDrill ? (() => {
               /* In-place drill: the Top-commodities table swaps to this commodity's
                  facility breakdown; Back restores the table. Rest of the page stays. */
-              const commRows = consData.rows.filter(r=>r.commodity_id===commDrill.id)
-              const cTotal = commRows.reduce((s,r)=>s+r.quantity,0)||1
+              const commRows = commDetail?.id === commDrill.id ? commDetail.byFac : []
+              const cTotal = commRows.reduce((s,r)=>s+r.qty,0)||1
               const byFac = aggRows(commRows, r=>r.facility_id).map(([id,qty])=>({id,qty,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
               // Facilities in the current scope that consumed none of this commodity.
               const consumedIds = new Set(byFac.map(f=>f.id))
@@ -603,8 +649,8 @@ export function Monitoring() {
           </Card>
 
           {isAdm && catDrill && (() => {
-            const catRows = consData.rows.filter(r=>(r.commodities?.category||'Other')===catDrill)
-            const catTotal = catRows.reduce((s,r)=>s+r.quantity,0)||1
+            const catRows = catDetail?.cat === catDrill ? catDetail.byFac : []
+            const catTotal = catRows.reduce((s,r)=>s+r.qty,0)||1
             const byLga = aggRows(catRows, r=>facMeta[r.facility_id]?.lga || '—')
             const byFac = aggRows(catRows, r=>r.facility_id).map(([id,qty])=>({id,qty,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
             return (

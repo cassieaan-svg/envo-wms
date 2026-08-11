@@ -182,6 +182,35 @@ function applyLogFilters({ conds, params, dateField, facilityId, facilityIds, co
   }
 }
 
+// The COMPLETE set of groupings GET /api/dispense/summary will serve — an explicit
+// allowlist, not a generic GROUP BY. Every entry exists because a specific view
+// needs it, and nothing else is accepted: an arbitrary group_by would put column
+// names from the query string into SQL and would let a caller mint expensive
+// aggregates we have never measured.
+//
+//   commodity,month   the original AMC shape (dashboards) — unchanged default
+//   commodity         Monitoring: top-commodities table, donut, "commodities consumed"
+//   facility          Monitoring: the LGA / facility breakdown (LGA derived client-side)
+//   day               Monitoring: the daily trend chart
+//   commodity,facility  Monitoring drill: one commodity across facilities
+//   commodity,day       Monitoring drill: one commodity's daily series
+//
+// NOTE on day bucketing: the caller passes the timezone. Monitoring's two charts
+// disagree today — the section chart buckets by BROWSER-LOCAL date (localDay), the
+// per-commodity chart by UTC (dispensed_at.slice(0,10)). This release preserves
+// both exactly rather than changing figures during a performance migration;
+// standardising them on Africa/Lagos is a separate follow-up.
+const DISPENSE_GROUP_BY = {
+  'commodity,month':    { dimensions: ['commodity'], month: true },
+  'commodity':          { dimensions: ['commodity'] },
+  'facility':           { dimensions: ['facility'] },
+  'day':                { dimensions: ['day'], needsDay: true },
+  'commodity,facility': { dimensions: ['commodity', 'facility'] },
+  'commodity,day':      { dimensions: ['commodity', 'day'], needsDay: true },
+}
+
+export const DISPENSE_GROUP_BY_KEYS = Object.keys(DISPENSE_GROUP_BY)
+
 // Log-edit support (EditModal). Maps the frontend's record _type to its table and
 // the metadata columns that edit is allowed to change. Stock reconciliation is NOT
 // done here — the client adjusts stock separately (matching the original flow).
@@ -709,23 +738,52 @@ export class LogService {
    * getDispenseHistory, just pre-aggregated server-side.
    */
   static async getDispenseSummary(facilityId, options = {}) {
-    const { from, to, facilityIds, commodityIds, categories, section } = options
+    const {
+      from, to, facilityIds, commodityIds, categories, section,
+      groupBy = 'commodity,month', commodityId = null, category = null, tz = null,
+    } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+    const spec = DISPENSE_GROUP_BY[groupBy]
+    if (!spec) throw new Error(`Unsupported group_by: ${groupBy}`)
 
     const params = []
     const conds = []
     applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, from, to, section })
 
-    // Only join commodities when a category (section) filter needs it.
-    const needCommJoin = Array.isArray(categories) && categories.length
+    // Drill-in narrowing: ONE commodity, or ONE category. These are additional
+    // filters on top of the caller's scope — they can only narrow it, never widen
+    // it (the section `categories` condition above still applies independently).
+    if (commodityId) { params.push(commodityId); conds.push(`l.commodity_id = $${params.length}`) }
+    if (category) { params.push(category); conds.push(`c.category = $${params.length}`) }
+
+    // Join commodities only when something actually needs it.
+    const needCommJoin = (Array.isArray(categories) && categories.length) || !!category
+
+    // Day bucketing happens in a caller-supplied timezone. dispensed_at is
+    // timestamptz, so `at time zone $n` yields that zone's wall-clock date. The
+    // caller decides the zone precisely because the two Monitoring charts
+    // currently disagree (see the note on DISPENSE_GROUP_BY); passing it in
+    // reproduces each one exactly instead of silently picking a winner.
+    let dayExpr = null
+    if (spec.needsDay) {
+      if (tz) { params.push(tz); dayExpr = `to_char(l.dispensed_at at time zone $${params.length}, 'YYYY-MM-DD')` }
+      else dayExpr = `to_char(l.dispensed_at at time zone 'UTC', 'YYYY-MM-DD')`
+    }
+
+    const selects = spec.dimensions.map(d => (d === 'day' ? `${dayExpr} as day` : `l.${d}_id as ${d}_id`))
+    if (spec.month) selects.push(`to_char(l.dispensed_at at time zone 'UTC', 'YYYY-MM') as ym`)
+    const groupCols = spec.dimensions.map(d => (d === 'day' ? 'day' : `l.${d}_id`))
+    if (spec.month) groupCols.push('ym')
+
     let sql = `
-      select l.commodity_id,
-             to_char(l.dispensed_at at time zone 'UTC', 'YYYY-MM') as ym,
-             sum(l.quantity)::int as qty
+      select ${selects.join(', ')},
+             sum(l.quantity)::int as qty,
+             count(*)::int        as txn
       from dispense_log l
       ${needCommJoin ? 'left join commodities c on c.id = l.commodity_id' : ''}`
     if (conds.length) sql += ` where ${conds.join(' and ')}`
-    sql += ` group by l.commodity_id, ym`
+    sql += ` group by ${groupCols.join(', ')}`
 
     const { rows } = await query(sql, params)
     return rows
