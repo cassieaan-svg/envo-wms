@@ -10,11 +10,22 @@ export const getToken   = () => localStorage.getItem(TOKEN_KEY)
 export const setToken   = (t) => localStorage.setItem(TOKEN_KEY, t)
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
 
+// Active module — which commodity programme (HIV / Essential Commodities) the caller
+// is working in. Sent as the `x-envo-module` header on every authenticated request so
+// the backend scopes the catalogue / facility list. Held in sessionStorage so it's
+// per-tab (two tabs can sit in different modules) and survives a refresh.
+const MODULE_KEY = 'ct_module'
+export const getModule   = () => sessionStorage.getItem(MODULE_KEY)
+export const setModule   = (m) => { if (m) sessionStorage.setItem(MODULE_KEY, m); else sessionStorage.removeItem(MODULE_KEY) }
+export const clearModule = () => sessionStorage.removeItem(MODULE_KEY)
+
 async function request(path, { method = 'GET', body, auth = false } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (auth) {
     const t = getToken()
     if (t) headers.Authorization = `Bearer ${t}`
+    const m = getModule()
+    if (m) headers['x-envo-module'] = m
   }
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -142,6 +153,20 @@ export const api = {
     weekly:       (params) => get('/reports/weekly', params),
     monthly:      (params) => get('/reports/monthly', params),
     stockBalance: (params) => get('/reports/stock-balance', params),
+  },
+
+  // Modules the caller may work in ([{ key, label, enrolled }]). Not module-scoped
+  // itself — it's what the module picker renders.
+  modules:     { list: () => get('/modules') },
+
+  // Essential-commodity priced requests to the central warehouse.
+  warehouseRequests: {
+    list:    (params)     => get('/warehouse-requests', params),
+    get:     (id)         => get(`/warehouse-requests/${id}`),
+    create:  (body)       => post('/warehouse-requests', body),   // { items:[{commodity_id, quantity}], requestedBy, requesterPhone, notes }
+    cancel:  (id)         => patch(`/warehouse-requests/${id}/cancel`),
+    resubmit:(id)         => patch(`/warehouse-requests/${id}/resubmit`),
+    receive: (id)         => patch(`/warehouse-requests/${id}/receive`),
   },
 
   facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
