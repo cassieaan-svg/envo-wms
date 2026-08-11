@@ -28,16 +28,22 @@ const PORT = process.env.PORT || 5000
 // Middleware
 app.use(cors())
 
-// Gzip every API response above 1 KB. The JSON here is highly repetitive and
-// compresses ~7.6x (a 5.58 MB stock payload measured at 0.73 MB), which is the
-// difference between a multi-second transfer and a fast one on a field connection.
+// Compress every API response above 1 KB. The JSON here is highly repetitive, so
+// this is the difference between a multi-second transfer and a fast one on a
+// field connection. Measured on the 5,716 KB stock payload:
 //
-// Level 6 (the default) rather than Brotli deliberately: Brotli-4 gave a further
-// ~27% off that payload but cost ~26% more CPU (100 ms vs 79 ms measured on a
-// 5.4 MB body), and this is a single-threaded Node process — compression CPU
-// blocks the event loop for every other request. The 1 KB threshold keeps the
-// small responses (the new /stock/summary is ~17 KB, most others are far less)
-// from paying setup cost for nothing.
+//   Accept-Encoding: br, gzip  ->  br    449 KB   297 ms   (12.7x)
+//   Accept-Encoding: gzip      ->  gzip  752 KB   250 ms    (7.6x)
+//   Accept-Encoding: identity  ->        5716 KB  174 ms
+//
+// compression@1.8 negotiates Brotli when the client offers it (every current
+// browser does) and falls back to gzip otherwise — so production serves `br`.
+// Its Brotli default is QUALITY 4, not the zlib default of 11; that matters,
+// because 11 on a payload this size would cost seconds of CPU in a
+// single-threaded process. Do not raise it without measuring.
+//
+// The 1 KB threshold keeps small responses (the /stock/summary rollup is ~17 KB,
+// the dispense aggregates a few KB) from paying setup cost for nothing.
 //
 // The SSE stream MUST be excluded explicitly. compression's default filter falls
 // back to a `^text/` match, which accepts text/event-stream — it would then buffer
