@@ -51,8 +51,8 @@ function getStockStatus(quantity, amc) {
   if (quantity === 0) return 'out'
   const mos = getMOS(quantity, amc)
   if (mos === null) return 'nodata'
-  if (mos < 1) return 'low'
-  if (mos > 6) return 'over'
+  if (mos < 2) return 'low'
+  if (mos > 4) return 'over'
   return 'ok'
 }
 
