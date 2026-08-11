@@ -1,5 +1,5 @@
 import { api } from '../lib/api'
-import { resolveAmcWindow, amcMapFromRows, getStockStatus } from './helpers'
+import { loadConsumptionAmcMap, getStockStatus } from './helpers'
 
 // Counts expiry / low-stock / overstock alerts for a single facility.
 // Out-of-stock is intentionally excluded (by request). Mirrors the Alerts page
@@ -21,17 +21,12 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
   const gMap = {}
   ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })
 
-  // Average monthly consumption window → AMC per commodity.
-  const amcWin = resolveAmcWindow(amcWindows[fid])
-  let amcMap = {}
-  if (commIds.length) {
-    const disp = await api.dispense.history({
-      facility_id: fid, commodity_ids: commIds,
-      from: amcWin.start.toISOString(), to: amcWin.end.toISOString(),
-      section: commoditySection || undefined,
-    }).catch(() => [])
-    amcMap = amcMapFromRows(disp, amcWin)
-  }
+  // AMC from the consumption recorded so far (elapsed weeks scaled to a month),
+  // the same figure the dashboards use — a nav badge must never disagree with the
+  // page it links to. Also replaces a full dispense-history download with one aggregate.
+  const amcMap = await loadConsumptionAmcMap({
+    commIds, scopeParams: { facility_id: fid }, section: commoditySection,
+  })
 
   let low = 0, over = 0
   allCommodities.forEach(c => {

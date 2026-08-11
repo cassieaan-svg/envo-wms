@@ -374,30 +374,47 @@ export function capExpiryBatchesToStockByFacility(batches, sohByFacComm) {
 // null — every facility in the caller's token scope. Aggregates dispenses across
 // the whole scope and paginates past the 1000-row cap, so an admin's aggregate AMC
 // matches the summed stock. `section` adds the pharmacy/lab filter server-side.
-export async function loadConsumptionAmcMap({ commIds, scopeParams, amcWin, section }) {
+export async function loadConsumptionAmcMap({ commIds, scopeParams, section }) {
   const ids = [...new Set((commIds || []).filter(Boolean))]
   if (!ids.length) return {}
-  // The server sums consumption by commodity + month, so we fetch a few dozen
-  // rows instead of every dispense record across the scope. `scopeParams` is the
-  // compact { facility_id } | { state[, lga] } | {} shape (no giant id lists).
-  let monthly
+  let rows
   try {
-    monthly = await api.dispense.summary({
+    rows = await api.dispense.summary({
       ...(scopeParams || {}),
       commodity_ids: ids,
-      from: amcWin.start.toISOString(),
-      to: amcWin.end.toISOString(),
+      group_by: 'commodity,lifetime',
       section: section || undefined,
     })
   } catch { return {} }
-  // Same reduction as amcMapFromRows: sum by commodity (honouring a custom month
-  // set), then divide by the window's month count.
-  const sums = {}
-  ;(monthly || []).forEach(r => {
-    if (amcWin.monthSet && !amcWin.monthSet.has(r.ym)) return
-    sums[r.commodity_id] = (sums[r.commodity_id] || 0) + (r.qty || 0)
-  })
+  return weeklyAmcMap(rows)
+}
+
+// ── Interim ("weekly") AMC ────────────────────────────────────────────────────
+// AMC from the consumption recorded SO FAR, rather than from a fixed calendar
+// window: total quantity ÷ the weeks that commodity has actually been recorded,
+// scaled to a month.
+//
+// Why this exists: the standard AMC averages the two completed months before the
+// current quarter, so anything first recorded inside the current quarter has no
+// AMC at all — measured at 48 of 68 consuming commodities and 2,663
+// (facility, commodity) pairs, all showing "No AMC data" and therefore no MOS and
+// no stock status. Dividing by each commodity's own elapsed weeks gives every
+// commodity a usable figure immediately, instead of waiting a full quarter.
+//
+// 4.33 = 30.44 ÷ 7, the real number of weeks in an average month. Using a flat 4
+// would understate monthly consumption by ~8%, which inflates MOS and makes
+// genuinely low stock read as adequate — the wrong direction to be wrong in.
+export const AMC_WEEKS_PER_MONTH = 4.33
+
+// The span is clamped to at least one week: a commodity first recorded two days
+// ago would otherwise divide by ~0.3 and report a wildly overstated month.
+export function weeklyAmcMap(rows, now = new Date()) {
   const out = {}
-  Object.entries(sums).forEach(([id, total]) => { out[id] = calcAMCFromTotal(total, amcWin.months) })
+  ;(rows || []).forEach(r => {
+    const first = new Date(r.first_at)
+    if (!r.first_at || isNaN(first)) return
+    const weeks = Math.max(1, (now.getTime() - first.getTime()) / (7 * 86400000))
+    out[r.commodity_id] = ((r.qty || 0) / weeks) * AMC_WEEKS_PER_MONTH
+  })
   return out
 }

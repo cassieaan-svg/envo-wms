@@ -207,7 +207,20 @@ const DISPENSE_GROUP_BY = {
   'day':                { dimensions: ['day'], needsDay: true },
   'commodity,facility': { dimensions: ['commodity', 'facility'] },
   'commodity,day':      { dimensions: ['commodity', 'day'], needsDay: true },
+  // Interim ("weekly") AMC: every record the app holds for a commodity, plus the
+  // date of its FIRST one, so the caller can divide by the weeks that commodity
+  // has actually been recorded rather than by a fixed window. The standard AMC
+  // averages the two completed months before the current quarter, which leaves
+  // anything newer than that quarter with no AMC at all — measured at 48 of 68
+  // consuming commodities and 2,663 (facility, commodity) pairs.
+  'commodity,lifetime': { dimensions: ['commodity'], lifetime: true },
 }
+
+// Records outside this range are excluded from the lifetime aggregate. Not
+// hypothetical: dispense_log holds 2 rows dated before 2024 and 11 dated in the
+// future, and a single stray early date would otherwise stretch one commodity's
+// week span to centuries and drive its AMC to ~0 — silently hiding a stockout.
+const LIFETIME_FLOOR = '2024-01-01'
 
 export const DISPENSE_GROUP_BY_KEYS = Object.keys(DISPENSE_GROUP_BY)
 
@@ -776,10 +789,19 @@ export class LogService {
     const groupCols = spec.dimensions.map(d => (d === 'day' ? 'day' : `l.${d}_id`))
     if (spec.month) groupCols.push('ym')
 
+    // Lifetime: the caller needs the first record's date to know how many weeks
+    // this commodity has actually been recorded for. Bound the range so one stray
+    // mistyped year can't define the span — a single 2029 row would otherwise
+    // stretch it and drive the AMC toward zero, hiding a stockout.
+    const aggregates = ['sum(l.quantity)::int as qty', 'count(*)::int as txn']
+    if (spec.lifetime) {
+      aggregates.push('min(l.dispensed_at) as first_at', 'max(l.dispensed_at) as last_at')
+      conds.push(`l.dispensed_at >= '${LIFETIME_FLOOR}'::timestamptz`, 'l.dispensed_at <= now()')
+    }
+
     let sql = `
       select ${selects.join(', ')},
-             sum(l.quantity)::int as qty,
-             count(*)::int        as txn
+             ${aggregates.join(',\n             ')}
       from dispense_log l
       ${needCommJoin ? 'left join commodities c on c.id = l.commodity_id' : ''}`
     if (conds.length) sql += ` where ${conds.join(' and ')}`

@@ -259,7 +259,7 @@ dbTest('group_by is an allowlist, not a generic GROUP BY', async () => {
     await assert.rejects(() => call({ groupBy: bad }), /Unsupported group_by/, `accepted "${bad}"`)
   }
   assert.deepEqual(DISPENSE_GROUP_BY_KEYS,
-    ['commodity,month', 'commodity', 'facility', 'day', 'commodity,facility', 'commodity,day'],
+    ['commodity,month', 'commodity', 'facility', 'day', 'commodity,facility', 'commodity,day', 'commodity,lifetime'],
     'allowlist changed — update the callers and this test together')
 })
 
@@ -282,4 +282,65 @@ dbTest('initial-load facets track commodities/facilities, not dispense_log size'
   const total = byComm.length + byFac.length + byDay.length
   assert.ok(total < logRows / 5,
     `initial facets returned ${total} rows against ${logRows} log rows — payload is tracking data volume`)
+})
+
+// ── Interim ("weekly") AMC: the lifetime grouping ────────────────────────────
+dbTest('group_by=commodity,lifetime returns totals plus the first record date', async () => {
+  const rows = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime' })
+  assert.ok(rows.length > 0)
+  for (const r of rows) {
+    assert.ok('commodity_id' in r && 'qty' in r && 'txn' in r, 'missing aggregate columns')
+    assert.ok(r.first_at instanceof Date, 'first_at must be a timestamp')
+    assert.ok(r.last_at >= r.first_at, 'last_at must not precede first_at')
+  }
+})
+
+dbTest('lifetime excludes junk dates that would corrupt the week span', async () => {
+  // dispense_log holds rows dated before 2024 and in the future. A single stray
+  // early date would stretch a commodity's span and drive its AMC toward zero,
+  // hiding a stockout — so the aggregate must bound the range.
+  const rows = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime' })
+  const now = new Date(), floor = new Date('2024-01-01')
+  for (const r of rows) {
+    assert.ok(r.first_at >= floor, `first_at ${r.first_at} predates the floor`)
+    assert.ok(r.last_at <= now, `last_at ${r.last_at} is in the future`)
+  }
+  const { rows: [{ c: outOfRange }] } = await query(
+    `select count(*)::int c from dispense_log where dispensed_at < '2024-01-01' or dispensed_at > now()`)
+  const bounded = await query(
+    `select sum(quantity)::int s from dispense_log where dispensed_at >= '2024-01-01' and dispensed_at <= now()`)
+  if (outOfRange > 0) {
+    assert.equal(rows.reduce((s, r) => s + r.qty, 0), bounded.rows[0].s,
+      'lifetime total must exclude out-of-range rows')
+  }
+})
+
+dbTest('lifetime honours facility and section scope', async () => {
+  const scoped = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime', facilityIds: [busiestFacility] })
+  const all = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime' })
+  assert.ok(scoped.reduce((s, r) => s + r.qty, 0) <= all.reduce((s, r) => s + r.qty, 0))
+  assert.deepEqual(await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime', facilityIds: [] }), [])
+
+  const cats = SECTION_CATEGORIES.pharmacy
+  const sect = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime', categories: cats })
+  const ids = sect.map(r => r.commodity_id)
+  if (ids.length) {
+    const got = (await query('select distinct category from commodities where id = any($1)', [ids])).rows.map(r => r.category)
+    assert.ok(got.every(c => cats.includes(c)), `section leaked: ${got}`)
+  }
+})
+
+dbTest('weekly AMC math: qty / elapsed weeks * 4.33, clamped to one week', async () => {
+  // Mirrors weeklyAmcMap in frontend/src/utils/helpers.js.
+  const WEEKS_PER_MONTH = 4.33
+  const rows = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime' })
+  const now = new Date()
+  for (const r of rows.slice(0, 25)) {
+    const weeks = Math.max(1, (now - r.first_at) / (7 * 86400000))
+    const amc = (r.qty / weeks) * WEEKS_PER_MONTH
+    assert.ok(Number.isFinite(amc) && amc >= 0, `AMC not finite for ${r.commodity_id}`)
+    // A month is 4.33 weeks, not 4 — using 4 would understate by ~8%, inflating
+    // MOS and making genuinely low stock read as adequate.
+    assert.ok(amc >= (r.qty / weeks) * 4, 'multiplier must not understate a month')
+  }
 })

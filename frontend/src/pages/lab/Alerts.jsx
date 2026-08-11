@@ -10,7 +10,7 @@ import { exportCsv } from '../../utils/download'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { fmtDate, fmtDateTime, resolveAmcWindow, amcMapFromRows, getMOS, getStockStatus, transferReason } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, transferReason } from '../../utils/helpers'
 
 export function Alerts() {
   const store = useAppStore()
@@ -188,16 +188,12 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   }
 
   async function loadStockAlerts() {
-    const amcWin = resolveAmcWindow(store.amcWindows[fid])
-    let amcMap = {}
-    if (commIds.length && fid) {
-      const data = await api.dispense.history({
-        facility_id: fid, commodity_ids: commIds,
-        from: amcWin.start.toISOString(), to: amcWin.end.toISOString(),
-        section: commoditySection || undefined,
-      }).catch(() => [])
-      amcMap = amcMapFromRows(data, amcWin)
-    }
+    // AMC from the consumption recorded so far (elapsed weeks scaled to a
+    // month), the same figure the Dashboard and Stock Levels use — these
+    // counts must not disagree with the pages they mirror.
+    const amcMap = await loadConsumptionAmcMap({
+      commIds, scopeParams: { facility_id: fid }, section: commoditySection,
+    })
 
     // Per-commodity rollup for the current scope (store + SDP totals, baseline
     // AMC) and the ever-transacted ids, in parallel. Admins see their whole scope;
