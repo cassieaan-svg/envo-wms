@@ -265,7 +265,7 @@ export function AllFacilities() {
     (!facQuery   || (f.name || '').toLowerCase().includes(facQuery))
   )
 
-  const statusLabels = { out:'Out of stock', low:'Low stock', ok:'Optimal', over:'Overstock', unknown:'No AMC data' }
+  const statusLabels = { out:'Out of stock', low:'Low stock', ok:'Optimal', over:'Overstock', unknown:'No AMC' }
 
   // Export the commodity overview (one row per commodity).
   const commodityHeaders = ['Commodity','Category','Unit','Total stock','Reporting sites','Low stock sites','Out of stock sites','Overstock sites']
@@ -354,7 +354,7 @@ export function AllFacilities() {
               </tr></thead>
               <tbody>{shownFacs.map((f,i) => {
                 const st = getStockStatus(f.total, f.amc)
-                const statusLabel = { out:'Out of stock', low:'Low stock', ok:'Optimal', over:'Overstock', unknown:'No AMC data' }[st] || st
+                const statusLabel = { out:'Out of stock', low:'Low stock', ok:'Optimal', over:'Overstock', unknown:'No AMC' }[st] || st
                 const mos = getMOS(f.total, f.amc)
                 return (
                   <tr key={i} className="border-b border-white/5 hover:bg-white/2">
