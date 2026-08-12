@@ -7,7 +7,6 @@ import { Badge, CatBadge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { useStock } from '../../hooks/useStock'
 import { fmtStockQty, getCommodityDispenseUnit, isLabCategory, getStockStatus, getMOS } from '../../utils/helpers'
 
 // Build a CSV from a header row + data rows and trigger a download. Fields with
@@ -60,9 +59,11 @@ export function AllFacilities() {
   const [search, setSearch]         = useState('')
   const [commFilter, setCommFilter] = useState('')
   const [selected, setSelected]     = useState(null) // commodity_id being drilled into
-  // Per-commodity SDP/DSD site stock (separate tables) across the admin's
-  // facilities, so overview totals include them — not just the main store.
-  const [siteByComm, setSiteByComm] = useState({ sdp: {}, dsd: {} })
+  // One row per (commodity, facility) holding stock anywhere — store, dispensary,
+  // DSD and SDP in a single response. Replaces reading the whole global stock
+  // array plus paginating dsd_stock and sdp_stock. Serves both the overview and
+  // the per-commodity drill-down, so the drill needs no further request.
+  const [facGrain, setFacGrain] = useState([])
   // Per-commodity set of facility ids that consumed it in the last 12 months,
   // so a site with a consumption track record counts as reporting even at 0 stock.
   const [consByComm, setConsByComm] = useState({})
@@ -70,7 +71,6 @@ export function AllFacilities() {
   const [facSearch, setFacSearch]   = useState('')   // breakdown table: facility name search
   const [refreshKey, setRefreshKey] = useState(0)    // bumps to re-fetch site/consumption data
   const [stockLoading, setStockLoading] = useState(true) // main store stock for this scope
-  const { loadStock } = useStock()
 
   // Admin location scope (State → LGA → Facility via the shared FacilityPicker,
   // which sets the global admin filter that getAdminStockScope resolves).
@@ -78,16 +78,25 @@ export function AllFacilities() {
   const scopeSet = scopeFid ? new Set([scopeFid]) : (scopeIdList ? new Set(scopeIdList) : null)
   const inScope  = fId => !scopeSet || scopeSet.has(fId)
 
-  // Load the store stock for this scope and gate the table until it's in. This
-  // page used to only read whatever stock was already loaded elsewhere, so landing
-  // here before the app-wide load finished (or after a scope change) rendered every
-  // commodity at 0. loadStock is deduped, so this rides an in-flight load.
+  // Load this scope's per-facility stock and gate the table until it lands.
   useEffect(() => {
     let active = true
     setStockLoading(true)
-    Promise.resolve(loadStock()).finally(() => { if (active) setStockLoading(false) })
+    api.stock.summary({
+      facility_id: scopeFid || undefined,
+      facility_ids: (!scopeFid && scopeIdList && scopeIdList.length) ? scopeIdList : undefined,
+      group_by: 'facility',
+    }).then(rows => { if (active) setFacGrain(rows || []) })
+      .catch(() => { if (active) setFacGrain([]) })
+      .finally(() => { if (active) setStockLoading(false) })
     return () => { active = false }
-  }, [scopeFid, store.adminFilterState, store.adminFilterLGA])
+  }, [scopeFid, store.adminFilterState, store.adminFilterLGA, refreshKey])
+
+  // Catalogue / facility lookups, so the rollup rows can stay lean.
+  const commMeta = {}
+  store.allCommodities.forEach(c => { commMeta[c.id] = c })
+  const facMeta = {}
+  store.allFacilities.forEach(f => { facMeta[f.id] = f })
 
   const agg = {}
   // Seed from every tracked commodity so zero-stock items and their
@@ -97,25 +106,24 @@ export function AllFacilities() {
   })
   // Group by facility (summing location rows) and carry the facility's AMC so
   // status is MOS-based — matching the Dashboard — instead of a flat threshold.
-  store.stockData.forEach(r => {
+  facGrain.forEach(r => {
     if (!inScope(r.facility_id)) return
     const k = r.commodity_id
-    if (!agg[k]) agg[k] = { id:k, name:r.commodities?.name, cat:r.commodities?.category, comm:r.commodities, facMap:{} }
-    const fid = r.facility_id
-    if (!agg[k].facMap[fid]) agg[k].facMap[fid] = { total:0, amc:0 }
-    agg[k].facMap[fid].total += r.quantity
-    if ((r.baseline_amc || 0) > agg[k].facMap[fid].amc) agg[k].facMap[fid].amc = r.baseline_amc || 0
-  })
-  // Fold in SDP (lab) and DSD (pharmacy) site stock so totals/status reflect
-  // the full picture, not just the main store.
-  Object.values(agg).forEach(c => {
-    const siteMap = isLabCategory(c.cat) ? siteByComm.sdp[c.id] : siteByComm.dsd[c.id]
-    if (!siteMap) return
-    Object.entries(siteMap).forEach(([fid, qty]) => {
-      if (!inScope(fid)) return
-      if (!c.facMap[fid]) c.facMap[fid] = { total:0, amc:0 }
-      c.facMap[fid].total += qty
-    })
+    if (!agg[k]) {
+      const m = commMeta[k]
+      agg[k] = { id:k, name:m?.name, cat:m?.category, comm:m, facMap:{} }
+    }
+    const c = agg[k]
+    if (!c.facMap[r.facility_id]) c.facMap[r.facility_id] = { total:0, amc:0 }
+    const fm = c.facMap[r.facility_id]
+    // Every stock-table row for this bin, whatever its location — `other_qty`
+    // carries anything that is neither store nor dispensary, which the old sum
+    // over stockData also included.
+    fm.total += r.store_qty + r.dispensary_qty + r.other_qty
+    // Site stock: lab facilities report through SDP, pharmacy through DSD. Same
+    // split as before, so totals and status are unchanged.
+    fm.total += isLabCategory(c.cat) ? r.sdp_qty : r.dsd_qty
+    if ((r.baseline_amc || 0) > fm.amc) fm.amc = r.baseline_amc || 0
   })
   // A facility that consumed this commodity in the last 12 months counts as a
   // reporting site even with no current stock row.
@@ -152,50 +160,26 @@ export function AllFacilities() {
   const selectedComm = selected ? agg[selected] : null
   const isLabSel = !!selectedComm && isLabCategory(selectedComm.cat)
 
-  // Load all SDP / DSD site stock once (paginated, scoped to the admin's
-  // facilities) so both the overview and the drill-down can include them.
+  // Which facilities consumed each commodity in the last 12 months — a site with
+  // a consumption track record counts as reporting even at zero stock. Grouped by
+  // the server: this used to download every dispense row in the window (~10,900
+  // rows over 12 sequential requests locally) purely to dedupe them into sets.
   useEffect(() => {
     let active = true
     const facIds = store.isOverallAdmin() ? null : store.allFacilities.map(f => f.id)
-    const fetchAll = async (listFn) => {
-      const map = {}
-      const PAGE = 1000
-      for (let offset = 0; ; offset += PAGE) {
-        let data
-        try {
-          data = await listFn({ facility_ids: (facIds && facIds.length) ? facIds : undefined, limit: PAGE, offset })
-        } catch { break }
-        if (!data || !data.length) break
-        data.forEach(d => {
-          if (!map[d.commodity_id]) map[d.commodity_id] = {}
-          map[d.commodity_id][d.facility_id] = (map[d.commodity_id][d.facility_id] || 0) + d.quantity
-        })
-        if (data.length < PAGE) break
-      }
-      return map
-    }
-    // Distinct (commodity → facilities that dispensed it) over the last 12
-    // months. The server groups it: this used to download every dispense row in
-    // the window — ~10,900 rows over 12 sequential requests locally — purely to
-    // dedupe them into sets here. The aggregate returns one row per
-    // (commodity, facility) pair that has any consumption, which IS the set.
-    const fetchConsumption = async () => {
-      const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 12)
-      const rows = await api.dispense.summary({
-        facility_ids: (facIds && facIds.length) ? facIds : undefined,
-        from: cutoff.toISOString(),
-        group_by: 'commodity,facility',
-      }).catch(() => [])
+    const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 12)
+    api.dispense.summary({
+      facility_ids: (facIds && facIds.length) ? facIds : undefined,
+      from: cutoff.toISOString(),
+      group_by: 'commodity,facility',
+    }).then(rows => {
       const map = {}
       ;(rows || []).forEach(r => {
         if (!map[r.commodity_id]) map[r.commodity_id] = new Set()
         map[r.commodity_id].add(r.facility_id)
       })
-      return map
-    }
-    Promise.all([fetchAll(api.stock.sdp.list), fetchAll(api.stock.dsd.list), fetchConsumption()]).then(([sdp, dsd, cons]) => {
-      if (active) { setSiteByComm({ sdp, dsd }); setConsByComm(cons) }
-    })
+      if (active) setConsByComm(map)
+    }).catch(() => { if (active) setConsByComm({}) })
     return () => { active = false }
   }, [refreshKey])
 
@@ -203,14 +187,22 @@ export function AllFacilities() {
   useEffect(() => { setSiteFilter(''); setFacSearch('') }, [selected])
 
   // Drill-down: stock rows for the selected commodity, grouped by facility
+  // Drill-down reuses the rows already loaded — no extra request. Facility names
+  // come from the catalogue in the store rather than being repeated on every row.
   const facRows = selected
-    ? store.stockData
+    ? facGrain
         .filter(r => r.commodity_id === selected && inScope(r.facility_id))
         .reduce((acc, r) => {
-          const fid = r.facility_id
-          if (!acc[fid]) acc[fid] = { id: fid, name: r.facilities?.name||'—', state: r.facilities?.state||'—', lga: r.facilities?.lga||'—', store: 0, dispensary: 0, dsd: 0, sdp: 0, total: 0, amc: 0, comm: r.commodities }
-          acc[fid][r.location_type === 'store' ? 'store' : r.location_type === 'dispensary' ? 'dispensary' : 'dsd'] += r.quantity
-          if ((r.baseline_amc || 0) > acc[fid].amc) acc[fid].amc = r.baseline_amc || 0
+          const f = facMeta[r.facility_id]
+          acc[r.facility_id] = {
+            id: r.facility_id, name: f?.name||'—', state: f?.state||'—', lga: f?.lga||'—',
+            store: r.store_qty, dispensary: r.dispensary_qty,
+            // Non store/dispensary stock rows landed in the DSD column before; site
+            // stock is added on the matching side only, as it was.
+            dsd: r.other_qty + (isLabSel ? 0 : r.dsd_qty),
+            sdp: isLabSel ? r.sdp_qty : 0,
+            total: 0, amc: r.baseline_amc || 0, comm: selectedComm?.comm,
+          }
           return acc
         }, {})
     : {}
@@ -225,13 +217,7 @@ export function AllFacilities() {
       }
       return facRows[fid]
     }
-    const siteMap = isLabSel ? (siteByComm.sdp[selected] || {}) : (siteByComm.dsd[selected] || {})
-    Object.entries(siteMap).forEach(([fid, qty]) => {
-      if (!inScope(fid)) return
-      const f = ensure(fid)
-      if (isLabSel) f.sdp += qty
-      else          f.dsd += qty
-    })
+    // (Site stock is already folded in above, straight from the rollup.)
     // Include facilities that consumed this commodity in the last 12 months even
     // with no stock row, so they appear as out-of-stock reporting sites.
     if (consByComm[selected]) consByComm[selected].forEach(fid => { if (inScope(fid)) ensure(fid) })
@@ -395,7 +381,7 @@ export function AllFacilities() {
           <div className="flex gap-2 flex-wrap">
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search commodity…"
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 w-48"/>
-            <button onClick={()=>{ loadStock(); setRefreshKey(k=>k+1) }} className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 inline-flex items-center gap-1.5">↻ Refresh</button>
+            <button onClick={()=>setRefreshKey(k=>k+1)} className="text-xs text-gray-400 hover:text-gray-200 border border-white/10 rounded px-3 py-1.5 inline-flex items-center gap-1.5">↻ Refresh</button>
             <select value={commFilter} onChange={e=>setCommFilter(e.target.value)}
               className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
               <option value="">All categories</option>
