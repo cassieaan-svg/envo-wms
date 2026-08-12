@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { auth, getToken } from './lib/api'
 import { useAppStore } from './store/appStore'
 import { useRealtimeStock } from './hooks/useStock'
-import { hydrateSession, loadModuleData } from './utils/session'
+import { hydrateSession } from './utils/session'
 import { AuthScreen } from './components/AuthScreen'
-import { ModulePicker } from './components/ModulePicker'
 import { Sidebar } from './components/Sidebar'
 import { Toast } from './components/ui/Toast'
 
@@ -50,9 +49,6 @@ import { SiteActivityLog } from './components/SiteActivityLog'
 import { CRRF as PharmCRRF } from './pages/pharmacy/CRRF'
 import { CRRF as LabCRRF   } from './pages/lab/CRRF'
 
-// Essential Commodities module
-import { RequestWarehouse } from './pages/essential/RequestWarehouse'
-
 const dsdMap = {
   dispense: DsdDispense, transfers: DsdTransfers, stock: DsdStock, log: SiteActivityLog,
 }
@@ -64,8 +60,6 @@ const pharmMap = {
   intake: PharmIntake, adjustment: PharmAdjustment, transfers: PharmTransfers,
   log: PharmLog, crrf: PharmCRRF,
   alerts: PharmAlerts, monitoring: PharmMonitoring,
-  // Essential Commodities: facility-raised priced request to the central warehouse.
-  'warehouse-requests': RequestWarehouse,
   // Reachable by the section-routed oversight viewers (cluster/lga/state) whose
   // AdminNav links here; AllFacilities adapts per-commodity, so one component fits
   // both sections. Facility users never link to it.
@@ -76,7 +70,6 @@ const labMap = {
   intake: LabIntake, adjustment: LabAdjustment, transfers: LabTransfers,
   log: LabLog, crrf: LabCRRF,
   alerts: LabAlerts, monitoring: LabMonitoring,
-  'warehouse-requests': RequestWarehouse,
   'all-facilities': AllFacilities,
 }
 // Admins get Overview + Reports only — no operations (dispense / intake /
@@ -208,22 +201,15 @@ function AppContent() {
   )
 }
 
-const Spinner = () => (
-  <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-    <div className="w-8 h-8 border-2 border-white/10 border-t-green-400 rounded-full animate-spin" />
-  </div>
-)
-
 export default function App() {
-  const user             = useAppStore(s => s.user)
-  const module           = useAppStore(s => s.module)
-  const moduleDataLoaded = useAppStore(s => s.moduleDataLoaded)
+  const user     = useAppStore(s => s.user)
   const [checking, setChecking] = useState(true)
+  const [authed, setAuthed]     = useState(false)
 
   useEffect(() => {
     (async () => {
       // Restore a persisted session on refresh by validating the stored JWT and
-      // rebuilding the identity store from it, instead of forcing a fresh sign-in.
+      // rebuilding the store from it, instead of forcing a fresh sign-in.
       if (getToken()) {
         try {
           const u = await auth.me()
@@ -238,37 +224,22 @@ export default function App() {
     })()
   }, [])
 
-  // Once a module is chosen (fresh pick or restored from sessionStorage on refresh),
-  // load its scoped data. Runs for the pick flow and the refresh flow alike.
-  useEffect(() => {
-    if (user && module && !moduleDataLoaded) {
-      loadModuleData().catch(() => auth.signOut())
-    }
-  }, [user, module, moduleDataLoaded])
-
-  if (checking) return <Spinner />
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-white/10 border-t-green-400 rounded-full animate-spin" />
+      </div>
+    )
+  }
 
   if (!user) {
     return (
       <>
-        <AuthScreen onSuccess={() => {}} />
+        <AuthScreen onSuccess={() => setAuthed(true)} />
         <Toast />
       </>
     )
   }
-
-  // Signed in but no module chosen yet → the two-card landing picker.
-  if (!module) {
-    return (
-      <>
-        <ModulePicker />
-        <Toast />
-      </>
-    )
-  }
-
-  // Module chosen but its data hasn't finished loading yet.
-  if (!moduleDataLoaded) return <Spinner />
 
   return (
     <>
