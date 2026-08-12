@@ -175,27 +175,22 @@ export function AllFacilities() {
       return map
     }
     // Distinct (commodity → facilities that dispensed it) over the last 12
-    // months. Only two columns, paginated, deduped into sets.
+    // months. The server groups it: this used to download every dispense row in
+    // the window — ~10,900 rows over 12 sequential requests locally — purely to
+    // dedupe them into sets here. The aggregate returns one row per
+    // (commodity, facility) pair that has any consumption, which IS the set.
     const fetchConsumption = async () => {
       const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 12)
+      const rows = await api.dispense.summary({
+        facility_ids: (facIds && facIds.length) ? facIds : undefined,
+        from: cutoff.toISOString(),
+        group_by: 'commodity,facility',
+      }).catch(() => [])
       const map = {}
-      const PAGE = 1000
-      for (let offset = 0; ; offset += PAGE) {
-        let data
-        try {
-          data = await api.dispense.history({
-            facility_ids: (facIds && facIds.length) ? facIds : undefined,
-            from: cutoff.toISOString(),
-            limit: PAGE, offset,
-          })
-        } catch { break }
-        if (!data || !data.length) break
-        data.forEach(d => {
-          if (!map[d.commodity_id]) map[d.commodity_id] = new Set()
-          map[d.commodity_id].add(d.facility_id)
-        })
-        if (data.length < PAGE) break
-      }
+      ;(rows || []).forEach(r => {
+        if (!map[r.commodity_id]) map[r.commodity_id] = new Set()
+        map[r.commodity_id].add(r.facility_id)
+      })
       return map
     }
     Promise.all([fetchAll(api.stock.sdp.list), fetchAll(api.stock.dsd.list), fetchConsumption()]).then(([sdp, dsd, cons]) => {
