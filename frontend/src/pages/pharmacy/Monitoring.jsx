@@ -394,7 +394,7 @@ export function Monitoring() {
               <MetricGrid>
                 <Metric label={`${commDrill.name} — units consumed (${period}d)`} value={cTotal.toLocaleString()} color="green"/>
                 <Metric label="Facilities consuming" value={cFacs} color="blue"/>
-                <Metric label="Consumption records" value={cRows.length.toLocaleString()}/>
+                <Metric label="Consumption records" value={cFacRows.reduce((s,r)=>s+r.txn,0).toLocaleString()}/>
                 <Metric label="Consumed today" value={cToday.toLocaleString()}/>
               </MetricGrid>
             )
