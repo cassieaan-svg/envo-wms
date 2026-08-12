@@ -13,8 +13,18 @@
 //   pm2 set ... ENVO_DIAG=1   (or add to backend/.env), restart, load the page,
 //   GET /api/_diag/pool, then remove it and restart again.
 
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { performance } from 'node:perf_hooks'
+import dotenv from 'dotenv'
+
+// Load .env HERE, resolved from this file, exactly as db.js does — and for the
+// same reason. ES module imports are evaluated before the importing module's
+// body, so server.js's dotenv.config() runs AFTER this module has already read
+// process.env. Relying on it left DIAG permanently false whenever the flag lived
+// in .env rather than the shell, which is how it is actually set on the VM.
+dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '..', '.env') })
 
 export const DIAG = process.env.ENVO_DIAG === '1'
 

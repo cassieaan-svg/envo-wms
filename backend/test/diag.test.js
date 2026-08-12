@@ -11,6 +11,8 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
 
 const backend = join(dirname(fileURLToPath(import.meta.url)), '..')
 const run = (code, env) =>
@@ -107,4 +109,25 @@ test('the admin guard shared with the rest of the oversight surface', async () =
   assert.equal(isAdminScope({ accessLevel: 'facility', facilityRole: 'store_manager' }), false)
   assert.equal(isAdminScope(null), false)
   assert.equal(isAdminScope(undefined), false)
+})
+
+test('ENABLED via .env alone, not just a shell variable', () => {
+  // How the flag is actually set in production. ES module imports evaluate before
+  // the importing module's body, so a module that reads process.env at import time
+  // sees nothing unless it loads .env itself — which is what silently kept the
+  // whole diagnostic switched off the first time it was deployed.
+  const fs = require('node:fs')
+  const envPath = join(backend, '.env')
+  const original = fs.readFileSync(envPath, 'utf8')
+  try {
+    fs.writeFileSync(envPath, `${original}
+ENVO_DIAG=1
+`)
+    const out = run(`
+      const d = await import('./src/diag.js')
+      console.log(JSON.stringify({ enabled: d.DIAG }))`, { ENVO_DIAG: undefined })
+    assert.equal(out.enabled, true, 'ENVO_DIAG in .env must enable diagnostics')
+  } finally {
+    fs.writeFileSync(envPath, original)
+  }
 })
