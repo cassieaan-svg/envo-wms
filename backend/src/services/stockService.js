@@ -178,6 +178,87 @@ export class StockService {
   }
 
   /**
+   * The same rollup at (commodity, FACILITY) grain — one row per pair that holds
+   * stock anywhere. All Facilities needs this finer grain: it counts reporting
+   * sites and per-site stock status per commodity, which a commodity-grain total
+   * cannot answer. Today it derives that from the whole 5.58 MB stock array plus
+   * two paginated site-stock drains.
+   *
+   * Columns mirror getScopedStockSummary, with one addition: `other_qty` carries
+   * `stock` rows whose location_type is neither store nor dispensary. There are
+   * none in the local dataset, but the client folds any such row into its DSD
+   * column, so returning it separately means the caller can reproduce the old
+   * arithmetic exactly rather than silently dropping units if production differs.
+   *
+   * `commodityId` narrows to one commodity for the drill-down, which is the only
+   * view that needs every facility at once.
+   */
+  static async getScopedStockByFacility({ facilityIds = null, commodityIds = null, categories = null, commodityId = null } = {}) {
+    if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+    const params = []
+    const facIdx = Array.isArray(facilityIds) ? (params.push(facilityIds), params.length) : null
+    const commIdx = (Array.isArray(commodityIds) && commodityIds.length) ? (params.push(commodityIds), params.length) : null
+    const catIdx = (Array.isArray(categories) && categories.length) ? (params.push(categories), params.length) : null
+    const oneIdx = commodityId ? (params.push(commodityId), params.length) : null
+
+    const filt = t => [
+      facIdx ? ` and ${t}.facility_id = any($${facIdx})` : '',
+      commIdx ? ` and ${t}.commodity_id = any($${commIdx})` : '',
+      catIdx ? ` and c.category = any($${catIdx})` : '',
+      oneIdx ? ` and ${t}.commodity_id = $${oneIdx}` : '',
+    ].join('')
+
+    const sql = `
+      with s as (
+        select st.commodity_id, st.facility_id,
+               sum(st.quantity) filter (where st.location_type = 'store')::int      as store_qty,
+               sum(st.quantity) filter (where st.location_type = 'dispensary')::int as dispensary_qty,
+               sum(st.quantity) filter (where st.location_type not in ('store','dispensary'))::int as other_qty,
+               max(st.baseline_amc)                                                 as baseline_amc,
+               count(*)::int                                                        as stock_rows
+          from stock st
+          join commodities c on c.id = st.commodity_id
+         where true${filt('st')}
+         group by st.commodity_id, st.facility_id
+      ),
+      d as (
+        select dd.commodity_id, dd.facility_id, sum(dd.quantity)::int as qty
+          from dsd_stock dd
+          join commodities c on c.id = dd.commodity_id
+         where true${filt('dd')}
+         group by dd.commodity_id, dd.facility_id
+      ),
+      p as (
+        select sp.commodity_id, sp.facility_id, sum(sp.quantity)::int as qty
+          from sdp_stock sp
+          join commodities c on c.id = sp.commodity_id
+         where true${filt('sp')}
+         group by sp.commodity_id, sp.facility_id
+      ),
+      keys as (
+        select commodity_id, facility_id from s
+        union select commodity_id, facility_id from d
+        union select commodity_id, facility_id from p
+      )
+      select k.commodity_id, k.facility_id,
+             coalesce(s.store_qty, 0)            as store_qty,
+             coalesce(s.dispensary_qty, 0)       as dispensary_qty,
+             coalesce(s.other_qty, 0)            as other_qty,
+             coalesce(d.qty, 0)                  as dsd_qty,
+             coalesce(p.qty, 0)                  as sdp_qty,
+             coalesce(s.baseline_amc, 0)::float8 as baseline_amc,
+             coalesce(s.stock_rows, 0) > 0       as has_stock
+        from keys k
+        left join s on s.commodity_id = k.commodity_id and s.facility_id = k.facility_id
+        left join d on d.commodity_id = k.commodity_id and d.facility_id = k.facility_id
+        left join p on p.commodity_id = k.commodity_id and p.facility_id = k.facility_id`
+
+    const { rows } = await query(sql, params)
+    return rows
+  }
+
+  /**
    * On-hand lots (per-batch balances) across a scope, from the AUTHORITATIVE lot
    * ledger (stock_lot) — the same source the dispense picker uses, so an expiry
    * view built on this matches what a store manager can actually dispatch. Unlike

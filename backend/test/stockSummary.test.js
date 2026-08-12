@@ -336,3 +336,93 @@ dbTest('response is one row per commodity, not one per stock row', async () => {
   assert.ok(rows.length < stockRows / 10,
     `summary returned ${rows.length} rows against ${stockRows} stock rows — payload is tracking data volume`)
 })
+
+// ── Facility grain: what All Facilities needs ────────────────────────────────
+// It counts reporting sites and per-site status per commodity, which the
+// commodity-grain rollup cannot answer. Today it derives that from the whole
+// stock array plus two paginated site-stock drains.
+dbTest('facility grain reproduces the per-(commodity, facility) reduction', async () => {
+  const rows = await StockService.getScopedStockByFacility({})
+
+  // The old client-side path: group every stock row by (commodity, facility),
+  // summing quantity and taking the max baseline_amc, then fold in site stock.
+  const raw = (await query('select commodity_id, facility_id, quantity, location_type, baseline_amc from stock')).rows
+  const expect = {}
+  const key = (c, f) => `${c}|${f}`
+  raw.forEach(r => {
+    const k = key(r.commodity_id, r.facility_id)
+    if (!expect[k]) expect[k] = { total: 0, amc: 0, store: 0, dispensary: 0, other: 0 }
+    expect[k].total += r.quantity
+    if (r.location_type === 'store') expect[k].store += r.quantity
+    else if (r.location_type === 'dispensary') expect[k].dispensary += r.quantity
+    else expect[k].other += r.quantity
+    if ((r.baseline_amc || 0) > expect[k].amc) expect[k].amc = r.baseline_amc || 0
+  })
+  for (const [table, col] of [['dsd_stock', 'dsd'], ['sdp_stock', 'sdp']]) {
+    for (const r of (await query(`select commodity_id, facility_id, quantity from ${table}`)).rows) {
+      const k = key(r.commodity_id, r.facility_id)
+      if (!expect[k]) expect[k] = { total: 0, amc: 0, store: 0, dispensary: 0, other: 0 }
+      expect[k][col] = (expect[k][col] || 0) + r.quantity
+    }
+  }
+
+  const got = Object.fromEntries(rows.map(r => [key(r.commodity_id, r.facility_id), r]))
+  assert.deepEqual(Object.keys(got).sort(), Object.keys(expect).sort(), 'pair set differs')
+  for (const [k, e] of Object.entries(expect)) {
+    const a = got[k]
+    assert.equal(a.store_qty, e.store, `${k}: store`)
+    assert.equal(a.dispensary_qty, e.dispensary, `${k}: dispensary`)
+    assert.equal(a.other_qty, e.other, `${k}: other (non store/dispensary stock rows)`)
+    assert.equal(a.dsd_qty, e.dsd || 0, `${k}: DSD site stock`)
+    assert.equal(a.sdp_qty, e.sdp || 0, `${k}: SDP site stock`)
+    assert.ok(Math.abs(a.baseline_amc - e.amc) < 1e-6, `${k}: baseline AMC`)
+    // The overview's per-facility total sums every stock row regardless of location.
+    assert.equal(a.store_qty + a.dispensary_qty + a.other_qty, e.total, `${k}: per-facility total`)
+  }
+})
+
+dbTest('facility grain honours facility, commodity and section scope', async () => {
+  assert.deepEqual(await StockService.getScopedStockByFacility({ facilityIds: [] }), [])
+
+  const scoped = await StockService.getScopedStockByFacility({ facilityIds: [busiestFacility] })
+  assert.ok(scoped.length > 0)
+  assert.ok(scoped.every(r => r.facility_id === busiestFacility), 'leaked another facility')
+
+  const cats = SECTION_CATEGORIES.pharmacy
+  const sect = await StockService.getScopedStockByFacility({ categories: cats })
+  const ids = [...new Set(sect.map(r => r.commodity_id))]
+  if (ids.length) {
+    const got = (await query('select distinct category from commodities where id = any($1)', [ids])).rows.map(r => r.category)
+    assert.ok(got.every(c => cats.includes(c)), `section leaked: ${got}`)
+  }
+})
+
+dbTest('facility grain: commodity_id narrows to the drill-down commodity only', async () => {
+  const all = await StockService.getScopedStockByFacility({})
+  const one = all[0].commodity_id
+  const drill = await StockService.getScopedStockByFacility({ commodityId: one })
+  assert.ok(drill.length > 0)
+  assert.ok(drill.every(r => r.commodity_id === one), 'drill returned another commodity')
+  assert.equal(drill.length, all.filter(r => r.commodity_id === one).length, 'drill dropped facilities')
+})
+
+dbTest('facility grain totals reconcile with the commodity grain', async () => {
+  const byFac = await StockService.getScopedStockByFacility({})
+  const byComm = await StockService.getScopedStockSummary({})
+  const roll = {}
+  byFac.forEach(r => {
+    if (!roll[r.commodity_id]) roll[r.commodity_id] = { store: 0, disp: 0, dsd: 0, sdp: 0 }
+    roll[r.commodity_id].store += r.store_qty
+    roll[r.commodity_id].disp += r.dispensary_qty
+    roll[r.commodity_id].dsd += r.dsd_qty
+    roll[r.commodity_id].sdp += r.sdp_qty
+  })
+  for (const c of byComm) {
+    const r = roll[c.commodity_id]
+    assert.ok(r, `${c.commodity_id} missing from the facility grain`)
+    assert.equal(r.store, c.store_qty, `${c.commodity_id}: store must roll up`)
+    assert.equal(r.disp, c.dispensary_qty, `${c.commodity_id}: dispensary must roll up`)
+    assert.equal(r.dsd, c.dsd_qty, `${c.commodity_id}: DSD must roll up`)
+    assert.equal(r.sdp, c.sdp_qty, `${c.commodity_id}: SDP must roll up`)
+  }
+})

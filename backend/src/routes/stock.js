@@ -116,8 +116,20 @@ router.get('/', async (req, res) => {
  */
 router.get('/summary', async (req, res) => {
   try {
-    const { facility_id, facility_ids, commodity_ids } = req.query
+    const { facility_id, facility_ids, commodity_ids, group_by, commodity_id } = req.query
     const csv = v => v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null
+
+    // Grain, from an explicit allowlist rather than a free-form GROUP BY:
+    //   commodity (default) — one row per commodity, what the dashboards use
+    //   facility            — one row per (commodity, facility), for All Facilities'
+    //                         reporting-site counts and its per-commodity drill-down
+    const grain = group_by ? String(group_by) : 'commodity'
+    if (!['commodity', 'facility'].includes(grain)) {
+      return sendValidationError(res, 'Unsupported group_by. Must be: commodity | facility', 'group_by')
+    }
+    if (commodity_id && !validators.isUUID(commodity_id)) {
+      return sendValidationError(res, 'Invalid commodity_id format', 'commodity_id')
+    }
 
     let facilityIds
     if (facility_id) {
@@ -130,11 +142,14 @@ router.get('/summary', async (req, res) => {
       facilityIds = await resolveListFacilityIds(req, 'stock', facility_ids)
     }
 
-    const summary = await StockService.getScopedStockSummary({
+    const args = {
       facilityIds,
       commodityIds: csv(commodity_ids),
       categories: req.scope.sectionCategories,
-    })
+    }
+    const summary = grain === 'facility'
+      ? await StockService.getScopedStockByFacility({ ...args, commodityId: commodity_id || null })
+      : await StockService.getScopedStockSummary(args)
 
     res.json({ success: true, data: summary, count: summary.length, timestamp: new Date().toISOString() })
   } catch (err) {
