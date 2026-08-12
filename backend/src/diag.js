@@ -45,6 +45,13 @@ const slowest = []            // the 25 slowest requests seen since start
 const slowQueries = []        // individual SQL statements over 500 ms
 let sampler = null
 
+// Never record credentials. Paths can carry ?token= (the SSE stream does), and
+// SQL is stored as TEXT ONLY — bind parameters are deliberately not captured, so
+// patient identifiers and quantities never reach this buffer.
+export function redact(url) {
+  return String(url).replace(/([?&](?:token|access_token|password|key)=)[^&]*/gi, '$1[redacted]')
+}
+
 export function poolSnapshot(pool) {
   return { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount }
 }
@@ -84,7 +91,7 @@ export function diagMiddleware(pool) {
       res.setHeader('X-Diag-Queries', String(store.n || 0))
       if (total > 1000) {
         slowest.push({
-          path: req.originalUrl.slice(0, 120), total: +total.toFixed(0),
+          path: redact(req.originalUrl).slice(0, 120), total: +total.toFixed(0),
           pool_wait: +pw.toFixed(0), db: +db.toFixed(0),
           rest: +Math.max(0, total - pw - db).toFixed(0), queries: store.n || 0,
           poolAtFinish: poolSnapshot(pool), at: new Date().toISOString(),

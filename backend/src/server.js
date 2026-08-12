@@ -6,7 +6,7 @@ import cors from 'cors'
 import compression from 'compression'
 
 import { authMiddleware } from './middleware/auth.js'
-import { attachScope } from './middleware/scope.js'
+import { attachScope, isAdminScope } from './middleware/scope.js'
 import { initRealtime, sseHandler } from './realtime.js'
 import { DIAG, diagMiddleware, diagHandler, startSampler } from './diag.js'
 import { pool } from './db.js'
@@ -58,9 +58,12 @@ app.use(compression({
   },
 }))
 
-// Request-boundary timing (Server-Timing header). No-op unless ENVO_DIAG=1.
-app.use(diagMiddleware(pool))
-startSampler(pool)
+// Request-boundary timing (Server-Timing header). Registered ONLY when
+// ENVO_DIAG=1, so the default path carries no extra middleware at all.
+if (DIAG) {
+  app.use(diagMiddleware(pool))
+  startSampler(pool)
+}
 
 app.use(express.json())
 
@@ -87,15 +90,19 @@ app.get('/api/events', sseHandler)
 // /api route handler, so individual routes can assume req.user / req.scope exist.
 app.use('/api', authMiddleware, attachScope)
 
-// Dev-only pool readout. Admin-gated, and falls through to the 404 handler
-// unless ENVO_DIAG=1 so it cannot be probed in normal operation.
-app.get('/api/_diag/pool', (req, res, next) => {
-  if (!DIAG) return next()
-  if (!['overall_admin', 'state_admin', 'lga_admin'].includes(req.scope?.accessLevel)) {
-    return res.status(403).json({ success: false, error: 'Forbidden', code: 'FORBIDDEN' })
-  }
-  return diagHandler(pool)(req, res)
-})
+// Pool readout. The route does not exist unless ENVO_DIAG=1 — it is never
+// mounted, so it 404s like any unknown path rather than advertising itself. When
+// mounted it is still admin-only, via the same isAdminScope guard the rest of the
+// oversight surface uses. It exposes SQL text (never bind parameters), so it must
+// not be reachable by an ordinary facility user.
+if (DIAG) {
+  app.get('/api/_diag/pool', (req, res) => {
+    if (!isAdminScope(req.scope)) {
+      return res.status(403).json({ success: false, error: 'Forbidden', code: 'FORBIDDEN' })
+    }
+    return diagHandler(pool)(req, res)
+  })
+}
 
 app.use('/api/stock', stockRoutes)
 app.use('/api/transfers', transferRoutes)
