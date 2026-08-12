@@ -1,6 +1,5 @@
 import { query } from '../db.js'
 import { categoriesForSection, isStateOfficeName, STATE_OFFICE_CATEGORIES } from '../constants/sections.js'
-import { MODULES, DEFAULT_MODULE } from '../constants/modules.js'
 
 // Facility + section scoping for the API layer.
 //
@@ -63,16 +62,6 @@ export function attachScope(req, res, next) {
   const meta = (req.user && req.user.user_metadata) || {}
   const isAdminFlag = meta.is_admin === true || meta.is_admin === 'true'
 
-  // Active module (which commodity programme the caller is working in). Comes from
-  // the `x-envo-module` header, then a `?module=` query param, else the default.
-  // An explicit but unknown value is a client error — reject it rather than
-  // silently scoping to the wrong (or empty) catalogue.
-  const rawModule = req.get?.('x-envo-module') || req.query?.module || null
-  const module = rawModule ? String(rawModule).toLowerCase() : DEFAULT_MODULE
-  if (!MODULES.includes(module)) {
-    return res.status(400).json({ success: false, error: `Unknown module: ${rawModule}`, code: 'BAD_MODULE' })
-  }
-
   let accessLevel = 'facility'
   if (meta.access_level) accessLevel = meta.access_level
   else if (isAdminFlag) accessLevel = 'overall_admin'
@@ -91,23 +80,17 @@ export function attachScope(req, res, next) {
   if (sectionCategories && isStateOfficeName(meta.facility_name)) {
     sectionCategories = [...STATE_OFFICE_CATEGORIES]
   }
-  // Essential Commodities has no pharmacy/lab split, and its categories aren't the HIV
-  // section lists — so the section-category filter must not apply there (it would drop
-  // every essential row). `section` itself is kept for the pharmacy-only module gate.
-  if (module === 'essential') sectionCategories = null
 
   req.scope = {
     accessLevel,
     isAdmin: isAdminFlag || accessLevel === 'overall_admin',
     facilityId: meta.facility_id || null,
     facilityName: meta.facility_name || null,
-    facilityRole: meta.facility_role || null,
     adminState: meta.admin_state || null,
     adminLga: meta.admin_lga || null,
     adminCluster: meta.admin_cluster || null,
     section,
     sectionCategories,
-    module,
   }
   next()
 }
@@ -254,42 +237,6 @@ export function isAdminScope(scope) {
 
 export function scopedCategories(req) {
   return req.scope.sectionCategories // null = all, or [categories]
-}
-
-// The caller's active module. Read routes pass this into the service query so it
-// filters by commodities.module (and facility_modules).
-export function scopedModule(req) {
-  return req.scope.module
-}
-
-// The modules a facility-level caller is enrolled in (from facility_modules),
-// memoized per request. Returns null for admin tiers — they oversee every module,
-// so module is a view filter for them, not an access gate.
-async function callerModules(req) {
-  if (req._callerModules !== undefined) return req._callerModules
-  const s = req.scope
-  let mods = null
-  if (s.accessLevel === 'facility' && s.facilityId) {
-    mods = (await query('select module from facility_modules where facility_id = $1', [s.facilityId]))
-      .rows.map(r => r.module)
-  }
-  req._callerModules = mods
-  return mods
-}
-
-// Guard a module-scoped endpoint: a facility user may only work in a module they're
-// enrolled in; admins pass through. Returns true if allowed; on denial writes a 403
-// and returns false (caller should `return`).
-export async function enforceModuleAccess(req, res) {
-  const s = req.scope
-  const mods = await callerModules(req)
-  if (mods === null) return true // admin tiers see every module
-  if (!mods.includes(s.module)) return forbid(res, 'Not enrolled in this module'), false
-  // Essential Commodities is a pharmacy-section module — lab accounts can't open it.
-  if (s.module === 'essential' && s.section !== 'pharmacy') {
-    return forbid(res, 'Essential Commodities is available to pharmacy only'), false
-  }
-  return true
 }
 
 // Guard a single-commodity read/write against the caller's section. Skips (allows)
