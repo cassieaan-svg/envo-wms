@@ -38,7 +38,7 @@ export function Alerts() {
   const [filterCat, setFilterCat]   = useState('')   // request alerts: commodity category
   const [stockCat, setStockCat]     = useState('')   // expiry / out / low / overstock: category
   const [drillComm, setDrillComm]   = useState(null) // stock tab: commodity drilled into {id,name,cat,comm}
-  const [drillSites, setDrillSites] = useState({ sdp:{}, dsd:{} }) // per-facility site stock for the drilled commodity
+  const [drillRows, setDrillRows] = useState([])  // per-facility rollup for the drilled commodity
   const [expDrillComm, setExpDrillComm] = useState(null) // expiry tab: commodity drilled into {id,name,cat}
   const [expUrgency, setExpUrgency] = useState('all')    // expiry tab urgency filter: 'all'|Expired|Critical|Warning|Monitor
   const [assigningId, setAssigningId]           = useState(null)
@@ -339,22 +339,18 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   useEffect(()=>{ if(store.isAdmin() && reqView==='history') loadHistory() },[reqView, histFrom, histTo])
   useEffect(()=>{ if(store.isAdmin() && reqView==='inflight') loadInflight() },[reqView])
 
-  // Drill-in: load per-facility SDP/DSD site stock for the selected commodity so
-  // the facility breakdown total matches the Dashboard (store + dispensary + site).
+  // Drill-in: one per-facility rollup for the selected commodity — store,
+  // dispensary and both site tables in a single response. This replaces two
+  // paginated site-stock calls AND the page's last read of the global stock
+  // array, which for an admin was a 449 KB download (~5.7 s on the measured
+  // link) fetched on every visit to this page just for this one breakdown.
   useEffect(() => {
-    if (!drillComm) { setDrillSites({ sdp:{}, dsd:{} }); return }
+    if (!drillComm) { setDrillRows([]); return }
     let active = true
     const facIds = store.isOverallAdmin() ? undefined : store.allFacilities.map(f => f.id)
-    Promise.all([
-      api.stock.sdp.list({ commodity_id: drillComm.id, facility_ids: facIds, limit: 2000 }).catch(()=>[]),
-      api.stock.dsd.list({ commodity_id: drillComm.id, facility_ids: facIds, limit: 2000 }).catch(()=>[]),
-    ]).then(([sdp,dsd]) => {
-      if (!active) return
-      const sm={}, dm={}
-      ;(sdp||[]).forEach(r=>{ sm[r.facility_id]=(sm[r.facility_id]||0)+r.quantity })
-      ;(dsd||[]).forEach(r=>{ dm[r.facility_id]=(dm[r.facility_id]||0)+r.quantity })
-      setDrillSites({ sdp:sm, dsd:dm })
-    })
+    api.stock.summary({ group_by: 'facility', commodity_id: drillComm.id, facility_ids: facIds })
+      .then(rows => { if (active) setDrillRows(rows || []) })
+      .catch(() => { if (active) setDrillRows([]) })
     return () => { active = false }
   }, [drillComm])
 
@@ -639,17 +635,20 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       {['out','low','overstock'].includes(tab) && drillComm ? (() => {
         const isLabSel  = isLabCategory(drillComm.cat)
         const statusFor = tab==='out' ? 'out' : tab==='low' ? 'low' : 'over'
-        // Per-facility store + dispensary from the loaded stock, plus on-demand SDP/DSD site stock.
+        // Built from the per-facility rollup. Facility names come from the
+        // catalogue already in the store rather than being repeated on every row.
+        // `other_qty` is deliberately ignored: this breakdown only ever counted
+        // store and dispensary rows from the stock table, and that is preserved.
         const byFac = {}
-        store.stockData.filter(r => r.commodity_id === drillComm.id && inScope(r.facility_id)).forEach(r => {
-          const f = byFac[r.facility_id] || (byFac[r.facility_id] = { id:r.facility_id, name:r.facilities?.name||'—', state:r.facilities?.state||'—', lga:r.facilities?.lga||'—', store:0, dispensary:0, dsd:0, sdp:0, amc:0, comm:r.commodities })
-          if (r.location_type === 'store') f.store += r.quantity
-          else if (r.location_type === 'dispensary') f.dispensary += r.quantity
-          if ((r.baseline_amc||0) > f.amc) f.amc = r.baseline_amc||0
+        drillRows.filter(r => inScope(r.facility_id)).forEach(r => {
+          const x = store.allFacilities.find(y => y.id === r.facility_id)
+          byFac[r.facility_id] = {
+            id: r.facility_id, name: x?.name||'—', state: x?.state||'—', lga: x?.lga||'—',
+            store: r.store_qty, dispensary: r.dispensary_qty,
+            dsd: r.dsd_qty, sdp: r.sdp_qty,
+            amc: r.baseline_amc || 0, comm: drillComm.comm,
+          }
         })
-        const ensure = fid => byFac[fid] || (byFac[fid] = (() => { const x=store.allFacilities.find(y=>y.id===fid); return { id:fid, name:x?.name||'—', state:x?.state||'—', lga:x?.lga||'—', store:0, dispensary:0, dsd:0, sdp:0, amc:0, comm:drillComm.comm } })())
-        Object.entries(drillSites.sdp).forEach(([fid,q]) => { if (inScope(fid)) ensure(fid).sdp += q })
-        Object.entries(drillSites.dsd).forEach(([fid,q]) => { if (inScope(fid)) ensure(fid).dsd += q })
         Object.values(byFac).forEach(f => { f.total = isLabSel ? (f.store + f.sdp) : (f.store + f.dispensary + f.dsd) })
         const list = Object.values(byFac).filter(f => getStockStatus(f.total, f.amc) === statusFor).sort((a,b)=>a.total-b.total)
         const cols = isLabSel ? ['Facility','State','LGA','Store SOH','SDP SOH','Total SOH','MOS'] : ['Facility','State','LGA','Store SOH','Dispensary SOH','DSD SOH','Total SOH','MOS']

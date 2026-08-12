@@ -86,7 +86,9 @@ const adminMap = {
 //
 //   pharmacy dispense = pages/pharmacy/RecordStock  → reads (lines 64, 72, 180)
 //   lab      dispense = pages/lab/RecordStock       → does NOT read
-//   pharmacy alerts   = pages/pharmacy/Alerts       → reads (line 648, drill-in)
+//   pharmacy alerts   = pages/pharmacy/Alerts       → reads only for a FACILITY
+//                                                     user (1 KB scope); its admin
+//                                                     drill-in now uses the rollup
 //   all-facilities    = pages/admin/AllFacilities   → no longer reads it; moved to
 //                                                     the facility-grain rollup
 //   lab      alerts   = pages/lab/Alerts            → does NOT read (migrated)
@@ -100,7 +102,7 @@ const adminMap = {
 const STOCK_PAGES = {
   pharm: new Set(['dispense', 'adjustment', 'transfers', 'alerts']),
   lab:   new Set(['adjustment', 'transfers']),
-  admin: new Set(['alerts']),
+  admin: new Set(),
   dsd:   new Set(),
   sdp:   new Set(),
 }
