@@ -8,6 +8,8 @@ import compression from 'compression'
 import { authMiddleware } from './middleware/auth.js'
 import { attachScope } from './middleware/scope.js'
 import { initRealtime, sseHandler } from './realtime.js'
+import { DIAG, diagMiddleware, diagHandler, startSampler } from './diag.js'
+import { pool } from './db.js'
 
 import authRoutes from './routes/auth.js'
 import stockRoutes from './routes/stock.js'
@@ -56,6 +58,10 @@ app.use(compression({
   },
 }))
 
+// Request-boundary timing (Server-Timing header). No-op unless ENVO_DIAG=1.
+app.use(diagMiddleware(pool))
+startSampler(pool)
+
 app.use(express.json())
 
 // Health check endpoint
@@ -80,6 +86,16 @@ app.get('/api/events', sseHandler)
 // req.user; attachScope normalizes user_metadata into req.scope. Both run before any
 // /api route handler, so individual routes can assume req.user / req.scope exist.
 app.use('/api', authMiddleware, attachScope)
+
+// Dev-only pool readout. Admin-gated, and falls through to the 404 handler
+// unless ENVO_DIAG=1 so it cannot be probed in normal operation.
+app.get('/api/_diag/pool', (req, res, next) => {
+  if (!DIAG) return next()
+  if (!['overall_admin', 'state_admin', 'lga_admin'].includes(req.scope?.accessLevel)) {
+    return res.status(403).json({ success: false, error: 'Forbidden', code: 'FORBIDDEN' })
+  }
+  return diagHandler(pool)(req, res)
+})
 
 app.use('/api/stock', stockRoutes)
 app.use('/api/transfers', transferRoutes)

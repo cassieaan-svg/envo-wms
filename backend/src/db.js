@@ -1,7 +1,16 @@
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import dotenv from 'dotenv'
+import { performance } from 'node:perf_hooks'
+import { DIAG, track, trackQuery } from './diag.js'
 
-dotenv.config()
+// Resolved from this file, not the working directory. A bare dotenv.config() silently
+// finds nothing when the process is started from the repo root (e.g.
+// `npm run dev --prefix backend`), and the pool then falls back to its defaults and
+// connects to the wrong database — which fails much later, as confusing "relation does
+// not exist" errors rather than a connection error.
+dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '..', '.env') })
 
 // Local Postgres connection pool — replaces the Supabase client for all data
 // access. Reads standard PG* env vars (see backend/.env). On the VM these point
@@ -20,7 +29,29 @@ export const pool = new pg.Pool({
 pool.on('error', err => console.error('[db] idle client error:', err.message))
 
 // Thin query helper. Use parameterized queries everywhere ($1, $2, …).
-export const query = (text, params) => pool.query(text, params)
+//
+// With ENVO_DIAG=1 it acquires the connection EXPLICITLY so the time spent
+// waiting for the pool can be separated from the time Postgres spends executing.
+// That split is the only way to tell a slow query from a saturated pool: a
+// request queued here has no PostgreSQL session yet, so pg_stat_activity shows
+// nothing at all. Off by default — the plain path is unchanged.
+export const query = async (text, params) => {
+  if (!DIAG) return pool.query(text, params)
+  const t0 = performance.now()
+  const client = await pool.connect()
+  const t1 = performance.now()
+  try {
+    const result = await client.query(text, params)
+    const dbMs = performance.now() - t1
+    track('pool_wait', t1 - t0)
+    track('db', dbMs)
+    track('n', 1)
+    trackQuery(text, dbMs, t1 - t0)
+    return result
+  } finally {
+    client.release()
+  }
+}
 
 // Run `fn` inside a single transaction. `fn` receives an `exec(text, params)`
 // bound to a dedicated pooled client; every query it issues runs on that one
