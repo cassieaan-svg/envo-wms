@@ -1,7 +1,7 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection, locationFacilityIds, resolveListFacilityIds } from '../middleware/scope.js'
-import { categoriesForSection } from '../constants/sections.js'
+import { enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds, enforceCommoditySection, locationFacilityIds, resolveListFacilityIds, sectionFilter } from '../middleware/scope.js'
+import { categoriesForSection, narrowGrantsToCategories } from '../constants/sections.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
@@ -41,7 +41,7 @@ router.get('/', async (req, res) => {
       }
       const commodityIds = csv(commodity_ids)
       const stock = await StockService.getScopedStock({
-        facilityIds, commodityIds, categories: req.scope.sectionCategories,
+        facilityIds, commodityIds, ...sectionFilter(req),
         limit: parseInt(limit), offset: parseInt(offset)
       })
       return res.json({ success: true, data: stock, count: stock.length, timestamp: new Date().toISOString() })
@@ -68,7 +68,7 @@ router.get('/', async (req, res) => {
     const stock = await StockService.getStock(facility_id, {
       commodityId: commodity_id,
       locationType: location_type,
-      categories: req.scope.sectionCategories,
+      ...sectionFilter(req),
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
@@ -145,7 +145,7 @@ router.get('/summary', async (req, res) => {
     const args = {
       facilityIds,
       commodityIds: csv(commodity_ids),
-      categories: req.scope.sectionCategories,
+      ...sectionFilter(req),
     }
     const summary = grain === 'facility'
       ? await StockService.getScopedStockByFacility({ ...args, commodityId: commodity_id || null })
@@ -209,8 +209,12 @@ router.get('/lots/expiry', async (req, res) => {
     const sectionCats = categoriesForSection(section)
     const tokenCats = req.scope.sectionCategories
     let categories = tokenCats
+    let commodityNames = req.scope.sectionCommodityNames
     if (Array.isArray(sectionCats)) {
       categories = Array.isArray(tokenCats) ? tokenCats.filter(c => sectionCats.includes(c)) : sectionCats
+      // Individually-granted commodities narrow the same way — keep only those whose
+      // own category is in the requested section.
+      commodityNames = narrowGrantsToCategories(commodityNames, sectionCats)
     }
 
     let facilityIds
@@ -233,7 +237,7 @@ router.get('/lots/expiry', async (req, res) => {
     }
 
     const lots = await StockService.getScopedLots({
-      facilityIds, commodityIds: csv(commodity_ids), categories,
+      facilityIds, commodityIds: csv(commodity_ids), categories, commodityNames,
       expiryTo: expiry_to || null, includeUnknown: include_unknown === '1' || include_unknown === 'true',
     })
     res.json({ success: true, data: lots, count: lots.length, timestamp: new Date().toISOString() })
@@ -291,7 +295,7 @@ router.get('/dsd', async (req, res) => {
       dsdSiteName: dsd_site_name,
       commodityId: commodity_id,
       facilityIds,
-      categories: req.scope.sectionCategories,
+      ...sectionFilter(req),
       limit: parseInt(limit),
       offset: parseInt(offset)
     })
@@ -332,7 +336,7 @@ router.get('/sdp', async (req, res) => {
       sdpName: sdp_name,
       commodityId: commodity_id,
       facilityIds,
-      categories: req.scope.sectionCategories,
+      ...sectionFilter(req),
       limit: parseInt(limit),
       offset: parseInt(offset)
     })

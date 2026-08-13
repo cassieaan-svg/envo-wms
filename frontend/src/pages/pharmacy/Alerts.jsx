@@ -10,7 +10,7 @@ import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, transferReason } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, transferReason, reviewerNameOf } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
 
 export function Alerts() {
@@ -48,8 +48,7 @@ export function Alerts() {
   // Prefilled with the signed-in admin's own name, the same source Intake uses for
   // "Received by". Still editable — someone reviewing on a colleague's behalf can
   // overwrite it — but the common case stops being a retyped name every time.
-  const [assignReviewedBy, setAssignReviewedBy] = useState(
-    () => store.user?.user_metadata?.full_name || store.user?.user_metadata?.name || '')
+  const [assignReviewedBy, setAssignReviewedBy] = useState(() => reviewerNameOf(store.user))
   const [assignQty, setAssignQty]               = useState(1)
   const [assignLoading, setAssignLoading]       = useState(false)
   // Unscoped facility list for the assign picker only — lets a state admin
@@ -239,8 +238,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     // Report a real failure instead of swallowing it: this moves stock now.
     // Record a person, never a login e-mail: this name is what shows against
     // the dispute and, for any accepted portion, on the printed transfer form.
-    const u = store.user
-    let byName = (u?.user_metadata?.full_name || u?.user_metadata?.name || '').trim()
+    let byName = reviewerNameOf(store.user)
     if (!byName) {
       const typed = window.prompt('Your full name (recorded against this dispute):', '')
       if (typed === null) return
@@ -336,7 +334,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   // never overwrite something already typed.
   useEffect(() => {
     if (assignReviewedBy) return
-    const n = store.user?.user_metadata?.full_name || store.user?.user_metadata?.name || ''
+    const n = reviewerNameOf(store.user)
     if (n) setAssignReviewedBy(n)
   }, [store.user])
 

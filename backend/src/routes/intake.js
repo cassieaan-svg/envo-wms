@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection } from '../middleware/scope.js'
+import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection, sectionFilter } from '../middleware/scope.js'
 import { LogService } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 
@@ -133,7 +133,7 @@ router.get('/', async (req, res) => {
     }
     const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
     const base = {
-      supplier_source, date, from, to, commodityIds, categories: req.scope.sectionCategories, section,
+      supplier_source, date, from, to, commodityIds, ...sectionFilter(req), section,
       expiryFrom: expiry_from, expiryTo: expiry_to,
       hasQuantity: has_quantity === 'true' || has_quantity === '1',
       limit: parseInt(limit), offset: parseInt(offset)

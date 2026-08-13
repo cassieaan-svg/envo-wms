@@ -248,6 +248,43 @@ export function allowedCategoriesFor(commoditySection, facilityName) {
   return [...(SECTION_CATEGORIES[commoditySection] || [])]
 }
 
+// Per-facility grants of INDIVIDUAL commodities, on top of the category list above.
+// Mirror of FACILITY_EXTRA_COMMODITIES in backend/src/constants/sections.js — the
+// backend copy is the enforced one; this exists so the catalogue the UI builds
+// matches what the API will actually return.
+//
+// By commodity NAME and keyed to ONE facility because the case it exists for cannot
+// be expressed as a category: Akwa Ibom's state office handles Alere Determine, whose
+// category is RTKs — granting the category would hand every RTK to every state office.
+const FACILITY_EXTRA_COMMODITIES = {
+  'akwa ibom state office store': ['Alere Determine'],
+}
+
+export function extraCommoditiesForFacility(name) {
+  return FACILITY_EXTRA_COMMODITIES[String(name || '').trim().toLowerCase()] || []
+}
+
+// Does this account's catalogue include the commodity? Category first, then the
+// facility's individual grants. `allowedCats` null = no restriction (admins).
+export function allowsCommodity(allowedCats, facilityName, commodity) {
+  if (!allowedCats) return true
+  if (allowedCats.includes(commodity?.category)) return true
+  return extraCommoditiesForFacility(facilityName).includes(commodity?.name)
+}
+
+// The name to prefill into a "Reviewed by" / signer field for the signed-in user.
+//
+// `reviewer_name` is a deliberate override, separate from `full_name`: full_name is
+// what the sidebar shows ("LOGGED IN AS"), and several accounts are named for a role
+// ("Akwa Ibom State Admin") rather than the person who actually signs off. Setting
+// reviewer_name lets that account sign as a person without relabelling the session.
+// Absent (the normal case) it falls back to full_name, so nothing changes for anyone
+// who hasn't set one. Prefill only — the field stays editable.
+export function reviewerNameOf(user) {
+  const m = user?.user_metadata || {}
+  return (m.reviewer_name || m.full_name || m.name || '').trim()
+}
+
 // A commodity category belongs to the lab section (uses SDP, no dispensary/DSD).
 export const isLabCategory = (category) => (SECTION_CATEGORIES.lab || []).includes(category)
 

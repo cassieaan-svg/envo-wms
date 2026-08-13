@@ -1,5 +1,6 @@
 import { query } from '../db.js'
-import { categoriesForSection, isStateOfficeName, STATE_OFFICE_CATEGORIES } from '../constants/sections.js'
+import { categoriesForSection, isStateOfficeName, STATE_OFFICE_CATEGORIES,
+         extraCommoditiesForFacility, allowsCommodity } from '../constants/sections.js'
 
 // Facility + section scoping for the API layer.
 //
@@ -80,6 +81,10 @@ export function attachScope(req, res, next) {
   if (sectionCategories && isStateOfficeName(meta.facility_name)) {
     sectionCategories = [...STATE_OFFICE_CATEGORIES]
   }
+  // Individually-granted commodities that fall outside those categories (see
+  // FACILITY_EXTRA_COMMODITIES). Empty for every facility without an explicit grant,
+  // and irrelevant to unrestricted admins, whose category filter is null anyway.
+  const sectionCommodityNames = sectionCategories ? extraCommoditiesForFacility(meta.facility_name) : []
 
   req.scope = {
     accessLevel,
@@ -91,6 +96,7 @@ export function attachScope(req, res, next) {
     adminCluster: meta.admin_cluster || null,
     section,
     sectionCategories,
+    sectionCommodityNames,
   }
   next()
 }
@@ -239,6 +245,23 @@ export function scopedCategories(req) {
   return req.scope.sectionCategories // null = all, or [categories]
 }
 
+/**
+ * The caller's complete commodity-visibility filter, as the option pair every scoped
+ * service accepts. Spread it into the service options:
+ *
+ *   StockService.getScopedStock({ facilityIds, ...sectionFilter(req) })
+ *
+ * Spread rather than two separate arguments on purpose: the category list and the
+ * per-facility commodity grant must travel together. Passing only `categories` at one
+ * endpoint would silently hide a granted commodity there and nowhere else.
+ */
+export function sectionFilter(req) {
+  return {
+    categories: req.scope.sectionCategories,
+    commodityNames: req.scope.sectionCommodityNames,
+  }
+}
+
 // Guard a single-commodity read/write against the caller's section. Skips (allows)
 // when the caller isn't section-restricted. Looks up the commodity's category and
 // 403s if it's outside the caller's section. Returns true/false like the facility
@@ -247,12 +270,17 @@ export function scopedCategories(req) {
 export async function enforceCommoditySection(req, res, commodityId, category) {
   const cats = req.scope.sectionCategories
   if (!cats) return true // sees both sections
-  let cat = category
-  if (cat === undefined) {
-    const { rows } = await query('select category from commodities where id = $1', [commodityId])
-    cat = rows[0]?.category
+  let cat = category, name
+  // The commodity NAME is needed too, since an individually-granted commodity is
+  // allowed despite its category being outside the caller's section. A caller passing
+  // `category` in to skip the lookup still needs the name, so look it up when the
+  // caller holds grants at all (nobody but a granted facility pays for this).
+  if (cat === undefined || req.scope.sectionCommodityNames?.length) {
+    const { rows } = await query('select category, name from commodities where id = $1', [commodityId])
+    if (cat === undefined) cat = rows[0]?.category
+    name = rows[0]?.name
   }
-  if (cat && cats.includes(cat)) return true
+  if (allowsCommodity(cats, req.scope.sectionCommodityNames, cat, name)) return true
   return forbid(res, 'Not authorized for this commodity section'), false
 }
 
@@ -270,8 +298,10 @@ export async function enforceTransferAccess(req, res, transfer) {
   const s = req.scope
   // Section gate first — a lab viewer must not touch a pharmacy transfer, etc.
   if (s.sectionCategories) {
-    const cat = transfer.commodities?.category
-    if (!cat || !s.sectionCategories.includes(cat)) {
+    const { category, name } = transfer.commodities || {}
+    // Unknown category is still a refusal (the original rule) — allowsCommodity only
+    // waives that when the commodity is one this facility was granted by name.
+    if (!allowsCommodity(s.sectionCategories, s.sectionCommodityNames, category, name)) {
       return forbid(res, 'Not authorized for this transfer'), false
     }
   }
@@ -294,8 +324,10 @@ export async function enforceTransferAccess(req, res, transfer) {
 export async function enforceTransferWrite(req, res, transfer) {
   const s = req.scope
   if (s.sectionCategories) {
-    const cat = transfer.commodities?.category
-    if (cat != null && !s.sectionCategories.includes(cat)) {
+    // Unlike the read guard, an absent category is allowed through here (a create line
+    // carries no nested commodity — the route checks it via enforceCommoditySection).
+    const { category, name } = transfer.commodities || {}
+    if (category != null && !allowsCommodity(s.sectionCategories, s.sectionCommodityNames, category, name)) {
       return forbid(res, 'Not authorized for this transfer'), false
     }
   }

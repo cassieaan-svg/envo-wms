@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db.js'
 import { LotService, ymd } from './lotService.js'
+import { sectionFilterSql } from '../constants/sections.js'
 
 // Embedded-object SQL fragments. The frontend (and the other services) expect
 // stock rows to carry nested `facilities` / `commodities` objects, the same
@@ -20,7 +21,7 @@ export class StockService {
    * facility/commodity details, ordered by commodity name.
    */
   static async getStock(facilityId, options = {}) {
-    const { commodityId, locationType, categories = null, limit = 1000, offset = 0 } = options
+    const { commodityId, locationType, categories = null, commodityNames = null, limit = 1000, offset = 0 } = options
 
     const params = [facilityId]
     let sql = `
@@ -34,8 +35,10 @@ export class StockService {
 
     if (commodityId) { params.push(commodityId); sql += ` and s.commodity_id = $${params.length}` }
     if (locationType) { params.push(locationType); sql += ` and s.location_type = $${params.length}` }
-    // Section enforcement: restrict to the caller's commodity categories.
-    if (Array.isArray(categories) && categories.length) { params.push(categories); sql += ` and c.category = any($${params.length})` }
+    // Section enforcement: the caller's categories, plus any individually-granted
+    // commodities (see sectionFilterSql).
+    const secCond = sectionFilterSql('c', categories, commodityNames, params)
+    if (secCond) sql += ` and ${secCond}`
 
     params.push(limit, offset)
     sql += ` order by c.name nulls last limit $${params.length - 1} offset $${params.length}`
@@ -51,14 +54,14 @@ export class StockService {
    * `commodityIds` narrows to a commodity-section subset. Paginated via limit/offset.
    * Same row shape as getStock (nested facilities/commodities).
    */
-  static async getScopedStock({ facilityIds = null, commodityIds = null, categories = null, limit = 1000, offset = 0 } = {}) {
+  static async getScopedStock({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null, limit = 1000, offset = 0 } = {}) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
     if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`s.facility_id = any($${params.length})`) }
     if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`s.commodity_id = any($${params.length})`) }
-    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
+    { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
 
     let sql = `
       select s.id, s.facility_id, s.commodity_id, s.quantity, s.tablet_buffer,
@@ -106,7 +109,7 @@ export class StockService {
    * an array = only those, [] = short-circuit to none. `commodityIds` narrows to a
    * section-filtered catalogue; `categories` enforces the caller's section.
    */
-  static async getScopedStockSummary({ facilityIds = null, commodityIds = null, categories = null } = {}) {
+  static async getScopedStockSummary({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null } = {}) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     // One parameter list shared by all four branches, so the same filter lands on
@@ -114,13 +117,13 @@ export class StockService {
     const params = []
     const facIdx = Array.isArray(facilityIds) ? (params.push(facilityIds), params.length) : null
     const commIdx = (Array.isArray(commodityIds) && commodityIds.length) ? (params.push(commodityIds), params.length) : null
-    const catIdx = (Array.isArray(categories) && categories.length) ? (params.push(categories), params.length) : null
+    const secCond = sectionFilterSql('c', categories, commodityNames, params)
 
     // `t` is the aliased source table in each branch.
     const filt = t => [
       facIdx ? ` and ${t}.facility_id = any($${facIdx})` : '',
       commIdx ? ` and ${t}.commodity_id = any($${commIdx})` : '',
-      catIdx ? ` and c.category = any($${catIdx})` : '',
+      secCond ? ` and ${secCond}` : '',
     ].join('')
 
     const sql = `
@@ -193,19 +196,19 @@ export class StockService {
    * `commodityId` narrows to one commodity for the drill-down, which is the only
    * view that needs every facility at once.
    */
-  static async getScopedStockByFacility({ facilityIds = null, commodityIds = null, categories = null, commodityId = null } = {}) {
+  static async getScopedStockByFacility({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null, commodityId = null } = {}) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const facIdx = Array.isArray(facilityIds) ? (params.push(facilityIds), params.length) : null
     const commIdx = (Array.isArray(commodityIds) && commodityIds.length) ? (params.push(commodityIds), params.length) : null
-    const catIdx = (Array.isArray(categories) && categories.length) ? (params.push(categories), params.length) : null
+    const secCond = sectionFilterSql('c', categories, commodityNames, params)
     const oneIdx = commodityId ? (params.push(commodityId), params.length) : null
 
     const filt = t => [
       facIdx ? ` and ${t}.facility_id = any($${facIdx})` : '',
       commIdx ? ` and ${t}.commodity_id = any($${commIdx})` : '',
-      catIdx ? ` and c.category = any($${catIdx})` : '',
+      secCond ? ` and ${secCond}` : '',
       oneIdx ? ` and ${t}.commodity_id = $${oneIdx}` : '',
     ].join('')
 
@@ -273,14 +276,14 @@ export class StockService {
    * already-expired lots are always included. `includeUnknown` keeps null-expiry
    * lots (they can't be bucketed, but the modal lists them).
    */
-  static async getScopedLots({ facilityIds = null, commodityIds = null, categories = null, expiryTo = null, includeUnknown = false } = {}) {
+  static async getScopedLots({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null, expiryTo = null, includeUnknown = false } = {}) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = ['l.quantity > 0']
     if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`l.facility_id = any($${params.length})`) }
     if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`l.commodity_id = any($${params.length})`) }
-    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
+    { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
     // Expiry window: keep everything already expired (< today) OR expiring on/before
     // the cutoff. null-expiry lots pass only when includeUnknown is set.
     if (expiryTo) {
@@ -311,7 +314,7 @@ export class StockService {
    * commodity and facility objects (SiteBreakdownModal reads facilities.name).
    */
   static async getDsdStock(facilityId, options = {}) {
-    const { dsdSiteName, commodityId, facilityIds, categories = null, limit = 1000, offset = 0 } = options
+    const { dsdSiteName, commodityId, facilityIds, categories = null, commodityNames = null, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
@@ -322,7 +325,7 @@ export class StockService {
     // DSD account (e.g. "VINZORB Pharmacy" vs "Vinzorb Pharmacy"), so match loosely.
     if (dsdSiteName) { params.push(dsdSiteName); conds.push(`lower(btrim(d.dsd_site_name)) = lower(btrim($${params.length}))`) }
     if (commodityId) { params.push(commodityId); conds.push(`d.commodity_id = $${params.length}`) }
-    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
+    { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
 
     let sql = `
       select d.id, d.facility_id, d.dsd_site_name, d.commodity_id, d.quantity, d.updated_at,
@@ -344,7 +347,7 @@ export class StockService {
    * optionally a single site or commodity. Embeds commodity + facility objects.
    */
   static async getSdpStock(facilityId, options = {}) {
-    const { sdpName, commodityId, facilityIds, categories = null, limit = 1000, offset = 0 } = options
+    const { sdpName, commodityId, facilityIds, categories = null, commodityNames = null, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
@@ -354,7 +357,7 @@ export class StockService {
     // Match loosely on case/whitespace so a differently-cased site name still resolves.
     if (sdpName) { params.push(sdpName); conds.push(`lower(btrim(sp.sdp_name)) = lower(btrim($${params.length}))`) }
     if (commodityId) { params.push(commodityId); conds.push(`sp.commodity_id = $${params.length}`) }
-    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
+    { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
 
     let sql = `
       select sp.id, sp.facility_id, sp.sdp_name, sp.commodity_id, sp.quantity, sp.updated_at,

@@ -1,6 +1,6 @@
 import { api } from '../lib/api'
 import { useAppStore } from '../store/appStore'
-import { allowedCategoriesFor } from './helpers'
+import { allowedCategoriesFor, allowsCommodity } from './helpers'
 
 // Rebuild the app store from a Supabase auth user. Used both on fresh sign-in
 // and when restoring a persisted session on page refresh, so the two paths
@@ -44,7 +44,9 @@ export async function hydrateSession(user) {
   const allowedCats = allowedCategoriesFor(commoditySection, meta.facility_name)
   let allCommodities = comms || []
   if (allowedCats) {
-    allCommodities = allCommodities.filter(c => allowedCats.includes(c.category))
+    // allowsCommodity, not a plain category test: a facility may hold individual
+    // commodity grants outside its categories (see extraCommoditiesForFacility).
+    allCommodities = allCommodities.filter(c => allowsCommodity(allowedCats, meta.facility_name, c))
   }
 
   // Resolve facility for facility-level users

@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
 import { LotService, ymd } from './lotService.js'
+import { sectionFilterSql } from '../constants/sections.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -163,14 +164,15 @@ async function assertBinCoversAdj(exec, soh, qty, commodityId, label) {
 //   facilityId  — single facility (when the route pinned one)
 //   facilityIds — array of facilities (scoped/admin multi-facility); [] = none
 //   commodityIds, section, date (single day), from/to (range on dateField)
-function applyLogFilters({ conds, params, dateField, facilityId, facilityIds, commodityIds, categories, date, from, to, section }) {
+function applyLogFilters({ conds, params, dateField, facilityId, facilityIds, commodityIds, categories, commodityNames, date, from, to, section }) {
   if (facilityId) { params.push(facilityId); conds.push(`l.facility_id = $${params.length}`) }
   else if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`l.facility_id = any($${params.length})`) }
 
   if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`l.commodity_id = any($${params.length})`) }
   // Section enforcement (server-side): restrict to the caller's commodity categories,
   // joined via commodities c. Robust even where the denormalized l.section is null.
-  if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
+  // Also admits any commodity individually granted to the caller's facility.
+  { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
   if (section) { params.push(section); conds.push(`l.section = $${params.length}`) }
 
   if (date) {
@@ -719,12 +721,12 @@ export class LogService {
    * since dispense_log has no site column.
    */
   static async getDispenseHistory(facilityId, options = {}) {
-    const { dsdSiteName, sdpName, date, from, to, facilityIds, commodityIds, categories, section, limit = 1000, offset = 0 } = options
+    const { dsdSiteName, sdpName, date, from, to, facilityIds, commodityIds, categories, commodityNames, section, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
-    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, date, from, to, section })
+    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, commodityNames, date, from, to, section })
 
     if (dsdSiteName) { params.push(`%[DSD: ${dsdSiteName}]%`); conds.push(`l.notes like $${params.length}`) }
     else if (sdpName) { params.push(`%[SDP: ${sdpName}]%`); conds.push(`l.notes like $${params.length}`) }
@@ -752,7 +754,7 @@ export class LogService {
    */
   static async getDispenseSummary(facilityId, options = {}) {
     const {
-      from, to, facilityIds, commodityIds, categories, section,
+      from, to, facilityIds, commodityIds, categories, commodityNames, section,
       groupBy = 'commodity,month', commodityId = null, category = null, tz = null,
     } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
@@ -762,7 +764,7 @@ export class LogService {
 
     const params = []
     const conds = []
-    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, from, to, section })
+    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, commodityNames, from, to, section })
 
     // Drill-in narrowing: ONE commodity, or ONE category. These are additional
     // filters on top of the caller's scope — they can only narrow it, never widen
@@ -861,14 +863,14 @@ export class LogService {
    */
   static async getIntakeHistory(facilityId, options = {}) {
     const {
-      date, from, to, supplier_source, facilityIds, commodityIds, categories, section,
+      date, from, to, supplier_source, facilityIds, commodityIds, categories, commodityNames, section,
       expiryFrom, expiryTo, hasQuantity, limit = 1000, offset = 0
     } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
-    applyLogFilters({ conds, params, dateField: 'received_at', facilityId, facilityIds, commodityIds, categories, date, from, to, section })
+    applyLogFilters({ conds, params, dateField: 'received_at', facilityId, facilityIds, commodityIds, categories, commodityNames, date, from, to, section })
 
     if (supplier_source) { params.push(supplier_source); conds.push(`l.supplier_source = $${params.length}`) }
     // Expiry-tracking filters (Monitoring expiry tab): a non-null expiry_date in
@@ -997,12 +999,12 @@ export class LogService {
    * Adjustment history for a facility, newest first, with nested commodity.
    */
   static async getAdjustmentHistory(facilityId, options = {}) {
-    const { date, from, to, adjustment_type, reason, facilityIds, commodityIds, categories, section, limit = 1000, offset = 0 } = options
+    const { date, from, to, adjustment_type, reason, facilityIds, commodityIds, categories, commodityNames, section, limit = 1000, offset = 0 } = options
     if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = []
-    applyLogFilters({ conds, params, dateField: 'adjusted_at', facilityId, facilityIds, commodityIds, categories, date, from, to, section })
+    applyLogFilters({ conds, params, dateField: 'adjusted_at', facilityId, facilityIds, commodityIds, categories, commodityNames, date, from, to, section })
 
     if (adjustment_type) { params.push(adjustment_type); conds.push(`l.adjustment_type = $${params.length}`) }
     if (reason) { params.push(reason); conds.push(`l.reason = $${params.length}`) }

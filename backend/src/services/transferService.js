@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
 import { LotService, splitLots } from './lotService.js'
+import { sectionFilterSql } from '../constants/sections.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -36,7 +37,7 @@ export class TransferService {
    */
   static async listTransfers(options = {}) {
     const {
-      facilityId, facilityIds, direction = 'any', status, statuses, section, categories,
+      facilityId, facilityIds, direction = 'any', status, statuses, section, categories, commodityNames,
       dateField, from, to, notesIncludes, limit = 1000, offset = 0
     } = options
 
@@ -64,8 +65,9 @@ export class TransferService {
     }
 
     if (section) { params.push(section); conds.push(`t.section = $${params.length}`) }
-    // Section enforcement: restrict to the caller's commodity categories (joined c).
-    if (Array.isArray(categories) && categories.length) { params.push(categories); conds.push(`c.category = any($${params.length})`) }
+    // Section enforcement: the caller's commodity categories (joined c), plus any
+    // commodity individually granted to their facility.
+    { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
 
     if (notesIncludes) { params.push(`%${notesIncludes}%`); conds.push(`t.notes like $${params.length}`) }
 

@@ -1,4 +1,5 @@
 import { query } from '../db.js'
+import { sectionFilterFixed } from '../constants/sections.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -27,7 +28,7 @@ export class ReportService {
    * Get daily activity report
    */
   static async getDailyReport(facilityId, date, options = {}) {
-    const { category = 'all', categories = null } = options
+    const { category = 'all', categories = null, commodityNames = null } = options
 
     if (!date) {
       throw new Error('date is required in YYYY-MM-DD format')
@@ -35,8 +36,9 @@ export class ReportService {
 
     const [startOfDay, endOfDay] = dayBounds(date)
     // Section enforcement: optional 4th param filtering by commodity category.
-    const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
-    const catP = Array.isArray(categories) && categories.length ? [categories] : []
+    // Category filter, plus any individually-granted commodity. Bound after the
+    // $1..$3 this query already binds.
+    const { cond: catCond, params: catP } = sectionFilterFixed('c', categories, commodityNames, 3)
 
     try {
       const report = {
@@ -123,7 +125,7 @@ export class ReportService {
    * Get weekly activity report (aggregated)
    */
   static async getWeeklyReport(facilityId, fromDate, toDate, options = {}) {
-    const { category = 'all', categories = null } = options
+    const { category = 'all', categories = null, commodityNames = null } = options
 
     if (!fromDate || !toDate) {
       throw new Error('fromDate and toDate are required in YYYY-MM-DD format')
@@ -132,8 +134,9 @@ export class ReportService {
     try {
       const startDate = `${fromDate}T00:00:00`
       const endDate = `${toDate}T23:59:59`
-      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
-      const catP = Array.isArray(categories) && categories.length ? [categories] : []
+      // Category filter, plus any individually-granted commodity. Bound after the
+      // $1..$3 this query already binds.
+      const { cond: catCond, params: catP } = sectionFilterFixed('c', categories, commodityNames, 3)
 
       const report = {
         from_date: fromDate,
@@ -237,7 +240,7 @@ export class ReportService {
    * Get monthly activity report (aggregated)
    */
   static async getMonthlyReport(facilityId, month, options = {}) {
-    const { category = 'all', categories = null } = options
+    const { category = 'all', categories = null, commodityNames = null } = options
 
     if (!month || !month.match(/^\d{4}-\d{2}$/)) {
       throw new Error('month is required in YYYY-MM format')
@@ -249,8 +252,9 @@ export class ReportService {
       // Get last day of month
       const lastDay = new Date(parseInt(year), parseInt(monthNum), 0).getDate()
       const endDate = `${year}-${monthNum}-${lastDay}T23:59:59`
-      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
-      const catP = Array.isArray(categories) && categories.length ? [categories] : []
+      // Category filter, plus any individually-granted commodity. Bound after the
+      // $1..$3 this query already binds.
+      const { cond: catCond, params: catP } = sectionFilterFixed('c', categories, commodityNames, 3)
 
       const report = {
         month,
@@ -352,10 +356,11 @@ export class ReportService {
    * Get stock balance (for reports)
    */
   static async getStockBalance(facilityId, asOfDate = null, options = {}) {
-    const { categories = null } = options
+    const { categories = null, commodityNames = null } = options
     try {
-      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($2)' : ''
-      const catP = Array.isArray(categories) && categories.length ? [categories] : []
+      // Category filter, plus any individually-granted commodity. Bound after the
+      // $1 this query already binds.
+      const { cond: catCond, params: catP } = sectionFilterFixed('c', categories, commodityNames, 1)
       const { rows } = await query(
         `select s.*,
                 json_build_object('id', c.id, 'name', c.name, 'category', c.category, 'unit', c.unit) as commodities,
@@ -391,12 +396,13 @@ export class ReportService {
    * Export data as CSV format
    */
   static async exportCSV(facilityId, fromDate, toDate, category = 'all', options = {}) {
-    const { categories = null } = options
+    const { categories = null, commodityNames = null } = options
     try {
       const startDate = `${fromDate}T00:00:00`
       const endDate = `${toDate}T23:59:59`
-      const catCond = Array.isArray(categories) && categories.length ? ' and c.category = any($4)' : ''
-      const catP = Array.isArray(categories) && categories.length ? [categories] : []
+      // Category filter, plus any individually-granted commodity. Bound after the
+      // $1..$3 this query already binds.
+      const { cond: catCond, params: catP } = sectionFilterFixed('c', categories, commodityNames, 3)
 
       let csvData = 'Date,Type,Commodity,Quantity,Reference,Notes\n'
 

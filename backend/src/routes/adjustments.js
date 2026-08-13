@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection } from '../middleware/scope.js'
+import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection, sectionFilter } from '../middleware/scope.js'
 import { LogService } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 
@@ -141,7 +141,7 @@ router.get('/', async (req, res) => {
       return sendValidationError(res, 'date must be in YYYY-MM-DD format', 'date')
     }
     const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
-    const base = { adjustment_type, reason, date, from, to, commodityIds, categories: req.scope.sectionCategories, section, limit: parseInt(limit), offset: parseInt(offset) }
+    const base = { adjustment_type, reason, date, from, to, commodityIds, ...sectionFilter(req), section, limit: parseInt(limit), offset: parseInt(offset) }
 
     let history
     if (facility_id) {

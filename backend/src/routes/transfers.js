@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceTransferAccess, enforceTransferWrite, mayWriteTransferFacility, enforceCommoditySection, ownFacilityId, resolveListFacilityIds } from '../middleware/scope.js'
+import { enforceTransferAccess, enforceTransferWrite, mayWriteTransferFacility, enforceCommoditySection, ownFacilityId, resolveListFacilityIds, sectionFilter } from '../middleware/scope.js'
 import { TransferService } from '../services/transferService.js'
 
 const router = express.Router()
@@ -78,7 +78,7 @@ router.get('/', async (req, res) => {
       from,
       to,
       notesIncludes: notes_includes,
-      categories: req.scope.sectionCategories,
+      ...sectionFilter(req),
       limit: parseInt(limit),
       offset: parseInt(offset)
     })

@@ -1,6 +1,7 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection } from '../middleware/scope.js'
+import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection, sectionFilter } from '../middleware/scope.js'
+import { narrowGrantsToCategories } from '../constants/sections.js'
 import { LogService, DISPENSE_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 
@@ -125,7 +126,7 @@ router.get('/', async (req, res) => {
       return sendValidationError(res, 'date must be in YYYY-MM-DD format', 'date')
     }
     const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
-    const base = { dsdSiteName: dsd_site_name, sdpName: sdp_name, date, from, to, commodityIds, categories: req.scope.sectionCategories, section, limit: parseInt(limit), offset: parseInt(offset) }
+    const base = { dsdSiteName: dsd_site_name, sdpName: sdp_name, date, from, to, commodityIds, ...sectionFilter(req), section, limit: parseInt(limit), offset: parseInt(offset) }
 
     let history
     if (facility_id) {
@@ -198,14 +199,19 @@ router.get('/summary', async (req, res) => {
       return sendValidationError(res, 'Invalid tz', 'tz')
     }
 
-    // A `category` drill must stay inside the caller's section, never widen it.
+    // A `category` drill must stay inside the caller's section, never widen it. A
+    // category the caller only reaches through an individual grant is still allowed
+    // through — the section filter in SQL then narrows it to the granted commodity
+    // alone, so this cannot return the rest of that category.
     const tokenCats = req.scope.sectionCategories
-    if (category && Array.isArray(tokenCats) && !tokenCats.includes(String(category))) {
+    const grants = req.scope.sectionCommodityNames
+    const viaGrant = !!category && narrowGrantsToCategories(grants, [String(category)]).length > 0
+    if (category && Array.isArray(tokenCats) && !tokenCats.includes(String(category)) && !viaGrant) {
       return res.json({ success: true, data: [], count: 0, timestamp: new Date().toISOString() })
     }
 
     const base = {
-      from, to, commodityIds, categories: tokenCats, section,
+      from, to, commodityIds, categories: tokenCats, commodityNames: grants, section,
       groupBy, commodityId: commodity_id || null, category: category || null, tz: tz || null,
     }
     let rows

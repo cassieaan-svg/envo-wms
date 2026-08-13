@@ -1,6 +1,6 @@
 import express from 'express'
 import { validateQuery, validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead } from '../middleware/scope.js'
+import { enforceFacilityRead, sectionFilter } from '../middleware/scope.js'
 import { ReportService } from '../services/reportService.js'
 import { StockService } from '../services/stockService.js'
 
@@ -52,7 +52,7 @@ router.get('/daily', validateQuery(['facility_id', 'date']), async (req, res) =>
       })
     }
 
-    const report = await ReportService.getDailyReport(facility_id, date, { category, categories: req.scope.sectionCategories })
+    const report = await ReportService.getDailyReport(facility_id, date, { category, ...sectionFilter(req) })
 
     res.json({
       success: true,
@@ -124,7 +124,7 @@ router.get('/weekly', validateQuery(['facility_id', 'from', 'to']), async (req, 
       })
     }
 
-    const report = await ReportService.getWeeklyReport(facility_id, from, to, { category, categories: req.scope.sectionCategories })
+    const report = await ReportService.getWeeklyReport(facility_id, from, to, { category, ...sectionFilter(req) })
 
     res.json({
       success: true,
@@ -182,7 +182,7 @@ router.get('/monthly', validateQuery(['facility_id', 'month']), async (req, res)
       })
     }
 
-    const report = await ReportService.getMonthlyReport(facility_id, month, { category, categories: req.scope.sectionCategories })
+    const report = await ReportService.getMonthlyReport(facility_id, month, { category, ...sectionFilter(req) })
 
     res.json({
       success: true,
@@ -230,7 +230,7 @@ router.get('/stock-balance', validateQuery(['facility_id']), async (req, res) =>
       })
     }
 
-    const balance = await ReportService.getStockBalance(facility_id, as_of_date, { categories: req.scope.sectionCategories })
+    const balance = await ReportService.getStockBalance(facility_id, as_of_date, { ...sectionFilter(req) })
 
     res.json({
       success: true,
@@ -309,13 +309,13 @@ router.get('/export', validateQuery(['facility_id', 'from', 'to']), async (req, 
     }
 
     if (format === 'csv') {
-      const csvData = await ReportService.exportCSV(facility_id, from, to, category, { categories: req.scope.sectionCategories })
+      const csvData = await ReportService.exportCSV(facility_id, from, to, category, { ...sectionFilter(req) })
       res.setHeader('Content-Type', 'text/csv')
       res.setHeader('Content-Disposition', `attachment; filename="report_${from}_to_${to}.csv"`)
       res.send(csvData)
     } else {
       // JSON format - get weekly report as structured data
-      const report = await ReportService.getWeeklyReport(facility_id, from, to, { category, categories: req.scope.sectionCategories })
+      const report = await ReportService.getWeeklyReport(facility_id, from, to, { category, ...sectionFilter(req) })
       res.json({
         success: true,
         data: report,
