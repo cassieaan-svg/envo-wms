@@ -6,7 +6,8 @@ import cors from 'cors'
 import compression from 'compression'
 
 import { authMiddleware } from './middleware/auth.js'
-import { attachScope, isAdminScope } from './middleware/scope.js'
+import { attachScope } from './middleware/scope.js'
+import { serviceAuth } from './middleware/serviceAuth.js'
 import { initRealtime, sseHandler } from './realtime.js'
 import { DIAG, diagMiddleware, diagHandler, startSampler } from './diag.js'
 import { pool } from './db.js'
@@ -23,6 +24,11 @@ import commodityRoutes from './routes/commodities.js'
 import amcSettingsRoutes from './routes/amcSettings.js'
 import editHistoryRoutes from './routes/editHistory.js'
 import binCardRoutes from './routes/bincard.js'
+import moduleRoutes from './routes/modules.js'
+import warehouseRequestRoutes from './routes/warehouseRequests.js'
+import warehouseRequestHooks from './routes/warehouseRequestHooks.js'
+import facilityStockHooks from './routes/facilityStockHooks.js'
+import commodityPriceHooks from './routes/commodityPriceHooks.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -58,12 +64,9 @@ app.use(compression({
   },
 }))
 
-// Request-boundary timing (Server-Timing header). Registered ONLY when
-// ENVO_DIAG=1, so the default path carries no extra middleware at all.
-if (DIAG) {
-  app.use(diagMiddleware(pool))
-  startSampler(pool)
-}
+// Request-boundary timing (Server-Timing header). No-op unless ENVO_DIAG=1.
+app.use(diagMiddleware(pool))
+startSampler(pool)
 
 app.use(express.json())
 
@@ -81,6 +84,12 @@ app.get('/health', (req, res) => {
 // per-route). Everything under /api/* requires a valid JWT and a derived scope.
 app.use('/auth', authRoutes)
 
+// Server-to-server status callback from the WMS. Service-token auth, registered before
+// the /api user-JWT layer since it isn't a user login.
+app.use('/hooks/warehouse-requests', serviceAuth, warehouseRequestHooks)
+app.use('/hooks/facilities', serviceAuth, facilityStockHooks)
+app.use('/hooks/commodities', serviceAuth, commodityPriceHooks)
+
 // Realtime SSE stream. Registered BEFORE the /api auth middleware because
 // EventSource can't send an Authorization header — sseHandler verifies ?token= itself.
 app.get('/api/events', sseHandler)
@@ -90,19 +99,15 @@ app.get('/api/events', sseHandler)
 // /api route handler, so individual routes can assume req.user / req.scope exist.
 app.use('/api', authMiddleware, attachScope)
 
-// Pool readout. The route does not exist unless ENVO_DIAG=1 — it is never
-// mounted, so it 404s like any unknown path rather than advertising itself. When
-// mounted it is still admin-only, via the same isAdminScope guard the rest of the
-// oversight surface uses. It exposes SQL text (never bind parameters), so it must
-// not be reachable by an ordinary facility user.
-if (DIAG) {
-  app.get('/api/_diag/pool', (req, res) => {
-    if (!isAdminScope(req.scope)) {
-      return res.status(403).json({ success: false, error: 'Forbidden', code: 'FORBIDDEN' })
-    }
-    return diagHandler(pool)(req, res)
-  })
-}
+// Dev-only pool readout. Admin-gated, and 404s entirely unless ENVO_DIAG=1 so it
+// cannot be probed in normal operation.
+app.get('/api/_diag/pool', (req, res, next) => {
+  if (!DIAG) return next()
+  if (!['overall_admin', 'state_admin', 'lga_admin'].includes(req.scope?.accessLevel)) {
+    return res.status(403).json({ success: false, error: 'Forbidden', code: 'FORBIDDEN' })
+  }
+  return diagHandler(pool)(req, res)
+})
 
 app.use('/api/stock', stockRoutes)
 app.use('/api/transfers', transferRoutes)
@@ -112,6 +117,8 @@ app.use('/api/adjustments', adjustmentRoutes)
 app.use('/api/reports', reportRoutes)
 app.use('/api/facilities', facilityRoutes)
 app.use('/api/commodities', commodityRoutes)
+app.use('/api/modules', moduleRoutes)
+app.use('/api/warehouse-requests', warehouseRequestRoutes)
 app.use('/api/amc-settings', amcSettingsRoutes)
 app.use('/api/edit-history', editHistoryRoutes)
 app.use('/api/bincard', binCardRoutes)

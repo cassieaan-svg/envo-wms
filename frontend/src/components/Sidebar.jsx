@@ -12,6 +12,11 @@ export function Sidebar() {
   const [showChangePw, setShowChangePw] = useState(false)
   const sectionIcon = '⬡'
   const sectionName = store.commoditySection === 'lab' ? 'Laboratory' : store.commoditySection === 'pharmacy' ? 'Pharmacy' : 'EnVo'
+  // Active module label. Only the store manager can go back to the module picker,
+  // and only when there's more than one module to switch between.
+  const moduleLabel = store.availableModules.find(m => m.key === store.module)?.label
+    || (store.module === 'essential' ? 'Essential Commodities' : 'HIV Commodities')
+  const canSwitchModule = store.isStoreManager() && store.availableModules.filter(m => m.enrolled).length > 1
 
   const NavComponent = store.isAdmin()
     ? AdminNav
@@ -47,7 +52,7 @@ export function Sidebar() {
           </div>
           <div>
             <div className="text-sm font-semibold text-gray-100">{sectionName}</div>
-            <div className="text-xs text-gray-500">HIV Programme</div>
+            <div className="text-xs text-gray-500">{moduleLabel}</div>
           </div>
         </div>
 
@@ -99,6 +104,17 @@ export function Sidebar() {
               </button>
             ))}
           </div>
+          {canSwitchModule && (
+            <button
+              onClick={() => { store.setSidebarOpen(false); store.clearModule() }}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/8 text-gray-400 text-xs hover:bg-white/8 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M2 8h9M8 4l4 4-4 4"/><path d="M14 2v12"/>
+              </svg>
+              Switch module
+            </button>
+          )}
           <button
             onClick={() => setShowChangePw(true)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/8 text-gray-400 text-xs hover:bg-white/8 transition-colors"

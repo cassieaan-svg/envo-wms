@@ -1,8 +1,16 @@
 import { create } from 'zustand'
+import { setModule as apiSetModule, clearModule as apiClearModule } from '../lib/api'
 
 export const useAppStore = create((set, get) => ({
   // Auth
   user:             null,
+
+  // Active commodity programme ('hiv' | 'essential'). Chosen on the post-login
+  // module picker; sent to the backend as the x-envo-module header (see lib/api).
+  // Restored from sessionStorage so a refresh stays in the same module.
+  module:           (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('ct_module')) || null,
+  availableModules: [],   // [{ key, label, enrolled }] from GET /api/modules
+  moduleDataLoaded: false, // false until the chosen module's facilities/commodities load
   // 'overall_admin' | 'state_admin' | 'state_viewer' | 'cluster_admin' | 'lga_admin' | 'facility'
   // Writers: state_admin + facility. Read-only oversight: overall_admin, state_viewer,
   // cluster_admin, lga_admin (the server enforces this; the UI just hides write actions).
@@ -42,6 +50,11 @@ export const useAppStore = create((set, get) => ({
 
   // Setters
   setUser:             (user)             => set({ user }),
+  setModule:           (module)           => { apiSetModule(module); set({ module }) },
+  setAvailableModules: (availableModules) => set({ availableModules }),
+  setModuleDataLoaded: (moduleDataLoaded) => set({ moduleDataLoaded }),
+  // Back to the module picker (clears the choice + its loaded data, keeps the session).
+  clearModule:         ()                 => { apiClearModule(); set({ module: null, moduleDataLoaded: false, currentPage: 'dashboard' }) },
   setAccessLevel:      (accessLevel)      => set({ accessLevel }),
   setFacilityRole:     (facilityRole)     => set({ facilityRole }),
   setSdpName:          (sdpName)          => set({ sdpName }),
@@ -175,11 +188,15 @@ export const useAppStore = create((set, get) => ({
     return 'User'
   },
 
-  reset: () => set({
-    user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, dsdType:null, commoditySection:null,
-    adminState:null, adminLGA:null, adminCluster:null, currentFacility:null,
-    adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
-    allFacilities:[], allCommodities:[], stockData:[], stockLoaded:false, dsdFacilities:[], amcWindows:{},
-    currentPage:'dashboard', currentReportCategory:'all', pendingReportsTab:false
-  }),
+  reset: () => {
+    apiClearModule()
+    set({
+      user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, dsdType:null, commoditySection:null,
+      adminState:null, adminLGA:null, adminCluster:null, currentFacility:null,
+      adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
+      allFacilities:[], allCommodities:[], stockData:[], stockLoaded:false, dsdFacilities:[], amcWindows:{},
+      module:null, availableModules:[], moduleDataLoaded:false,
+      currentPage:'dashboard', currentReportCategory:'all', pendingReportsTab:false
+    })
+  },
 }))

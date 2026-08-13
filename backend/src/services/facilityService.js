@@ -3,11 +3,12 @@ import { query } from '../db.js'
 export class FacilityService {
   /**
    * List facilities, optionally scoped by state / lga (used by state/lga admins)
-   * or filtered by exact name. Ordered state → lga → name to match the old
-   * Supabase query the session bootstrap relied on.
+   * or filtered by exact name. When a `module` is given, only facilities enrolled in
+   * that module (via facility_modules) are returned. Ordered state → lga → name to
+   * match the old Supabase query the session bootstrap relied on.
    */
   static async getFacilities(options = {}) {
-    const { state, lga, cluster, name } = options
+    const { state, lga, cluster, name, module } = options
 
     const params = []
     const conds = []
@@ -15,6 +16,11 @@ export class FacilityService {
     if (lga) { params.push(lga); conds.push(`lga = $${params.length}`) }
     if (cluster) { params.push(cluster); conds.push(`cluster = $${params.length}`) }
     if (name) { params.push(name); conds.push(`name = $${params.length}`) }
+    if (module) {
+      params.push(module)
+      conds.push(`exists (select 1 from facility_modules fm
+                            where fm.facility_id = facilities.id and fm.module = $${params.length})`)
+    }
 
     let sql = `select id, name, code, state, lga, cluster from facilities`
     if (conds.length) sql += ` where ${conds.join(' and ')}`

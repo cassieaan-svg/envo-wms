@@ -25,9 +25,11 @@ export function LabNav() {
   const facilityRole = useAppStore(s => s.facilityRole)
   const fid          = useAppStore(s => s.currentFacility?.id)
   const commoditySection = useAppStore(s => s.commoditySection)
+  const module       = useAppStore(s => s.module)
   const isDispenser  = facilityRole === 'dispenser'
   const isSDP        = facilityRole === 'sdp'
   const isRestricted = isSDP
+  const isEssential  = module === 'essential'
 
   const [pendingCount, setPendingCount] = useState(0)
   const [alertCount, setAlertCount]     = useState(0)
@@ -70,6 +72,7 @@ export function LabNav() {
       <NavItem page="dispense"   icon={icons.dispense}>Record Stock Utilized</NavItem>
       {!isRestricted && <NavItem page="intake"     icon={icons.intake}     disabled={!canManage}>Stock Intake</NavItem>}
       {!isRestricted && <NavItem page="adjustment" icon={icons.adjustment} disabled={!canManage}>Adjustment</NavItem>}
+      {isEssential && !isRestricted && <NavItem page="warehouse-requests" icon={icons.transfers} disabled={!canManage}>Request from Warehouse</NavItem>}
       <NavItem page="transfers" icon={icons.transfers} badge={pendingCount}>Redistribution & Emergency Order</NavItem>
 
       {!isRestricted && <NavSection>Overview</NavSection>}

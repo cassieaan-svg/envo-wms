@@ -1,6 +1,7 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
 import { FacilityService } from '../services/facilityService.js'
+import { enforceModuleAccess, scopedModule } from '../middleware/scope.js'
 
 const router = express.Router()
 
@@ -15,9 +16,10 @@ const router = express.Router()
  */
 router.get('/', async (req, res) => {
   try {
+    if (!(await enforceModuleAccess(req, res))) return
     const { state, lga, cluster, name } = req.query
 
-    const facilities = await FacilityService.getFacilities({ state, lga, cluster, name })
+    const facilities = await FacilityService.getFacilities({ state, lga, cluster, name, module: scopedModule(req) })
 
     res.json({
       success: true,

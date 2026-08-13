@@ -17,6 +17,9 @@ export function Log() {
   const canManage = store.canManageStock()
   const isStoreMgr = store.isStoreManager()
   const commoditySection = store.commoditySection
+  // Essential Commodities has no transfers — its "movement to/from the warehouse" is the
+  // warehouse request, which shows here read-only instead of transfers.
+  const isEssential = store.module === 'essential'
   const [typeFilter, setTypeFilter] = useState('')
   const [catFilter, setCatFilter]   = useState('')
   const [transferScope, setTransferScope] = useState('')   // '' | external | internal — only meaningful when typeFilter==='transfer'
@@ -67,12 +70,14 @@ export function Log() {
       from,
       limit: rowLimit,
     }
-    const [disp, intake, adj, transfers] = await Promise.all([
+    const [disp, intake, adj, transfers, requests] = await Promise.all([
       (!typeFilter||typeFilter==='dispense')    ? api.dispense.history(logParams).catch(()=>[]) : [],
       (!typeFilter||typeFilter==='intake')      ? api.intake.history(logParams).catch(()=>[]) : [],
       (!typeFilter||typeFilter==='adjustment')  ? api.adjustments.history(logParams).catch(()=>[]) : [],
-      // section already scopes transfers; facility_id covers both sending/receiving sides.
-      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, date_field: from?'initiated_at':undefined, from, limit: rowLimit }).catch(()=>[]) : [],
+      // HIV: transfers (section scopes them; facility_id covers both sides).
+      (!isEssential && (!typeFilter||typeFilter==='transfer')) ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, date_field: from?'initiated_at':undefined, from, limit: rowLimit }).catch(()=>[]) : [],
+      // Essential: warehouse requests, read-only.
+      (isEssential && (!typeFilter||typeFilter==='request')) ? api.warehouseRequests.list({ facility_id: scopeFid || undefined }).catch(()=>[]) : [],
     ])
     // Admins get a cross-facility feed; hide internal movements — store→dispensary
     // (same facility) and store→DSD/SDP site dispatches (e.g. "Main Lab", which have
@@ -85,7 +90,9 @@ export function Log() {
       ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
       ...intake.map(r=>({...r,_type:'intake',_time:r.received_at})),
       ...adj.map(r=>({...r,_type:'adjustment',_time:r.adjusted_at})),
-      ...extTransfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at})),
+      ...(isEssential
+        ? requests.map(r=>({...r,_type:'request',_time:r.dispatched_at||r.requested_at}))
+        : extTransfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at}))),
     ].sort((a,b)=>new Date(b._time)-new Date(a._time))
     // Client-side narrow to the selected LGA/state set (covers transfers, whose
     // route scopes by jurisdiction rather than the facility_ids view-filter).
@@ -111,11 +118,12 @@ export function Log() {
   // adjustment row changes anywhere in the viewer's scope (RLS-filtered).
   useEffect(() => {
     const reload = () => loadAllRef.current()
-    return subscribeRealtime(['dispense_log', 'intake_log', 'stock_adjustment_log', 'stock_transfer_log'], reload)
+    return subscribeRealtime(['dispense_log', 'intake_log', 'stock_adjustment_log', 'stock_transfer_log', 'warehouse_requests'], reload)
   }, [])
 
-  const typeBadge = { dispense:'out', intake:'ok', adjustment:'info', transfer:'low' }
-  const typeLabel = { dispense:'Consumption', intake:'Intake', adjustment:'Adjustment', transfer:'Transfer' }
+  const typeBadge = { dispense:'out', intake:'ok', adjustment:'info', transfer:'low', request:'info' }
+  const typeLabel = { dispense:'Consumption', intake:'Intake', adjustment:'Adjustment', transfer:'Transfer', request:'Request' }
+  const money = v => '₦' + Number(v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
   // A transfer is "internal" when its notes carry a redistribution tag
   // (store→dispensary, DSD or SDP); any other facility→facility move is external.
   // The scope select narrows the Transfers view to one or the other.
@@ -175,9 +183,9 @@ export function Log() {
               <option value="dispense">Stock consumed</option>
               <option value="intake">Intakes</option>
               <option value="adjustment">Adjustments</option>
-              <option value="transfer">Transfers</option>
+              {isEssential ? <option value="request">Requests</option> : <option value="transfer">Transfers</option>}
             </select>
-            {typeFilter === 'transfer' && (
+            {!isEssential && typeFilter === 'transfer' && (
               <select value={transferScope} onChange={e=>setTransferScope(e.target.value)}
                 className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
                 <option value="">All transfers</option>
@@ -227,6 +235,9 @@ export function Log() {
                   qty = <span className={`font-mono text-sm ${isOut?'text-red-400':'text-green-400'}`}>{isOut?'-':'+'}{r.quantity} {r.commodities?.unit||''}</span>
                   details = r.status ? `${route} · ${r.status}` : route
                 }
+              } else if (r._type==='request') {
+                qty = <span className="font-mono text-sm text-blue-400">{r.total_quantity} unit{r.total_quantity===1?'':'s'}</span>
+                details = `${r.status} · ${r.line_count} item${r.line_count===1?'':'s'} · ${money(r.total_amount)}`
               } else {
                 const isInc = r.adjustment_type==='Increase'
                 qty = <span className={`font-mono text-sm ${isInc?'text-green-400':'text-red-400'}`}>{isInc?'+':'-'}{r.quantity} {r.commodities?.unit||''}</span>
@@ -237,7 +248,9 @@ export function Log() {
                   <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r._time)}</td>
                   <td className="px-4 py-3"><Badge type={typeBadge[r._type]}>{typeLabel[r._type]}</Badge></td>
                   <td className="px-4 py-3">
-                    {(() => {
+                    {r._type==='request'
+                      ? <span className="font-medium text-gray-100">Warehouse request</span>
+                      : (() => {
                       const bcFid = r.facility_id || r.sending_facility_id || fid
                       const cid = r.commodity_id || r.commodities?.id
                       return bcFid && cid
@@ -251,7 +264,7 @@ export function Log() {
                   <td className="px-4 py-3 text-xs text-gray-500">{details}</td>
                   {canEdit && (
                     <td className="px-4 py-3">
-                      {r._type!=='transfer' && (
+                      {['dispense','intake','adjustment'].includes(r._type) && (
                         <button onClick={()=>setEditRecord(r)}
                           className="text-xs text-blue-400 border border-blue-500/30 rounded px-2 py-1 hover:bg-blue-500/10 transition-colors">
                           Edit

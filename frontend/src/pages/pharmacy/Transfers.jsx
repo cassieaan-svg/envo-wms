@@ -101,6 +101,7 @@ export function Transfers() {
   const [dispatchBatch, setDispatchBatch] = useState('')
   const [dispatchQty, setDispatchQty] = useState(1)
   const [dispatchLoading, setDispatchLoading] = useState(false)
+  const [dispatchLots, setDispatchLots] = useState([]) // { id, selected, qty }
 
   // Admin assign & arrange state
   const [assigningId, setAssigningId]           = useState(null)
@@ -285,18 +286,33 @@ export function Transfers() {
     // Server marks in_transit, sets qty, appends the dispatch note, and decrements sender store.
     let updatedRow
     try {
-      updatedRow = await api.transfers.dispatch(t.id, {
-        approved_by: dispatchApprovedBy.trim(),
-        carrier: dispatchCarrier.trim(),
-        expiry: dispatchExpiry.trim(),
-        batch: dispatchBatch.trim(),
-        quantity: parsedQty,
-      })
+      // If caller supplied batch picks, build lots payload and validate totals.
+      const pickedLots = (dispatchLots || []).filter(d => d.selected && d.selected.batch_number)
+      if (pickedLots.length) {
+        const totalPicked = pickedLots.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)
+        if (totalPicked !== parsedQty) { toast(`Sum of selected batch quantities (${totalPicked}) must equal issued qty (${parsedQty})`, 'red'); setDispatchLoading(false); return }
+        const lotsPayload = pickedLots.map(l => ({ batch: l.selected.batch_number || null, quantity: parseInt(l.qty) }))
+        updatedRow = await api.transfers.dispatch(t.id, {
+          approved_by: dispatchApprovedBy.trim(),
+          carrier: dispatchCarrier.trim(),
+          expiry: dispatchExpiry.trim(),
+          quantity: parsedQty,
+          lots: lotsPayload,
+        })
+      } else {
+        updatedRow = await api.transfers.dispatch(t.id, {
+          approved_by: dispatchApprovedBy.trim(),
+          carrier: dispatchCarrier.trim(),
+          expiry: dispatchExpiry.trim(),
+          batch: dispatchBatch.trim(),
+          quantity: parsedQty,
+        })
+      }
     } catch (error) { toast('Error confirming dispatch: ' + error.message, 'red'); setDispatchLoading(false); return }
     await loadStock()
     toast('Transfer dispatched — awaiting receiver acceptance', 'green')
     setPending(prev => prev.map(p => p.id === t.id ? { ...p, status: 'in_transit', quantity: parsedQty, notes: updatedRow?.notes ?? p.notes } : p))
-    setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLoading(false)
+    setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]); setDispatchLoading(false)
   }
 
   async function confirmAssignFacility(t) {
@@ -1119,7 +1135,7 @@ export function Transfers() {
                             )}
                             {t.status === 'pending' && isSender && !isDispenser && (
                               <>
-                                <Button variant="success" size="sm" onClick={() => { setDispatchingId(t.id); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchQty(t.quantity) }}>Arrange transfer</Button>
+                                <Button variant="success" size="sm" onClick={() => { setDispatchingId(t.id); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchQty(t.quantity); setDispatchExpiry(''); setDispatchBatch(''); setDispatchLots([{ id: Date.now(), selected: null, qty: t.quantity }]) }}>Arrange transfer</Button>
                                 <Button variant="danger" size="sm" onClick={() => cancelRequest(t.id)}>Cancel</Button>
                               </>
                             )}
@@ -1215,16 +1231,29 @@ export function Transfers() {
                                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
                               <div>
-                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Batch / lot no. *</label>
-                                <input type="text" value={dispatchBatch} onChange={e => setDispatchBatch(e.target.value)}
-                                  placeholder="Batch or lot number" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
+                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Batches (optional — pick batches and per-batch qty)</label>
+                                <div className="space-y-2">
+                                  {dispatchLots.map((dl, i) => (
+                                    <div key={dl.id} className="flex gap-2 items-center">
+                                      <BatchSelect facilityId={fid} commodityId={t.commodity_id} locationType={"store"} value={dl.selected?.key || null} onSelect={opt => {
+                                        const copy = [...dispatchLots]; copy[i] = { ...copy[i], selected: opt }; setDispatchLots(copy)
+                                      }} className={inputCls} />
+                                      <input type="number" min="0" value={dl.qty} onChange={e => { const copy = [...dispatchLots]; copy[i] = { ...copy[i], qty: e.target.value }; setDispatchLots(copy) }} className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
+                                      {dispatchLots.length > 1 && <button type="button" onClick={() => { setDispatchLots(dispatchLots.filter((_, idx) => idx !== i)) }} className="text-xs text-red-400">Remove</button>}
+                                    </div>
+                                  ))}
+                                  <div className="flex gap-2">
+                                    <button type="button" onClick={() => setDispatchLots([...dispatchLots, { id: Date.now(), selected: null, qty: 0 }])} className="text-xs text-blue-400 hover:text-blue-300">+ Add batch</button>
+                                    <div className="text-xs text-gray-400">Leave batches empty to let server draw FEFO</div>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                             <div className="flex gap-2">
                               <Button variant="success" size="sm" disabled={dispatchLoading} onClick={() => confirmDispatch(t)}>
                                 {dispatchLoading ? 'Confirming…' : 'Confirm dispatch'}
                               </Button>
-                              <Button variant="default" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1) }}>Cancel</Button>
+                              <Button variant="default" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]) }}>Cancel</Button>
                             </div>
                           </div>
                         )}

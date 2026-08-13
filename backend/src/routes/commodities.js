@@ -2,7 +2,7 @@ import express from 'express'
 import { CommodityService } from '../services/commodityService.js'
 import { LogService } from '../services/logService.js'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, resolveListFacilityIds } from '../middleware/scope.js'
+import { enforceFacilityRead, resolveListFacilityIds, enforceModuleAccess, scopedModule } from '../middleware/scope.js'
 
 const router = express.Router()
 
@@ -14,7 +14,8 @@ const router = express.Router()
  */
 router.get('/', async (req, res) => {
   try {
-    const commodities = await CommodityService.getCommodities()
+    if (!(await enforceModuleAccess(req, res))) return
+    const commodities = await CommodityService.getCommodities({ module: scopedModule(req) })
 
     res.json({
       success: true,

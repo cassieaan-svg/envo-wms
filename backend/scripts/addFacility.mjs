@@ -52,6 +52,14 @@ async function main() {
        values (gen_random_uuid(), $1, $2, $3, $4, $5) returning id`,
       [FACILITY.name, FACILITY.code, FACILITY.state, FACILITY.lga, FACILITY.cluster])).rows[0]
     console.log(`Facility created: ${FACILITY.name} (${fac.id}) — ${FACILITY.state} / ${FACILITY.lga} / cluster ${FACILITY.cluster}`)
+    // Enroll the newly created facility into default modules (hiv + essential).
+    try {
+      await pool.query(`insert into facility_modules (facility_id, module) values ($1, 'hiv') on conflict do nothing`, [fac.id])
+      await pool.query(`insert into facility_modules (facility_id, module) values ($1, 'essential') on conflict do nothing`, [fac.id])
+      console.log(`  • enrolled facility ${fac.id} in modules: hiv, essential`)
+    } catch (err) {
+      console.error(`  • failed to enroll facility modules for ${fac.id}:`, err.message)
+    }
   }
 
   // 2) Accounts.

@@ -175,8 +175,15 @@ export function RecordStock() {
     setLoadingRecent(false)
   }
 
+  // Essential Commodities: you can only consume what you hold, so offer just the
+  // commodities on the facility's stock levels. HIV keeps the full catalogue.
+  const stockedIds = new Set(store.stockData.map(r => r.commodity_id))
+  const commSource = store.module === 'essential'
+    ? store.allCommodities.filter(c => stockedIds.has(c.id))
+    : store.allCommodities
+
   const categories = {}
-  store.allCommodities.forEach(c => {
+  commSource.forEach(c => {
     if (!categories[c.category]) categories[c.category] = []
     categories[c.category].push(c)
   })

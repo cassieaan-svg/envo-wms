@@ -74,14 +74,15 @@ export function Intake() {
   )
 
   async function refreshCommodities() {
-    const cats = SECTION_CATEGORIES[store.commoditySection] || []
     const comms = await api.commodities.list().catch(() => null)
-    if (comms) {
-      const filtered = cats.length
-        ? comms.filter(c => cats.includes(c.category))
-        : comms
-      store.setAllCommodities(filtered)
-    }
+    if (!comms) return
+    const cats = SECTION_CATEGORIES[store.commoditySection] || []
+    // HIV splits the catalogue by pharmacy/lab section; Essential Commodities has no
+    // sections, so keep the full catalogue (its categories aren't the HIV section ones).
+    const filtered = (store.module !== 'essential' && cats.length)
+      ? comms.filter(c => cats.includes(c.category))
+      : comms
+    store.setAllCommodities(filtered)
   }
 
   async function handleSubmit(e) {
