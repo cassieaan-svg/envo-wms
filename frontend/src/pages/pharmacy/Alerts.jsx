@@ -48,7 +48,14 @@ export function Alerts() {
   // Prefilled with the signed-in admin's own name, the same source Intake uses for
   // "Received by". Still editable — someone reviewing on a colleague's behalf can
   // overwrite it — but the common case stops being a retyped name every time.
-  const [assignReviewedBy, setAssignReviewedBy] = useState(() => reviewerNameOf(store.user))
+  //
+  // Read at call time, not captured once: the session hydrates after this component
+  // mounts, so a value snapshotted here would be empty for the first render. Every
+  // place that RESETS this field must reset it to this, not to '' — opening the
+  // panel, cancelling and submitting all clear the form, and clearing it to empty
+  // is what silently defeated the prefill the first time round.
+  const reviewerDefault = () => reviewerNameOf(store.user)
+  const [assignReviewedBy, setAssignReviewedBy] = useState(reviewerDefault)
   const [assignQty, setAssignQty]               = useState(1)
   const [assignLoading, setAssignLoading]       = useState(false)
   // Unscoped facility list for the assign picker only — lets a state admin
@@ -168,7 +175,7 @@ export function Alerts() {
     } catch (error) { toast('Error assigning facility: ' + error.message,'red'); setAssignLoading(false); return }
     toast(`Request sent to ${srcFac?.name || 'facility'}`,'green')
     setAssigningId(null); setAssignFacState(''); setAssignFacLga(''); setAssignFacId('')
-    setAssignReviewedBy(''); setAssignQty(1); setAssignLoading(false)
+    setAssignReviewedBy(reviewerDefault()); setAssignQty(1); setAssignLoading(false)
     loadFacReqAlerts()
   }
 
@@ -885,7 +892,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                     </div>
                     {store.isStateAdmin() && (
                       <div className="flex gap-2">
-                        <Button variant="primary" size="sm" onClick={()=>{ const open = assigningId===req.id; setAssigningId(open?null:req.id); setAssignFacState(''); setAssignFacLga(''); setAssignFacId(''); setAssignReviewedBy(''); setAssignQty(req.qty_requested ?? req.quantity ?? 1) }}>{assigningId===req.id ? 'Close' : 'Review & arrange'}</Button>
+                        <Button variant="primary" size="sm" onClick={()=>{ const open = assigningId===req.id; setAssigningId(open?null:req.id); setAssignFacState(''); setAssignFacLga(''); setAssignFacId(''); setAssignReviewedBy(reviewerDefault()); setAssignQty(req.qty_requested ?? req.quantity ?? 1) }}>{assigningId===req.id ? 'Close' : 'Review & arrange'}</Button>
                         <Button variant="danger" size="sm" onClick={()=>rejectFacRequest(req)}>Reject</Button>
                       </div>
                     )}
@@ -923,7 +930,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                       </div>
                       <div className="flex gap-2">
                         <Button variant="success" size="sm" disabled={assignLoading} onClick={()=>confirmAssignFacility(req)}>{assignLoading?'Sending…':'Send request to facility'}</Button>
-                        <Button variant="ghost" size="sm" onClick={()=>{setAssigningId(null);setAssignFacState('');setAssignFacLga('');setAssignFacId('');setAssignReviewedBy('');setAssignQty(1)}}>Cancel</Button>
+                        <Button variant="ghost" size="sm" onClick={()=>{setAssigningId(null);setAssignFacState('');setAssignFacLga('');setAssignFacId('');setAssignReviewedBy(reviewerDefault());setAssignQty(1)}}>Cancel</Button>
                       </div>
                     </div>
                   )}

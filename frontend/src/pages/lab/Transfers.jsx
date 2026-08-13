@@ -10,7 +10,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { BatchSelect } from '../../components/ui/BatchSelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning } from '../../utils/helpers'
+import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf } from '../../utils/helpers'
 import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
@@ -105,7 +105,10 @@ export function Transfers() {
   const [assignFacState, setAssignFacState]     = useState('')
   const [assignFacLga, setAssignFacLga]         = useState('')
   const [assignFacId, setAssignFacId]           = useState('')
-  const [assignApprovedBy, setAssignApprovedBy] = useState('')
+  // Prefilled with the signed-in admin's name, same as the Alerts review panel.
+  // Editable, so a colleague signing off can type over it.
+  const sessionUser = useAppStore(s => s.user)
+  const [assignApprovedBy, setAssignApprovedBy] = useState(() => reviewerNameOf(sessionUser))
   const [assignCarrier, setAssignCarrier]       = useState('')
   const [assignQty, setAssignQty]               = useState(1)
   const [assignLoading, setAssignLoading]       = useState(false)
