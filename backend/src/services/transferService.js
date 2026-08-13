@@ -170,7 +170,7 @@ export class TransferService {
    * store stock.
    */
   static async dispatch(transferId, data) {
-    const { approved_by, carrier, expiry, batch, quantity } = data
+    const { approved_by, carrier, expiry, batch, quantity, lots } = data
     const transfer = await this.getTransferById(transferId)
     if (!transfer) return null
     const qty = parseInt(quantity ?? transfer.quantity)
@@ -185,16 +185,31 @@ export class TransferService {
         }
         await StockService.decrementStock(stk.id, qty, exec)
       }
-      // Draw the lots from the sender's store FEFO (skipping expired, enforced) and
-      // record them on the transfer so accept credits the receiver with exactly what
-      // shipped. The typed batch/expiry stay in notes as paper-form metadata; the
-      // real drawn lots are what travel and enforce is what blocks an expired/short
-      // dispatch.
+
+      // Draw the lots. If the caller supplied an explicit `lots` array (user-picked
+      // batches and per-batch quantities), debit each batch exactly (enforced) and
+      // fail the whole transaction if any batch is short. Otherwise fall back to
+      // the existing FEFO debit.
       let drawn = []
       if (transfer.sending_facility_id) {
-        ;({ drawn } = await LotService.debit(exec,
-          { facility_id: transfer.sending_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
-          qty, { enforce: true }))
+        const bin = { facility_id: transfer.sending_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }
+        if (Array.isArray(lots) && lots.length) {
+          // Ensure caller-supplied lots sum to the dispatched qty.
+          const total = lots.reduce((s, l) => s + (parseInt(l.quantity) || 0), 0)
+          if (total !== qty) {
+            const e = new Error(`Supplied lots total ${total} does not match requested quantity ${qty}`); e.status = 400; throw e
+          }
+          for (const l of lots) {
+            const take = Math.round(l.quantity || 0)
+            if (take <= 0) continue
+            // Debit exactly from the named batch; enforce=true makes this fail
+            // when the chosen batch cannot cover the requested amount.
+            const res = await LotService.debit(exec, bin, take, { batch: l.batch || null, enforce: true })
+            drawn = drawn.concat(res.drawn)
+          }
+        } else {
+          ;({ drawn } = await LotService.debit(exec, { facility_id: transfer.sending_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }, qty, { enforce: true }))
+        }
       }
       const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${expiry || ''}] [Batch: ${batch || ''}]`
       const newNotes = transfer.notes ? `${transfer.notes} ${meta}` : meta
