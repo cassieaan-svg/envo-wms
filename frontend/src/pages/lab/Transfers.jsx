@@ -10,7 +10,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { BatchSelect } from '../../components/ui/BatchSelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf } from '../../utils/helpers'
+import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf, explicitReviewerName } from '../../utils/helpers'
 import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
@@ -93,6 +93,10 @@ export function Transfers() {
   const [disputeByName, setDisputeByName] = useState('')
   const [disputeLoading, setDisputeLoading] = useState(false)
   const [dispatchingId, setDispatchingId] = useState(null)
+  // Left empty here on purpose. The dispatch panel only renders after "Arrange
+  // transfer" is clicked, and that handler seeds these from dispatchSigner() — by
+  // which point the session has certainly hydrated. Seeding them at mount instead
+  // would capture an empty store on first paint and silently never fill.
   const [dispatchApprovedBy, setDispatchApprovedBy] = useState('')
   const [dispatchCarrier, setDispatchCarrier] = useState('')
   const [dispatchExpiry, setDispatchExpiry] = useState('')
@@ -110,6 +114,12 @@ export function Transfers() {
   // Editable, so a colleague signing off can type over it.
   const sessionUser = useAppStore(s => s.user)
   const [assignApprovedBy, setAssignApprovedBy] = useState(() => reviewerNameOf(sessionUser))
+
+  // Who this account signs its own dispatches as, and who carries them. Only set for
+  // accounts given an explicit reviewer_name (e.g. the Lagos State Office Store, where
+  // one officer both approves and transports); '' for everyone else, leaving the
+  // fields blank and required exactly as before. Read at call time, never captured.
+  const dispatchSigner = () => explicitReviewerName(sessionUser)
   const [assignCarrier, setAssignCarrier]       = useState('')
   const [assignQty, setAssignQty]               = useState(1)
   const [assignLoading, setAssignLoading]       = useState(false)
@@ -295,7 +305,7 @@ export function Transfers() {
     await loadStock()
     toast('Transfer dispatched — awaiting receiver acceptance', 'green')
     setPending(prev => prev.map(p => p.id === t.id ? { ...p, status: 'in_transit', quantity: parsedQty, notes: updatedRow?.notes ?? p.notes } : p))
-    setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]); setDispatchLoading(false)
+    setDispatchingId(null); setDispatchApprovedBy(dispatchSigner()); setDispatchCarrier(dispatchSigner()); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]); setDispatchLoading(false)
   }
 
   async function confirmAssignFacility(t) {
@@ -1087,7 +1097,7 @@ export function Transfers() {
                           )}
                           {t.status === 'pending' && isSender && !isDispenser && (
                             <>
-                                <Button variant="success" size="sm" onClick={() => { setDispatchingId(t.id); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchQty(t.quantity); setDispatchExpiry(''); setDispatchBatch(''); setDispatchLots([{ id: Date.now(), selected: null, qty: t.quantity }]) }}>Arrange transfer</Button>
+                                <Button variant="success" size="sm" onClick={() => { setDispatchingId(t.id); setDispatchApprovedBy(dispatchSigner()); setDispatchCarrier(dispatchSigner()); setDispatchQty(t.quantity); setDispatchExpiry(''); setDispatchBatch(''); setDispatchLots([{ id: Date.now(), selected: null, qty: t.quantity }]) }}>Arrange transfer</Button>
                               <Button variant="danger" size="sm" onClick={() => cancelRequest(t.id)}>Cancel</Button>
                             </>
                           )}
@@ -1203,7 +1213,7 @@ export function Transfers() {
                             <Button variant="success" size="sm" disabled={dispatchLoading} onClick={() => confirmDispatch(t)}>
                               {dispatchLoading ? 'Confirming…' : 'Confirm dispatch'}
                             </Button>
-                            <Button variant="default" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]) }}>Cancel</Button>
+                            <Button variant="default" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(dispatchSigner()); setDispatchCarrier(dispatchSigner()); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]) }}>Cancel</Button>
                           </div>
                         </div>
                       )}

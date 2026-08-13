@@ -285,6 +285,19 @@ export function reviewerNameOf(user) {
   return (m.reviewer_name || m.full_name || m.name || '').trim()
 }
 
+// The same name, but with NO full_name fallback — only an explicitly-set
+// reviewer_name counts.
+//
+// Used for the sender's own "Record approved by" / "Carrier" fields on a dispatch.
+// Those are a legal record of who released the stock and who carried it, so they must
+// not be auto-filled with whatever the account happens to be labelled: falling back to
+// full_name would put a name on every facility dispatch in the system. Returning ''
+// leaves the field exactly as it is today (empty, required, typed by hand), so the
+// prefill reaches only the accounts an admin has deliberately named.
+export function explicitReviewerName(user) {
+  return (user?.user_metadata?.reviewer_name || '').trim()
+}
+
 // A commodity category belongs to the lab section (uses SDP, no dispensary/DSD).
 export const isLabCategory = (category) => (SECTION_CATEGORIES.lab || []).includes(category)
 
