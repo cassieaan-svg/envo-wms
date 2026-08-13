@@ -44,6 +44,24 @@ npm install --no-audit --no-fund
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw "backend 'npm install' failed (exit $LASTEXITCODE)" }
 Pop-Location
 
+# 3b. PREFLIGHT - run the new code's login path against THIS database before
+#     anything goes live. Migrations never auto-run, so a commit that needs one
+#     would otherwise deploy fine and then 500 /api/commodities for every user at
+#     the sign-in screen.
+#
+#     Safe to abort here: git reset only rewrote files on disk. pm2 is still
+#     serving the OLD backend from memory and IIS is still serving the OLD dist,
+#     so throwing now leaves prod exactly as it was. That is why this sits before
+#     the xcopy and the pm2 restart, not after.
+Write-Host "-- preflight: checking the database matches the new code" -ForegroundColor Cyan
+Push-Location "$AppDir\backend"
+node scripts/preflight.mjs
+$preflight = $LASTEXITCODE
+Pop-Location
+if ($preflight -ne 0) {
+  throw "PREFLIGHT FAILED - deploy aborted, prod is untouched and still running the previous build. Apply the outstanding db/migrations/*.sql on this VM, then re-run deploy.ps1."
+}
+
 # 4. Frontend deps + build (Vite inlines VITE_ vars from the environment).
 $env:VITE_API_URL = $ApiUrl
 Push-Location "$AppDir\frontend"
