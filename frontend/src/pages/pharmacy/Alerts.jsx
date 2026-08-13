@@ -45,7 +45,11 @@ export function Alerts() {
   const [assignFacState, setAssignFacState]     = useState('')
   const [assignFacLga, setAssignFacLga]         = useState('')
   const [assignFacId, setAssignFacId]           = useState('')
-  const [assignReviewedBy, setAssignReviewedBy] = useState('')
+  // Prefilled with the signed-in admin's own name, the same source Intake uses for
+  // "Received by". Still editable — someone reviewing on a colleague's behalf can
+  // overwrite it — but the common case stops being a retyped name every time.
+  const [assignReviewedBy, setAssignReviewedBy] = useState(
+    () => store.user?.user_metadata?.full_name || store.user?.user_metadata?.name || '')
   const [assignQty, setAssignQty]               = useState(1)
   const [assignLoading, setAssignLoading]       = useState(false)
   // Unscoped facility list for the assign picker only — lets a state admin
@@ -327,6 +331,14 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       over: enriched.filter(r=>r._status==='over'),
     })
   }
+
+  // The session can hydrate after this mounts; fill the reviewer name then, but
+  // never overwrite something already typed.
+  useEffect(() => {
+    if (assignReviewedBy) return
+    const n = store.user?.user_metadata?.full_name || store.user?.user_metadata?.name || ''
+    if (n) setAssignReviewedBy(n)
+  }, [store.user])
 
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   // The in-use split belongs to the Out-of-stock tab; drop it when the tab moves.
