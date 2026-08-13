@@ -1,83 +1,106 @@
-# ENVO Inventory Tracking System
+# ENVO Inventory Tracker
 
-A comprehensive inventory management system for healthcare facilities with separate frontend and backend components.
+A role-aware inventory management system for healthcare commodities across multiple facilities.
 
-## Project Structure
+## What it does
+
+- Tracks stock at store, dispensary, DSD, and SDP locations
+- Supports pharmacy and laboratory commodity sections
+- Records dispensing, intake, stock adjustments, and transfers
+- Provides activity logs, bin cards, AMC settings, alerts, monitoring, and reports
+- Supplies multi-facility oversight for state, cluster, LGA, and overall administrators
+- Publishes live stock updates through server-sent events
+
+## Architecture
+
+This is an npm-workspaces monorepo:
 
 ```
-inventory-tracker/
-├── frontend/              # React + Vite frontend application
-│   ├── src/
-│   ├── package.json
-│   └── vite.config.js
-├── backend/               # Node.js/Express API server
-│   ├── src/
-│   ├── routes/
-│   ├── middleware/
-│   ├── package.json
-│   └── .env.example
-├── package.json           # Root workspace configuration
-└── README.md
+.
+├── frontend/  # React + Vite application
+└── backend/   # Express + PostgreSQL API
 ```
-
-## Tech Stack
 
 ### Frontend
-- **React 19** - UI framework
-- **Vite** - Build tool
-- **Tailwind CSS** - Styling
-- **Zustand** - State management
+
+- React 19
+- Vite
+- Tailwind CSS
+- Zustand
+
+The UI routes users to the pages appropriate for their access level and commodity section. It uses compact stock-summary endpoints where possible, rather than downloading large raw stock datasets.
 
 ### Backend
-- **Node.js** - Runtime
-- **Express.js** - Web framework
-- **CORS** - Cross-origin request handling
 
-## Getting Started
+- Node.js and Express
+- PostgreSQL via `pg`
+- JWT authentication
+- Server-side facility, role, and commodity-section scoping
+- Brotli/gzip response compression
+- Server-sent events for real-time updates
 
-### Prerequisites
-- Node.js >= 18.0.0
-- npm >= 9.0.0
+The API includes stock, transfers, dispensing, intake, adjustments, reporting, facilities, commodities, AMC settings, edit history, and bin-card routes.
 
-## Features
+## Access model
 
-- ✅ Multi-facility support
-- ✅ Role-based access control (Store Manager, DSD User, Lab User, Admin)
-- ✅ Real-time stock tracking
-- ✅ Transfer request management
-- ✅ Dispense logging
-- ✅ Activity reports (daily, weekly, monthly)
-- ✅ Light and dark mode UI
-- ⏳ API backend (in progress)
+The server enforces access control; the interface only reflects those permissions.
 
-## Project Phases
+| Access level | Scope | Write access |
+| --- | --- | --- |
+| Facility user | Own facility and assigned section | Facility operations, subject to role |
+| State admin | Assigned state, both sections | State-scoped stock and transfer management |
+| Overall admin | All facilities and sections | Read-only oversight |
+| State viewer | Assigned state | Read-only oversight |
+| Cluster/LGA admin | Assigned cluster or LGA and section | Read-only oversight |
 
-### Phase 1: Restructuring ✅ DONE
-- Separated frontend and backend into workspaces
-- Created backend template with Express.js
-- Set up project structure and build scripts
+## Requirements
 
-### Phase 2: API Implementation (In Progress)
-- Implement Supabase integration in backend
-- Create API endpoints for all features
-- Migrate frontend to use API instead of direct Supabase
+- Node.js 18 or later
+- npm 9 or later
+- PostgreSQL
 
-### Phase 3: Enhancement
-- Add real-time notifications
-- Implement advanced reporting
-- Optimize performance
+Configure the backend database connection with standard `PG*` environment variables in `backend/.env`.
+
+## Development
+
+Install dependencies from the repository root:
+
+```bash
+npm install
+```
+
+Start the frontend:
+
+```bash
+npm run dev
+```
+
+Start the backend:
+
+```bash
+npm run dev:backend
+```
+
+Build the frontend:
+
+```bash
+npm run build
+```
+
+Run backend tests:
+
+```bash
+npm run test --workspace=backend
+```
+
+## Diagnostics
+
+Set `ENVO_DIAG=1` to enable request timing diagnostics. The backend then exposes an admin-only pool diagnostic endpoint at `/api/_diag/pool`, and reports timing information through the `Server-Timing` response header. Diagnostics are disabled by default.
 
 ## Contributing
 
-1. Create a feature branch: `git checkout -b feature/feature-name`
-2. Commit changes: `git commit -am 'Add feature'`
-3. Push to branch: `git push origin feature/feature-name`
-4. Submit a pull request
+Create a feature branch, make and test your changes, then open a pull request for review.
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Support
-
-For issues and questions, please create an issue in the repository.
+MIT License.
