@@ -277,7 +277,11 @@ export function Transfers() {
 
   async function confirmDispatch(t) {
     // Batch picks decided up front: they determine which fields are required.
-    const pickedLots = (dispatchLots || []).filter(d => d.selected && d.selected.batch_number)
+    // `selected` non-null IS the pick — BatchSelect reports FEFO as onSelect(null).
+    // Do NOT also test batch_number: lots received without one are listed as
+    // "(no batch)" and carry batch_number '', so testing it silently reclassified a
+    // deliberate pick as FEFO and then demanded a typed expiry for it.
+    const pickedLots = (dispatchLots || []).filter(d => d.selected)
 
     if (!dispatchApprovedBy.trim()) { toast('Record approved by is required', 'red'); return }
     if (!dispatchCarrier.trim()) { toast('Carrier is required', 'red'); return }
@@ -306,7 +310,10 @@ export function Transfers() {
         // Derive the paper-form metadata from the batches actually drawn, so the
         // dispatch note still records a batch and an expiry. Earliest expiry across
         // the picked lots — that is the date the consignment as a whole is good to.
-        const batchLabel = [...new Set(pickedLots.map(l => l.selected.batch_number))].join(', ')
+        // filter(Boolean): a lot received without a batch number contributes nothing
+        // to the label rather than an empty segment (", ").
+        const batchLabel = [...new Set(pickedLots.map(l => l.selected.batch_number).filter(Boolean))]
+          .join(', ') || '(no batch)'
         const earliestExpiry = pickedLots
           .map(l => l.selected.expiry_date).filter(Boolean).sort()[0] || dispatchExpiry.trim()
         updatedRow = await api.transfers.dispatch(t.id, {
@@ -1246,7 +1253,7 @@ export function Transfers() {
                               <div>
                                 {/* Only required on the FEFO path — a picked batch brings its own expiry. */}
                                 <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">
-                                  {dispatchLots.some(d => d.selected?.batch_number)
+                                  {dispatchLots.some(d => d.selected)
                                     ? 'Expiry date (from batch)'
                                     : 'Expiry date *'}
                                 </label>
