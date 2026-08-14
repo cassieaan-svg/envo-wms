@@ -276,26 +276,44 @@ export function Transfers() {
   function loadPendingSilent() { return loadPending(false) }
 
   async function confirmDispatch(t) {
+    // Batch picks decided up front: they determine which fields are required.
+    const pickedLots = (dispatchLots || []).filter(d => d.selected && d.selected.batch_number)
+
     if (!dispatchApprovedBy.trim()) { toast('Record approved by is required', 'red'); return }
     if (!dispatchCarrier.trim()) { toast('Carrier is required', 'red'); return }
-    if (!dispatchExpiry.trim()) { toast('Expiry date is required', 'red'); return }
-    if (!dispatchBatch.trim()) { toast('Batch / lot number is required', 'red'); return }
+    // Expiry is typed by hand ONLY on the FEFO path. When batches are picked from
+    // the ledger each one already carries its expiry_date, so demanding a typed one
+    // asks for data the screen already has.
+    //
+    // Note there is deliberately NO dispatchBatch check. The picker REPLACED the
+    // free-text "Batch / lot no." input, so nothing can ever set that state again —
+    // the old check could not be satisfied by any user action, which is what blocked
+    // pharmacy dispatch outright. On the FEFO path the batch is whatever the server
+    // draws, and it records the real lots on the transfer.
+    if (!pickedLots.length && !dispatchExpiry.trim()) {
+      toast('Expiry date is required', 'red'); return
+    }
     const parsedQty = parseInt(dispatchQty)
     if (!parsedQty || parsedQty < 1) { toast('Qty issued must be at least 1', 'red'); return }
     setDispatchLoading(true)
     // Server marks in_transit, sets qty, appends the dispatch note, and decrements sender store.
     let updatedRow
     try {
-      // If caller supplied batch picks, build lots payload and validate totals.
-      const pickedLots = (dispatchLots || []).filter(d => d.selected && d.selected.batch_number)
       if (pickedLots.length) {
         const totalPicked = pickedLots.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)
         if (totalPicked !== parsedQty) { toast(`Sum of selected batch quantities (${totalPicked}) must equal issued qty (${parsedQty})`, 'red'); setDispatchLoading(false); return }
         const lotsPayload = pickedLots.map(l => ({ batch: l.selected.batch_number || null, quantity: parseInt(l.qty) }))
+        // Derive the paper-form metadata from the batches actually drawn, so the
+        // dispatch note still records a batch and an expiry. Earliest expiry across
+        // the picked lots — that is the date the consignment as a whole is good to.
+        const batchLabel = [...new Set(pickedLots.map(l => l.selected.batch_number))].join(', ')
+        const earliestExpiry = pickedLots
+          .map(l => l.selected.expiry_date).filter(Boolean).sort()[0] || dispatchExpiry.trim()
         updatedRow = await api.transfers.dispatch(t.id, {
           approved_by: dispatchApprovedBy.trim(),
           carrier: dispatchCarrier.trim(),
-          expiry: dispatchExpiry.trim(),
+          expiry: earliestExpiry,
+          batch: batchLabel,
           quantity: parsedQty,
           lots: lotsPayload,
         })
@@ -1226,7 +1244,12 @@ export function Transfers() {
                                   placeholder="Carrier / transporter name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
                               <div>
-                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Expiry date *</label>
+                                {/* Only required on the FEFO path — a picked batch brings its own expiry. */}
+                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">
+                                  {dispatchLots.some(d => d.selected?.batch_number)
+                                    ? 'Expiry date (from batch)'
+                                    : 'Expiry date *'}
+                                </label>
                                 <input type="date" value={dispatchExpiry} onChange={e => setDispatchExpiry(e.target.value)}
                                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
