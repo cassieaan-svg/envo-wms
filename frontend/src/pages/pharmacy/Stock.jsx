@@ -47,10 +47,12 @@ export function Stock() {
     // and the baseline AMC in one response, replacing the full stock-table
     // download plus the DSD and SDP row dumps that were only summed per commodity
     // here anyway.
-    const scopeParams = {
-      facility_id: fid || undefined,
-      facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-    }
+    // Compact scope params, not an enumerated facility id list — see the Dashboard:
+    // a large state's ids pushed that URL past the reverse proxy's query-string
+    // limit and the request was rejected before it reached the API. This page sat
+    // just under the same cliff. The server resolves state/lga against the token
+    // scope, so the facility set is identical.
+    const scopeParams = store.getAdminScopeParams()
     const summary = await api.stock.summary(scopeParams).catch(() => [])
     const gMap = {}
     ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })

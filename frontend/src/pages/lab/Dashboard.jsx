@@ -30,6 +30,9 @@ export function Dashboard() {
   const [useFilter, setUseFilter] = useState('')
   const [drill, setDrill]     = useState(null)
   const [loading, setLoading] = useState(true)
+  // Set when the rollup request itself failed, so the page can say so instead of
+  // rendering a confident zero for every commodity.
+  const [stockError, setStockError] = useState(null)
   // Stock-derived status counts are meaningless until the rollup lands — an empty
   // map makes every commodity look out-of-stock.
   const stockPending = loading || !summary
@@ -52,21 +55,39 @@ export function Dashboard() {
     //
     // The rollup replaces the full stock-table download plus the SDP row dump that
     // was only ever summed per commodity here; the server does the same sums.
-    const { fid: amcFid, scopeIds } = store.getAdminStockScope()
+    const { fid: amcFid } = store.getAdminStockScope()
     const amcWin = resolveAmcWindow(amcFid ? store.amcWindows[amcFid] : null)
     const commIds = store.allCommodities.map(c => c.id)
-    const [rows, amc] = await Promise.all([
-      api.stock.summary({
-        facility_id: amcFid || undefined,
-        facility_ids: (!amcFid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-        commodity_ids: commoditySection ? commIds : undefined,
-      }).catch(() => []),
-      loadConsumptionAmcMap({ commIds, scopeParams: store.getAdminScopeParams(), amcWin, section: commoditySection }),
-    ])
-    const byComm = {}
-    ;(rows || []).forEach(r => { byComm[r.commodity_id] = r })
-    setSummary(byComm)
-    setAmcMap(amc)
+
+    // Compact scope params ({ facility_id } | { state, lga } | {}) instead of an
+    // enumerated facility id list, and no commodity_ids. A state account listed
+    // 163 facility ids plus its 87-commodity catalogue, which pushed this URL past
+    // the reverse proxy's query-string limit: it answered 404 before the request
+    // ever reached the API, and the failure then read as "no stock anywhere".
+    //
+    // Neither parameter narrowed anything. The server resolves state/lga against
+    // the caller's token scope (the same facilities, never wider), and already
+    // restricts the response to their section — while the table below only ever
+    // looks rows up by ids in its own catalogue, so extra rows are ignored.
+    const scopeParams = store.getAdminScopeParams()
+    setStockError(null)
+    try {
+      const [rows, amc] = await Promise.all([
+        api.stock.summary(scopeParams),
+        loadConsumptionAmcMap({ commIds, scopeParams, amcWin, section: commoditySection }),
+      ])
+      const byComm = {}
+      ;(rows || []).forEach(r => { byComm[r.commodity_id] = r })
+      setSummary(byComm)
+      setAmcMap(amc)
+    } catch (err) {
+      // Leave `summary` null rather than falling back to {}. Every status here is
+      // derived from the rollup, so an empty map does not read as "failed" — it
+      // reads as every commodity being out of stock, which is a number a user
+      // would act on. Better to show nothing and say so.
+      setStockError(err?.message || 'Could not load stock')
+      setSummary(null)
+    }
     setLoading(false)
 
     // Stage 2 — non-critical: `transacted` only refines the in-use / not-in-use
@@ -177,6 +198,18 @@ export function Dashboard() {
       <FacilityPicker />
 
       <DispatchAlertBanner />
+
+      {/* The rollup failed. Say so plainly: the alternative is six cards and a
+          full table of zeros, which looks like a network-wide stockout. */}
+      {stockError && (
+        <div className="mb-6 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3">
+          <p className="text-sm text-red-300 font-medium">Stock figures could not be loaded</p>
+          <p className="text-xs text-red-400/80 mt-1">
+            The numbers below are incomplete — do not act on them. {stockError}
+          </p>
+          <button onClick={loadData} className="text-xs text-red-200 underline mt-2">Try again</button>
+        </div>
+      )}
 
       <MetricGrid>
         <Metric label="Commodities tracked" value={groupedAll.length} color="blue" onClick={()=>setSts('')} active={stsFilter===''} />

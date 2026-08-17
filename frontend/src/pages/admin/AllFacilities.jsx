@@ -82,11 +82,13 @@ export function AllFacilities() {
   useEffect(() => {
     let active = true
     setStockLoading(true)
-    api.stock.summary({
-      facility_id: scopeFid || undefined,
-      facility_ids: (!scopeFid && scopeIdList && scopeIdList.length) ? scopeIdList : undefined,
-      group_by: 'facility',
-    }).then(rows => { if (active) setFacGrain(rows || []) })
+    // Compact scope params, not an enumerated facility id list — see the Dashboard:
+    // a large state's ids pushed that URL past the reverse proxy's query-string
+    // limit and it was rejected before reaching the API. The id list is still used
+    // below (scopeSet) to filter what has already been fetched; it just no longer
+    // travels in the URL.
+    api.stock.summary({ ...store.getAdminScopeParams(), group_by: 'facility' })
+      .then(rows => { if (active) setFacGrain(rows || []) })
       .catch(() => { if (active) setFacGrain([]) })
       .finally(() => { if (active) setStockLoading(false) })
     return () => { active = false }

@@ -14,10 +14,13 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
   // AMC, in one response. This used to pull every stock row for the facility
   // (limit 50000) plus the SDP rows, purely to sum them per commodity here — for
   // a nav badge showing three numbers.
-  const summary = await api.stock.summary({
-    facility_id: fid,
-    commodity_ids: commoditySection ? commIds : undefined,
-  }).catch(() => [])
+  //
+  // No commodity_ids: the token already restricts the response to the caller's
+  // section, and the loop below only looks rows up by ids in `allCommodities`, so
+  // sending the whole catalogue narrowed nothing while adding several KB to the
+  // URL — which is what pushed the dashboards' version of this call past the
+  // reverse proxy's query-string limit.
+  const summary = await api.stock.summary({ facility_id: fid }).catch(() => [])
   const gMap = {}
   ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })
 
