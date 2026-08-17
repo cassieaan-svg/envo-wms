@@ -426,12 +426,21 @@ export function capExpiryBatchesToStockByFacility(batches, sohByFacComm) {
 // matches the summed stock. `section` adds the pharmacy/lab filter server-side.
 export async function loadConsumptionAmcMap({ commIds, scopeParams, section }) {
   const ids = [...new Set((commIds || []).filter(Boolean))]
+  // `commIds` is still required, but only to decide whether there is anything to
+  // ask about — a caller with an empty catalogue should not make the request at all.
   if (!ids.length) return {}
   let rows
   try {
     rows = await api.dispense.summary({
       ...(scopeParams || {}),
-      commodity_ids: ids,
+      // The ids are deliberately NOT sent. The server already restricts the
+      // response to the caller's section from their token, so listing them
+      // narrowed nothing while adding ~3.4 KB to the URL — the same weight that
+      // pushed the stock rollup past the reverse proxy's query-string limit.
+      //
+      // Returning rows the caller did not ask about is harmless: every consumer
+      // reads this as a lookup table, keyed by ids from its own catalogue, so
+      // extra entries are never visited.
       group_by: 'commodity,lifetime',
       section: section || undefined,
     })
