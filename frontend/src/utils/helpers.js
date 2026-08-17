@@ -24,6 +24,28 @@ export function todayLagos() {
   return new Date().toLocaleDateString('en-CA', { timeZone: LAGOS })
 }
 
+// A date value as a plain yyyy-mm-dd, resolved in Lagos. Null for anything that
+// isn't a usable date, including the pre-2000 "no expiry recorded" sentinels.
+//
+// Use this before PUTTING a date into a payload or a note. The API returns expiry
+// dates as timestamps, and passing one straight back is wrong twice: it records a
+// timestamp where every other row holds a date, and it reads a day EARLY, because
+// the value is UTC midnight and Lagos is an hour ahead — 2027-06-30 arrives as
+// "2027-06-29T23:00:00.000Z" and naive slicing yields the 29th.
+//
+// Deliberately mirrors the backend's ymd() in lotService.js; the server normalises
+// too, so a stray timestamp is corrected rather than stored, but the payload the
+// form sends should be right on its own.
+export function ymdLagos(d) {
+  if (!d) return null
+  const t = new Date(d)
+  if (isNaN(t.getTime())) return null
+  const s = t.toLocaleDateString('en-CA', { timeZone: LAGOS })
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const year = +s.slice(0, 4)
+  return year >= 2000 && year <= 2100 ? s : null
+}
+
 // Expiry entered at intake must be a REAL FUTURE date: you can't receive stock
 // that's already expired, and a `<input type="date">` otherwise lets a fumbled
 // year (e.g. "0001-01-01") through the non-empty "required" check. Valid when the

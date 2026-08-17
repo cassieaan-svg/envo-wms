@@ -10,7 +10,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { BatchSelect } from '../../components/ui/BatchSelect'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf } from '../../utils/helpers'
+import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf } from '../../utils/helpers'
 import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
@@ -326,7 +326,12 @@ export function Transfers() {
         // entered so it records the real value rather than the gap. Earliest expiry
         // across the picked lots — the date the consignment as a whole is good to.
         const batchOf = l => l.selected.batch_number || String(l.fixBatch || '').trim()
-        const expiryOf = l => l.selected.expiry_date || String(l.fixExpiry || '').trim()
+        // ymdLagos on both sources before comparing them. The lot's expiry_date comes
+        // back from the API as a timestamp while a correction is typed as a plain
+        // date, and mixing the two breaks this twice: the note ends up holding a
+        // timestamp, and the sort picks the wrong lot, because 30 June arrives as
+        // "2027-06-29T23:00:00.000Z" and sorts ahead of a genuine "2027-06-30".
+        const expiryOf = l => ymdLagos(l.selected.expiry_date) || ymdLagos(String(l.fixExpiry || '').trim())
         const batchLabel = [...new Set(pickedLots.map(batchOf).filter(Boolean))].join(', ')
         const earliestExpiry = pickedLots.map(expiryOf).filter(Boolean).sort()[0] || null
         updatedRow = await api.transfers.dispatch(t.id, {
