@@ -514,10 +514,15 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
         <button className="btn small" onClick={pdf} disabled={editing}>
           ⭳ PDF
         </button>
-        {isAdmin && !editing && (
+        {isAdmin && !editing && !/^Essential request #/.test(order.notes || '') && (
           <button className="btn small" onClick={startEdit} style={{ marginLeft: 'auto' }}>
             edit
           </button>
+        )}
+        {/^Essential request #/.test(order.notes || '') && (
+          <span className="muted" style={{ marginLeft: 'auto' }}>
+            From a facility request — correct via the request or an adjustment
+          </span>
         )}
       </div>
 
