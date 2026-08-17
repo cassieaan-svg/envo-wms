@@ -38,7 +38,9 @@ const STATUS_TILES = [
   ['low', 'Low stock', 'warn'],
   ['out', 'Out of stock', 'alert'],
   ['over', 'Overstock', ''],
-  ['untracked', 'No thresholds set', ''],
+  // Only commodities that hold stock reach this bucket — an empty shelf is counted as
+  // out of stock whether or not levels were ever set for it.
+  ['untracked', 'No reorder/max levels', ''],
 ];
 
 export default function CommoditiesPricesPage({ isAdmin }) {
