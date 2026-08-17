@@ -6,6 +6,27 @@ import { LotService } from '../src/services/lotService.js'
 // make unique names per run to avoid unique-constraint collisions
 const uniq = () => `${Date.now()}-${Math.floor(Math.random()*10000)}`
 
+// Remove a test's fixture rows, CHILDREN FIRST. stock_lot references both the
+// commodity and the facility, so leaving its rows behind makes the parent deletes
+// fail on the foreign key — and because these ran as best-effort catches, the
+// failure was silent and every run leaked a facility, a commodity and a lot into
+// the dev database. Those strays then showed up as real stock in category audits.
+//
+// Errors are reported rather than swallowed: a cleanup that cannot clean up is
+// something to see, not to hide.
+async function cleanup({ fid, cid, stockId }) {
+  const steps = [
+    ['stock_lot', 'delete from stock_lot where facility_id = $1 and commodity_id = $2', [fid, cid]],
+    ['stock', 'delete from stock where id = $1', [stockId]],
+    ['facility', 'delete from facilities where id = $1', [fid]],
+    ['commodity', 'delete from commodities where id = $1', [cid]],
+  ]
+  for (const [label, sql, params] of steps) {
+    try { await query(sql, params) }
+    catch (err) { console.warn(`[cleanup] ${label} not removed: ${err.message}`) }
+  }
+}
+
 // Unit tests for LotService.debit enforcement behaviors
 
 test('debit with specific batch and enforce=true throws when batch short', async () => {
@@ -34,9 +55,7 @@ test('debit with specific batch and enforce=true throws when batch short', async
       err => err && err.status === 409
     )
   } finally {
-    await query('delete from stock where id = $1', [stockId]).catch(() => {})
-    await query('delete from facilities where id = $1', [fid]).catch(() => {})
-    await query('delete from commodities where id = $1', [cid]).catch(() => {})
+    await cleanup({ fid, cid, stockId })
   }
 })
 
@@ -64,8 +83,6 @@ test('debit non-enforced returns shortfall when insufficient', async () => {
       assert.equal(res.shortfall, 5)
     })
   } finally {
-    await query('delete from stock where id = $1', [stockId]).catch(() => {})
-    await query('delete from facilities where id = $1', [fid]).catch(() => {})
-    await query('delete from commodities where id = $1', [cid]).catch(() => {})
+    await cleanup({ fid, cid, stockId })
   }
 })
