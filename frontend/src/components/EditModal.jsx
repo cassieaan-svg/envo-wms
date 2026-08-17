@@ -3,6 +3,7 @@ import { api } from '../lib/api'
 import { useAppStore } from '../store/appStore'
 import { useStock } from '../hooks/useStock'
 import { toast } from './ui/Toast'
+import { fmtStockQty } from '../utils/helpers'
 
 export function EditModal({ record, onClose, onSave }) {
   const store = useAppStore()
@@ -30,7 +31,16 @@ export function EditModal({ record, onClose, onSave }) {
   // so cancelling it gives the stock back.
   const creditsStock = record._type === 'intake' ||
     (record._type === 'adjustment' && record.adjustment_type === 'Increase')
-  const unit = record.commodities?.unit || 'unit'
+  // fmtStockQty rather than hand-rolled pluralisation: units are stored ALREADY
+  // PLURAL ("bottles"), so appending an s gives "1 bottles" / "2 bottless". The
+  // shared helper singularises first, which is what the rest of the app renders.
+  const origQty = Number(record.quantity)
+  const qtyLabel = fmtStockQty(origQty, record.commodities)
+
+  // What the user calls this record. The UI says "Consumption" throughout — the
+  // menu, the activity log, the page title — so the modal should not be the one
+  // place that says "dispense".
+  const typeLabel = record._type === 'dispense' ? 'consumption' : record._type
 
   // Stock is NOT adjusted here. The server moves it inside the same transaction that
   // updates the log row (LogService.updateLog), so the record and the stock can never
@@ -109,7 +119,7 @@ export function EditModal({ record, onClose, onSave }) {
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div className="bg-gray-900 border border-white/10 rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-medium text-gray-100">Edit {record._type} record</h3>
+          <h3 className="font-medium text-gray-100">Edit {typeLabel} record</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl">✕</button>
         </div>
         <div className="space-y-3">
@@ -125,9 +135,8 @@ export function EditModal({ record, onClose, onSave }) {
                 the opposite of what cancelling a dispense does. */}
             {parseInt(qty) === 0 && (
               <p className="text-xs text-amber-400/90 mt-1.5">
-                Cancels this {record._type}. {record.quantity} {unit}{record.quantity === 1 ? '' : 's'}{' '}
-                {creditsStock ? 'will be REMOVED from' : 'returns to'} stock, and the record is
-                kept showing it was cancelled.
+                Cancels this {typeLabel} and {creditsStock ? 'removes' : 'returns'} {qtyLabel}{' '}
+                {creditsStock ? 'from' : 'to'} stock. The record is kept, showing it was cancelled.
                 {creditsStock && ' If that stock has already been used, this edit will be refused.'}
               </p>
             )}
