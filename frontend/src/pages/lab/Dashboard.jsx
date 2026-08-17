@@ -111,9 +111,11 @@ export function Dashboard() {
     const g        = gMap[c.id] || {}
     const comm     = c
     const storeQty = g.store_qty || 0
-    // SDP stock is only folded in when a single facility is in view — an admin
-    // spanning many facilities has never shown it here. Preserved deliberately.
-    const sdpQty   = fid ? (g.sdp_qty || 0) : 0
+    // SDP stock counts at every grain. It used to be zeroed unless a single
+    // facility was in view, which made a state or cluster login read store-only
+    // while All Facilities — and the whole pharmacy section — counted SDP, so the
+    // same commodity showed two different totals and a false low-stock badge.
+    const sdpQty   = g.sdp_qty || 0
     const quantity = storeQty + sdpQty
     return {
       id: c.id, commodity_id: c.id, commodities: comm,
