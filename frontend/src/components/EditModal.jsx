@@ -13,7 +13,13 @@ export function EditModal({ record, onClose, onSave }) {
   const [qty, setQty]           = useState(record.quantity)
   const [date, setDate]         = useState(record.dispensed_at?.slice(0,10)||record.received_at?.slice(0,10)||record.adjusted_at?.slice(0,10)||'')
   const [notes, setNotes]       = useState(record.notes||'')
-  const [expiry, setExpiry]     = useState(record.expiry_date||'')
+  // .slice(0,10) like the date field above: an <input type="date"> only renders a
+  // yyyy-mm-dd value, so handing it a full ISO timestamp left the box BLANK on every
+  // intake and adjustment edit, however the record was labelled. The value survived a
+  // save untouched — the untouched state was sent straight back — so nothing was
+  // lost, but the form said an expiry was missing when one was on file. On a system
+  // that now refuses to dispatch undated stock, that is the worst way to be wrong.
+  const [expiry, setExpiry]     = useState(record.expiry_date?.slice(0,10)||'')
   const [batch, setBatch]       = useState(record.batch_number||'')
   const [supplier, setSupplier] = useState(knownSuppliers.includes(normalizedSupplier) ? normalizedSupplier : (normalizedSupplier ? 'Other' : ''))
   const [supplierOther, setSupplierOther] = useState(knownSuppliers.includes(normalizedSupplier) ? '' : normalizedSupplier)
