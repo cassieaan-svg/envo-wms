@@ -53,6 +53,7 @@ router.post('/:id/fulfil', async (req, res) => {
       carrierName: req.body?.carrierName,
       carrierPhone: req.body?.carrierPhone,
       pickedBy: req.body?.pickedBy,
+      items: req.body?.items,   // optional [{ itemId, qty }] — issue quantities set while picking
     });
     res.json(request);
   } catch (err) {

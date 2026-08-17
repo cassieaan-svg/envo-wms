@@ -270,6 +270,11 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
   const [carrierName, setCarrierName] = useState(request.carrier_name || '');
   const [carrierPhone, setCarrierPhone] = useState(request.carrier_phone || '');
   const [receivedBy, setReceivedBy] = useState(request.received_by || '');
+  // Issue quantity per line, editable while picking (defaults to the requested amount);
+  // clamped to [0, requested] on submit. Only meaningful before dispatch.
+  const [issue, setIssue] = useState(() =>
+    Object.fromEntries(request.items.map((i) => [i.id, String(i.qty_dispatched ?? i.quantity)])));
+  const clampIssue = (i) => Math.max(0, Math.min(Number(issue[i.id] ?? i.quantity) || 0, Number(i.quantity)));
 
   const canDispatch = (request.picked_by || pickedBy.trim()) && carrierName.trim() && carrierPhone.trim();
 
@@ -363,12 +368,44 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
                   pickedBy: pickedBy.trim(),
                   carrierName: carrierName.trim(),
                   carrierPhone: carrierPhone.trim(),
+                  items: request.items.map((i) => ({ itemId: i.id, qty: clampIssue(i) })),
                 }),
               'Dispatched — EnVo notified.'
             );
           }}
         >
           <h2>Hand over to carrier</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Set the quantity actually issued for each line (defaults to requested; can't exceed it).
+            What's on hand is the hard cap — a line short of stock issues what's available.
+          </p>
+          <div className="table-wrap" style={{ marginBottom: 12 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th className="wrap">Commodity</th>
+                  <th className="num">Requested</th>
+                  <th className="num">Issue qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {request.items.map((i) => (
+                  <tr key={i.id}>
+                    <td className="wrap">{i.commodity_name}</td>
+                    <td className="num">{qty(i.quantity)}</td>
+                    <td className="num">
+                      <input
+                        type="number" min="0" max={i.quantity} step="1"
+                        value={issue[i.id] ?? ''}
+                        onChange={(e) => setIssue((s) => ({ ...s, [i.id]: e.target.value }))}
+                        style={{ width: 90, textAlign: 'right' }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div className="form-grid">
             {/* Removed duplicate 'Picked by' field here; use 'Start picking' above instead */}
             <Field label="Carrier name *">

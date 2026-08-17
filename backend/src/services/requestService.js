@@ -162,7 +162,7 @@ export class RequestService {
   // Fulfil: record the dispatched quantities + price the order, mark dispatched, and tell
   // EnVo. (Batch-level FEFO depletion via DispatchService is deferred until the warehouse
   // holds batch stock — it currently holds none.)
-  static async fulfil(id, { dispatchedBy, carrierName, carrierPhone, pickedBy } = {}) {
+  static async fulfil(id, { dispatchedBy, carrierName, carrierPhone, pickedBy, items } = {}) {
     // Stock is not released to an unnamed carrier — the pair is the handover record.
     if (!carrierName?.trim()) { const e = new Error("the carrier's name is required"); e.status = 400; throw e; }
     if (!carrierPhone?.trim()) { const e = new Error("the carrier's phone number is required"); e.status = 400; throw e; }
@@ -191,10 +191,18 @@ export class RequestService {
       const { rows: reqItems } = await client.query(
         'SELECT id, commodity_id, quantity, unit_price FROM request_items WHERE request_id = $1', [id]);
 
+      // Per-line issue quantities the store officer set while picking. Absent → issue the
+      // full requested amount. Clamped to [0, requested] — you can short an order but never
+      // issue more than was asked. allocateFefo still caps each line at what's on hand.
+      const issueQty = new Map((items || []).map((i) => [Number(i.itemId), Number(i.qty)]));
+
       let anyDispatched = false;
       const dispatchedLines = [];   // the lines that actually shipped, for the dispatch order
       for (const it of reqItems) {
-        const want = Number(it.quantity || 0);
+        const requested = Number(it.quantity || 0);
+        let want = issueQty.has(it.id) ? issueQty.get(it.id) : requested;
+        if (!(want >= 0)) want = 0;
+        if (want > requested) want = requested;
         const allocated = want > 0
           ? await DispatchService.allocateFefo(client, {
               commodityId: it.commodity_id,
@@ -247,7 +255,7 @@ export class RequestService {
 
       // Read the actually-dispatched lines on the same connection so the callback payload
       // matches exactly what this transaction committed. EnVo credits qty_dispatched.
-      const { rows: items } = await client.query(
+      const { rows: shippedItems } = await client.query(
         'SELECT commodity_id, qty_dispatched FROM request_items WHERE request_id = $1', [id]);
 
       await OutboxService.enqueue(
@@ -260,7 +268,7 @@ export class RequestService {
           pickedBy: dispatched.picked_by,
           carrierName: dispatched.carrier_name,
           carrierPhone: dispatched.carrier_phone,
-          items: items.map(i => ({ wmsCommodityId: i.commodity_id, qtyDispatched: i.qty_dispatched })),
+          items: shippedItems.map(i => ({ wmsCommodityId: i.commodity_id, qtyDispatched: i.qty_dispatched })),
         },
         client
       );
