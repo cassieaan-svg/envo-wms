@@ -37,11 +37,23 @@ test('dispatch with explicit lots deducts per-batch quantities atomically', asyn
     transferId = trRes.rows[0].id
 
     const lotsPayload = [{ batch: 'A', quantity: 50 }, { batch: 'B', quantity: 150 }]
-    const dispatched = await TransferService.dispatch(transferId, { approved_by: 'tester', carrier: 'van', expiry: '', quantity: 200, lots: lotsPayload })
+    // The expiry is passed as a raw TIMESTAMP on purpose: that is what the dispatch
+    // form sends, since it forwards the lot's expiry_date exactly as the lots API
+    // returned it. Passing a clean date here would test a case the UI never produces.
+    const dispatched = await TransferService.dispatch(transferId, { approved_by: 'tester', carrier: 'van', expiry: '2027-06-29T23:00:00.000Z', quantity: 200, lots: lotsPayload })
     assert.ok(dispatched, 'dispatch returned a row')
     assert.equal(dispatched.status, 'in_transit')
     assert.equal(dispatched.quantity, 200)
     assert.ok(Array.isArray(dispatched.lots) && dispatched.lots.length > 0, 'transfer.lots recorded')
+
+    // The note is read by people, so the expiry must be a plain date. A value taken
+    // from the lot ledger arrives as a timestamp and used to land in the note as
+    // "2027-06-29T23:00:00.000Z" — and a day early, since UTC midnight is the
+    // previous evening in Lagos. B is the earlier batch, so the consignment expires
+    // with it.
+    const noteExpiry = /\[Expiry: ([^\]]*)\]/.exec(dispatched.notes || '')?.[1]
+    assert.match(noteExpiry || '', /^\d{4}-\d{2}-\d{2}$/, `note expiry must be a plain date, got "${noteExpiry}"`)
+    assert.equal(noteExpiry, '2027-06-30', 'the earliest drawn expiry, in Lagos time')
 
     const { rows: s2 } = await query('select quantity from stock where id = $1', [stockId])
     assert.equal(s2[0].quantity, 0)

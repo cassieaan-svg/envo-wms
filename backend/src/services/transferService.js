@@ -1,6 +1,6 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
-import { LotService, splitLots } from './lotService.js'
+import { LotService, splitLots, ymd } from './lotService.js'
 import { sectionFilterSql } from '../constants/sections.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
@@ -275,17 +275,27 @@ export class TransferService {
       if (!expiry) {
         const undated = drawn.filter(d => !d.expiry)
         if (undated.length) {
-          const names = [...new Set(undated.map(d => d.batch || '(no batch number)'))].join(', ')
+          // Name the batches when they have names. Falling back to a placeholder
+          // produced "batch (no batch number) has no expiry date recorded", which
+          // says batch twice and reads like a bug rather than an instruction.
+          const names = [...new Set(undated.map(d => d.batch).filter(Boolean))]
           const e = new Error(
-            `Cannot dispatch: batch ${names} has no expiry date recorded. ` +
-            `Correct the batch's expiry date, then dispatch.`)
+            (names.length
+              ? `Cannot dispatch: batch ${names.join(', ')} has no expiry date recorded. `
+              : 'Cannot dispatch: the stock drawn has no expiry date recorded. ') +
+            'Record the expiry date against it, then dispatch.')
           e.status = 409
           throw e
         }
       }
 
       const metaBatch = batch || drawnBatches.join(', ') || ''
-      const metaExpiry = expiry || drawnExpiry || ''
+      // ymd, not the raw value: a date drawn from the lot ledger arrives as a
+      // timestamp, so the note read "[Expiry: 2027-06-29T23:00:00.000Z]" where every
+      // older record shows a plain date. It also read a day early — the timestamp is
+      // UTC midnight, which is the previous evening in Lagos — so the note and the
+      // lots stored alongside it disagreed by a day on the same consignment.
+      const metaExpiry = ymd(expiry || drawnExpiry) || ''
 
       const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${metaExpiry}] [Batch: ${metaBatch}]`
       const newNotes = transfer.notes ? `${transfer.notes} ${meta}` : meta
