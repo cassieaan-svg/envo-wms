@@ -9,6 +9,7 @@ import { authMiddleware } from './middleware/auth.js'
 import { attachScope } from './middleware/scope.js'
 import { serviceAuth } from './middleware/serviceAuth.js'
 import { initRealtime, sseHandler } from './realtime.js'
+import { startOutboxWorker } from './lib/outboxWorker.js'
 import { DIAG, diagMiddleware, diagHandler, startSampler } from './diag.js'
 import { pool } from './db.js'
 
@@ -143,6 +144,7 @@ app.use((err, req, res, next) => {
 })
 
 initRealtime()
+startOutboxWorker()
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend API running on http://localhost:${PORT}`)

@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
+import { OutboxService } from './outboxService.js'
 
 const WMS_API_URL = process.env.WMS_API_URL || 'http://localhost:5100'
 const SERVICE_TOKEN = process.env.SERVICE_TOKEN
@@ -241,20 +242,19 @@ export class WarehouseRequestService {
       const { rows } = await exec(
         `update warehouse_requests set status = 'received', received_at = now(), received_by = $2
            where id = $1 returning *`, [id, receivedBy ?? null])
-      return rows[0]
-    })
+      const row = rows[0]
 
-    // Close the loop in the WMS. Best-effort: the receipt is already recorded here, so a
-    // brief WMS outage must not fail the facility's confirmation.
-    fetch(`${WMS_API_URL}/inbound/requests/receipt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-service-token': SERVICE_TOKEN || '' },
-      body: JSON.stringify({
+      // Close the loop in the WMS through the outbox, in this same transaction — so if the
+      // WMS is down when the facility confirms, the recipient still reaches it once it's
+      // back, rather than being lost to a fire-and-forget call.
+      await OutboxService.enqueue('wms_receipt', {
         envoRequestId: id,
-        receivedBy: updated?.received_by ?? receivedBy ?? null,
-        receivedAt: updated?.received_at ?? null,
-      }),
-    }).catch(err => console.warn(`[warehouse request ${id}] receipt callback failed: ${err.message}`))
+        receivedBy: row?.received_by ?? receivedBy ?? null,
+        receivedAt: row?.received_at ?? null,
+      }, exec)
+
+      return row
+    })
 
     return updated
   }
