@@ -56,8 +56,29 @@ function getStockStatus(quantity, amc) {
   return 'ok'
 }
 
+// ── One snapshot per comparison ───────────────────────────────────────────────
+// Every test here compares the aggregate SQL against a re-implementation over the
+// raw tables. Those are separate queries, so by default each one sees a different
+// snapshot of a LIVE database: anything that commits in between — a dev server, a
+// concurrent test file seeding fixtures — makes the two halves disagree and the
+// suite fails for a reason that has nothing to do with the code under test.
+//
+// Running both halves inside one REPEATABLE READ transaction pins them to a single
+// snapshot, so a concurrent write is invisible to both rather than to one. READ
+// ONLY makes that explicit and stops a stray write here from touching real data.
+async function withSnapshot(fn) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    return await fn((text, params) => client.query(text, params))
+  } finally {
+    try { await client.query('ROLLBACK') } catch { /* ignore */ }
+    client.release()
+  }
+}
+
 // Fetch the raw rows the old client would have downloaded, for the same scope.
-async function oldPath({ facilityIds = null, commodityIds = null, categories = null } = {}) {
+async function oldPath({ facilityIds = null, commodityIds = null, categories = null } = {}, exec = query) {
   const params = []
   const facIdx = Array.isArray(facilityIds) ? (params.push(facilityIds), params.length) : null
   const commIdx = (Array.isArray(commodityIds) && commodityIds.length) ? (params.push(commodityIds), params.length) : null
@@ -68,13 +89,13 @@ async function oldPath({ facilityIds = null, commodityIds = null, categories = n
     catIdx ? ` and c.category = any($${catIdx})` : '',
   ].join('')
 
-  const stock = (await query(
+  const stock = (await exec(
     `select st.commodity_id, st.facility_id, st.quantity, st.location_type, st.baseline_amc
        from stock st join commodities c on c.id = st.commodity_id where true${filt('st')}`, params)).rows
-  const dsd = (await query(
+  const dsd = (await exec(
     `select dd.commodity_id, dd.quantity from dsd_stock dd
        join commodities c on c.id = dd.commodity_id where true${filt('dd')}`, params)).rows
-  const sdp = (await query(
+  const sdp = (await exec(
     `select sp.commodity_id, sp.quantity from sdp_stock sp
        join commodities c on c.id = sp.commodity_id where true${filt('sp')}`, params)).rows
 
@@ -87,9 +108,10 @@ async function oldPath({ facilityIds = null, commodityIds = null, categories = n
 }
 
 // Compare the aggregate to the reference path over one scope, field by field.
-async function assertScopeMatches(scope, label) {
-  const rows = await StockService.getScopedStockSummary(scope)
-  const { gMap, dsdMap, sdpMap } = await oldPath(scope)
+async function assertScopeMatches(scope, label, exec) {
+  if (!exec) return withSnapshot(e => assertScopeMatches(scope, label, e))
+  const rows = await StockService.getScopedStockSummary(scope, exec)
+  const { gMap, dsdMap, sdpMap } = await oldPath(scope, exec)
   const byId = Object.fromEntries(rows.map(r => [r.commodity_id, r]))
 
   // Every commodity the old path would have surfaced must be present, and the
@@ -189,11 +211,13 @@ dbTest('unscoped (overall admin) matches the client-side computation', async () 
 })
 
 dbTest('facility scoping matches, and excludes out-of-scope facilities', async () => {
-  const rows = await assertScopeMatches({ facilityIds: [busiestFacility] }, 'one facility')
-  const unscoped = await StockService.getScopedStockSummary({})
-  const totalOne = rows.reduce((s, r) => s + r.store_qty, 0)
-  const totalAll = unscoped.reduce((s, r) => s + r.store_qty, 0)
-  assert.ok(totalOne < totalAll, 'a single facility must hold less than the whole network')
+  await withSnapshot(async exec => {
+    const rows = await assertScopeMatches({ facilityIds: [busiestFacility] }, 'one facility', exec)
+    const unscoped = await StockService.getScopedStockSummary({}, exec)
+    const totalOne = rows.reduce((s, r) => s + r.store_qty, 0)
+    const totalAll = unscoped.reduce((s, r) => s + r.store_qty, 0)
+    assert.ok(totalOne < totalAll, 'a single facility must hold less than the whole network')
+  })
 })
 
 dbTest('state scoping matches for every state', async () => {
@@ -257,11 +281,13 @@ dbTest('a facility-scoped caller cannot widen scope via extra facility ids', asy
   // The route intersects the token scope with the client filter before calling the
   // service (resolveListFacilityIds). This locks the service half: given the
   // already-intersected set, only those facilities contribute.
-  const scoped = await StockService.getScopedStockSummary({ facilityIds: [busiestFacility] })
-  const { gMap } = await oldPath({ facilityIds: [busiestFacility] })
-  for (const r of scoped) {
-    assert.equal(r.store_qty, gMap[r.commodity_id]?.storeQty ?? 0, 'scoped total drew in another facility')
-  }
+  await withSnapshot(async exec => {
+    const scoped = await StockService.getScopedStockSummary({ facilityIds: [busiestFacility] }, exec)
+    const { gMap } = await oldPath({ facilityIds: [busiestFacility] }, exec)
+    for (const r of scoped) {
+      assert.equal(r.store_qty, gMap[r.commodity_id]?.storeQty ?? 0, 'scoped total drew in another facility')
+    }
+  })
 })
 
 // ── Edge-case commodity shapes ───────────────────────────────────────────────
@@ -285,16 +311,18 @@ dbTest('zero-stock commodities keep their row and read as out of stock', async (
 })
 
 dbTest('commodities with no stock anywhere are omitted (catalogue is added client-side)', async () => {
-  const rows = await StockService.getScopedStockSummary({})
-  const returned = new Set(rows.map(r => r.commodity_id))
-  const untouched = (await query(`
-    select id from commodities c
-     where not exists (select 1 from stock where commodity_id = c.id)
-       and not exists (select 1 from dsd_stock where commodity_id = c.id)
-       and not exists (select 1 from sdp_stock where commodity_id = c.id) limit 5`)).rows
-  for (const c of untouched) {
-    assert.ok(!returned.has(c.id), 'a commodity with no stock record anywhere must not be returned')
-  }
+  await withSnapshot(async exec => {
+    const rows = await StockService.getScopedStockSummary({}, exec)
+    const returned = new Set(rows.map(r => r.commodity_id))
+    const untouched = (await exec(`
+      select id from commodities c
+       where not exists (select 1 from stock where commodity_id = c.id)
+         and not exists (select 1 from dsd_stock where commodity_id = c.id)
+         and not exists (select 1 from sdp_stock where commodity_id = c.id) limit 5`)).rows
+    for (const c of untouched) {
+      assert.ok(!returned.has(c.id), 'a commodity with no stock record anywhere must not be returned')
+    }
+  })
 })
 
 // ── Dashboard card counts ────────────────────────────────────────────────────
@@ -305,8 +333,10 @@ dbTest('dashboard card counts are identical to the client-side computation', asy
     { label: 'section pharmacy', scope: { categories: SECTION_CATEGORIES.pharmacy } },
   ]
   for (const { label, scope } of scopes) {
-    const rows = await StockService.getScopedStockSummary(scope)
-    const { gMap, dsdMap, sdpMap } = await oldPath(scope)
+    const { rows, gMap, dsdMap, sdpMap } = await withSnapshot(async exec => ({
+      rows: await StockService.getScopedStockSummary(scope, exec),
+      ...await oldPath(scope, exec),
+    }))
 
     // Card counts are computed over the whole catalogue (every tracked commodity,
     // so zero-stock items count as out-of-stock), exactly as the Dashboard does.
@@ -328,11 +358,13 @@ dbTest('dashboard card counts are identical to the client-side computation', asy
 
 // ── Shape / scalability guardrail ────────────────────────────────────────────
 dbTest('response is one row per commodity, not one per stock row', async () => {
-  const rows = await StockService.getScopedStockSummary({})
+  const { rows, stockRows } = await withSnapshot(async exec => ({
+    rows: await StockService.getScopedStockSummary({}, exec),
+    stockRows: (await exec('select count(*)::int c from stock')).rows[0].c,
+  }))
   const ids = rows.map(r => r.commodity_id)
   assert.equal(ids.length, new Set(ids).size, 'duplicate commodity rows — the aggregate is not collapsing')
 
-  const { rows: [{ c: stockRows }] } = await query('select count(*)::int c from stock')
   assert.ok(rows.length < stockRows / 10,
     `summary returned ${rows.length} rows against ${stockRows} stock rows — payload is tracking data volume`)
 })
@@ -342,11 +374,12 @@ dbTest('response is one row per commodity, not one per stock row', async () => {
 // commodity-grain rollup cannot answer. Today it derives that from the whole
 // stock array plus two paginated site-stock drains.
 dbTest('facility grain reproduces the per-(commodity, facility) reduction', async () => {
-  const rows = await StockService.getScopedStockByFacility({})
+  await withSnapshot(async exec => {
+  const rows = await StockService.getScopedStockByFacility({}, exec)
 
   // The old client-side path: group every stock row by (commodity, facility),
   // summing quantity and taking the max baseline_amc, then fold in site stock.
-  const raw = (await query('select commodity_id, facility_id, quantity, location_type, baseline_amc from stock')).rows
+  const raw = (await exec('select commodity_id, facility_id, quantity, location_type, baseline_amc from stock')).rows
   const expect = {}
   const key = (c, f) => `${c}|${f}`
   raw.forEach(r => {
@@ -359,7 +392,7 @@ dbTest('facility grain reproduces the per-(commodity, facility) reduction', asyn
     if ((r.baseline_amc || 0) > expect[k].amc) expect[k].amc = r.baseline_amc || 0
   })
   for (const [table, col] of [['dsd_stock', 'dsd'], ['sdp_stock', 'sdp']]) {
-    for (const r of (await query(`select commodity_id, facility_id, quantity from ${table}`)).rows) {
+    for (const r of (await exec(`select commodity_id, facility_id, quantity from ${table}`)).rows) {
       const k = key(r.commodity_id, r.facility_id)
       if (!expect[k]) expect[k] = { total: 0, amc: 0, store: 0, dispensary: 0, other: 0 }
       expect[k][col] = (expect[k][col] || 0) + r.quantity
@@ -379,6 +412,7 @@ dbTest('facility grain reproduces the per-(commodity, facility) reduction', asyn
     // The overview's per-facility total sums every stock row regardless of location.
     assert.equal(a.store_qty + a.dispensary_qty + a.other_qty, e.total, `${k}: per-facility total`)
   }
+  })
 })
 
 dbTest('facility grain honours facility, commodity and section scope', async () => {
@@ -398,17 +432,21 @@ dbTest('facility grain honours facility, commodity and section scope', async () 
 })
 
 dbTest('facility grain: commodity_id narrows to the drill-down commodity only', async () => {
-  const all = await StockService.getScopedStockByFacility({})
-  const one = all[0].commodity_id
-  const drill = await StockService.getScopedStockByFacility({ commodityId: one })
-  assert.ok(drill.length > 0)
-  assert.ok(drill.every(r => r.commodity_id === one), 'drill returned another commodity')
-  assert.equal(drill.length, all.filter(r => r.commodity_id === one).length, 'drill dropped facilities')
+  await withSnapshot(async exec => {
+    const all = await StockService.getScopedStockByFacility({}, exec)
+    const one = all[0].commodity_id
+    const drill = await StockService.getScopedStockByFacility({ commodityId: one }, exec)
+    assert.ok(drill.length > 0)
+    assert.ok(drill.every(r => r.commodity_id === one), 'drill returned another commodity')
+    assert.equal(drill.length, all.filter(r => r.commodity_id === one).length, 'drill dropped facilities')
+  })
 })
 
 dbTest('facility grain totals reconcile with the commodity grain', async () => {
-  const byFac = await StockService.getScopedStockByFacility({})
-  const byComm = await StockService.getScopedStockSummary({})
+  const { byFac, byComm } = await withSnapshot(async exec => ({
+    byFac: await StockService.getScopedStockByFacility({}, exec),
+    byComm: await StockService.getScopedStockSummary({}, exec),
+  }))
   const roll = {}
   byFac.forEach(r => {
     if (!roll[r.commodity_id]) roll[r.commodity_id] = { store: 0, disp: 0, dsd: 0, sdp: 0 }
