@@ -4,7 +4,7 @@ Warehouse management for a central medical store that supplies health facilities
 EnVo product family, but a standalone application: its own repo, its own Postgres database and
 its own logins. It talks to EnVo only over REST.
 
-Commodities are **not** HIV-specific — the catalogue is seeded from the Ministry of Health
+The catalogue is seeded from the Ministry of Health
 Central Medical Stores (Uyo) price list and covers tablets, injections, syrups, infusions,
 consumables and ophthalmic preparations.
 
@@ -14,9 +14,6 @@ consumables and ophthalmic preparations.
 - **Commodities & prices** — catalogue grouped by category, with the current price per
   vendor/brand. Prices are versioned: setting a new price marks the old row `is_current = false`
   and inserts a new one, so history is never overwritten.
-- **Price list import** — upload the Ministry price list (`.docx`, or `.csv`), review the staged
-  rows, assign a vendor, fix or exclude anything incomplete, then commit. Nothing reaches the
-  price catalogue until commit, and commit is one transaction.
 - **Batches** — lot-level stock with expiry dates and an append-only movement ledger, so every
   quantity change is traceable.
 - **Dispatch** — send several commodities to a facility in one order with a quantity and price
