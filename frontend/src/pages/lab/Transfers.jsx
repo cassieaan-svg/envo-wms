@@ -291,7 +291,9 @@ export function Transfers() {
     // only at confirm time, so it refuses there instead and names the batch.
     for (const l of pickedLots) {
       if (!l.selected.expiry_date && !String(l.fixExpiry || '').trim()) {
-        toast(`Batch ${l.selected.batch_number || '(no batch)'} has no expiry date recorded — enter it to continue`, 'red'); return
+        toast(l.selected.batch_number
+          ? `Batch ${l.selected.batch_number} has no expiry date recorded — enter it to continue`
+          : 'This lot has no expiry date recorded — enter it to continue', 'red'); return
       }
       if (!l.selected.batch_number && !String(l.fixBatch || '').trim()) {
         toast('This lot has no batch number recorded — enter it to continue', 'red'); return
@@ -1251,7 +1253,7 @@ export function Transfers() {
                                       <div className="flex gap-2 items-center pl-1">
                                         <span className="text-xs text-amber-400">This batch is incomplete — it will be corrected on file:</span>
                                         {!dl.selected.batch_number && (
-                                          <input type="text" value={dl.fixBatch || ''} placeholder="Batch / lot no. *"
+                                          <input type="text" value={dl.fixBatch || ''} placeholder="Enter batch no"
                                             onChange={e => { const copy = [...dispatchLots]; copy[i] = { ...copy[i], fixBatch: e.target.value }; setDispatchLots(copy) }}
                                             className="w-40 bg-white/5 border border-amber-500/40 rounded-lg px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-amber-400" />
                                         )}

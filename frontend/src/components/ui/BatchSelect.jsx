@@ -66,7 +66,7 @@ export function BatchSelect({ facilityId, commodityId, locationType, siteName, v
 
   if (loading) return <div className="text-xs text-gray-500 px-1 py-2">Loading batches…</div>
 
-  const label = o => `${o.batch_number || '(no batch)'} · exp ${o.expiry_date ? fmtDate(o.expiry_date) : '—'} (${o.remaining} left)${o.expired ? ' — EXPIRED' : o.soon ? ' — expiring soon' : ''}`
+  const label = o => `${o.batch_number || 'No batch no'} · exp ${o.expiry_date ? fmtDate(o.expiry_date) : '—'} (${o.remaining} left)${o.expired ? ' — EXPIRED' : o.soon ? ' — expiring soon' : ''}`
   return (
     <select value={value || FEFO} onChange={e => onSelect?.(e.target.value === FEFO ? null : options.find(o => o.key === e.target.value) || null)} className={cls}>
       <option value={FEFO}>Select batch</option>
