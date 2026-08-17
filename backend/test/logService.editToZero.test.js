@@ -157,6 +157,67 @@ test('zeroing a Decrease adjustment returns the stock it took', async () => {
   }
 })
 
+test('a cancelled Decrease adjustment also returns to its own batch', async () => {
+  // A Decrease takes the debit path, so it must restore identity the same way a
+  // cancelled consumption does — not leave the write-off coming back unlabelled.
+  const f = await fixture({ location_type: 'store', qty: 80 })
+  let logId
+  try {
+    await withTransaction(exec => LotService.credit(exec,
+      { facility_id: f.fid, commodity_id: f.cid, location_type: 'store' },
+      { batch: 'ADJ-1', expiry: '2029-01-31', qty: 80 }))
+
+    logId = (await query(
+      `insert into stock_adjustment_log
+         (facility_id, commodity_id, quantity, adjustment_type, reason, adjusted_by, location_type, adjusted_at, batch_number, expiry_date)
+       values ($1,$2,20,'Decrease','Damaged','tester','store', now(), 'ADJ-1', '2029-01-31') returning id`,
+      [f.fid, f.cid])).rows[0].id
+
+    await LogService.updateLog('adjustment', logId, { quantity: 0 })
+
+    const { rows: lots } = await query(
+      `select batch_number, quantity from stock_lot
+        where facility_id=$1 and commodity_id=$2 and location_type='store' and quantity > 0`,
+      [f.fid, f.cid])
+    assert.equal(lots.length, 1, `must rejoin its batch: ${JSON.stringify(lots)}`)
+    assert.equal(lots[0].batch_number, 'ADJ-1', 'returned to the batch written off')
+    assert.equal(Number(lots[0].quantity), 100, 'at the restored quantity')
+  } finally {
+    if (logId) await query('delete from stock_adjustment_log where id=$1', [logId]).catch(() => {})
+    await cleanup(f)
+  }
+})
+
+test('zeroing an Increase adjustment removes the stock it added', async () => {
+  // The credit direction, which takes the OTHER branch (_syncLotsOnEdit) and was not
+  // covered at all: an Increase added stock, so cancelling it must take it away and
+  // leave the lot ledger agreeing with the bin.
+  const f = await fixture({ location_type: 'store', qty: 100 })
+  let logId
+  try {
+    await withTransaction(exec => LotService.credit(exec,
+      { facility_id: f.fid, commodity_id: f.cid, location_type: 'store' },
+      { batch: 'INC-1', expiry: '2029-06-30', qty: 100 }))
+
+    logId = (await query(
+      `insert into stock_adjustment_log
+         (facility_id, commodity_id, quantity, adjustment_type, reason, adjusted_by, location_type, adjusted_at, batch_number, expiry_date)
+       values ($1,$2,40,'Increase','Physical count correction','tester','store', now(), 'INC-1', '2029-06-30') returning id`,
+      [f.fid, f.cid])).rows[0].id
+
+    await LogService.updateLog('adjustment', logId, { quantity: 0 })
+
+    assert.equal(await soh(f.fid, f.cid, 'store'), 60, 'the 40 it added is taken back out')
+    const { rows } = await query(
+      `select coalesce(sum(quantity),0)::int t from stock_lot
+        where facility_id=$1 and commodity_id=$2 and location_type='store'`, [f.fid, f.cid])
+    assert.equal(rows[0].t, 60, 'the lot ledger follows the bin')
+  } finally {
+    if (logId) await query('delete from stock_adjustment_log where id=$1', [logId]).catch(() => {})
+    await cleanup(f)
+  }
+})
+
 test('cancelling an intake whose stock is gone is refused, not clamped', async () => {
   // The hazard unique to cancelling a CREDIT: the bin may no longer hold what the
   // receipt added. Clamping would set it to zero and report success, writing off the
