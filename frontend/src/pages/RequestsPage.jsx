@@ -271,7 +271,16 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
   const [carrierPhone, setCarrierPhone] = useState(request.carrier_phone || '');
   const [receivedBy, setReceivedBy] = useState(request.received_by || '');
 
-  const canDispatch = pickedBy.trim() && carrierName.trim() && carrierPhone.trim();
+  const canDispatch = (request.picked_by || pickedBy.trim()) && carrierName.trim() && carrierPhone.trim();
+
+  function isCompleteNigerianNumber(s) {
+    const d = (s || '').toString().replace(/\D/g, '');
+    if (d.startsWith('234') && d.length === 13) return true;
+    if (d.startsWith('0') && d.length === 11) return true;
+    return false;
+  }
+
+  const phoneValid = isCompleteNigerianNumber(carrierPhone);
 
   function pdf() {
     return downloadPdf({
@@ -361,16 +370,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         >
           <h2>Hand over to carrier</h2>
           <div className="form-grid">
-            {!request.picked_by && (
-              <Field label="Picked by *">
-                <input
-                  value={pickedBy}
-                  onChange={(e) => setPickedBy(e.target.value)}
-                  placeholder="store officer's name"
-                  required
-                />
-              </Field>
-            )}
+            {/* Removed duplicate 'Picked by' field here; use 'Start picking' above instead */}
             <Field label="Carrier name *">
               <input
                 value={carrierName}
@@ -386,8 +386,13 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
                 placeholder="08000000000"
                 required
               />
+              {!phoneValid && carrierPhone.trim() && (
+                <div className="muted" style={{ color: '#b0413e' }}>
+                  Enter a complete Nigerian number, e.g. 08012345678 or +2348012345678
+                </div>
+              )}
             </Field>
-            <button className="btn primary" type="submit" disabled={busy || !canDispatch}>
+            <button className="btn primary" type="submit" disabled={busy || !canDispatch || !phoneValid}>
               {busy ? 'dispatching…' : 'Fulfil & dispatch'}
             </button>
           </div>

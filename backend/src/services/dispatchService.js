@@ -130,7 +130,12 @@ export class DispatchService {
   // Take `quantity` of a commodity out of stock, oldest-expiry-first, writing one ledger
   // row per lot touched. Shared by dispatching and by re-applying an edited order so the
   // two can never drift apart.
-  static async allocateFefo(client, { commodityId, quantity, facilityId, itemId, actor }) {
+  // Draws `quantity` FEFO across a commodity's lots and returns the amount actually
+  // allocated. By default it's all-or-nothing (throws if stock is short). With
+  // `allowShort`, it takes whatever is on hand (0..quantity) and returns that, so a
+  // request can ship the lines the warehouse has without being blocked by the ones it
+  // doesn't — the shortfall stays visible as requested-minus-dispatched.
+  static async allocateFefo(client, { commodityId, quantity, facilityId, itemId, actor, allowShort = false }) {
     // Locking the usable lots for the transaction stops two concurrent dispatches both
     // claiming the same stock.
     const batches = await client.query(
@@ -146,7 +151,7 @@ export class DispatchService {
     );
 
     const available = batches.rows.reduce((sum, b) => sum + Number(b.quantity_remaining), 0);
-    if (available < quantity) {
+    if (!allowShort && available < quantity) {
       const name = batches.rows[0]?.commodity_name || `commodity #${commodityId}`;
       const err = new Error(
         `insufficient stock for ${name}: requested ${quantity}, available ${available}`
@@ -155,7 +160,8 @@ export class DispatchService {
       throw err;
     }
 
-    let outstanding = quantity;
+    let outstanding = allowShort ? Math.min(quantity, available) : quantity;
+    let allocated = 0;
     for (const batch of batches.rows) {
       if (outstanding <= 0) break;
       const take = Math.min(outstanding, Number(batch.quantity_remaining));
@@ -171,7 +177,9 @@ export class DispatchService {
         [batch.id, -take, facilityId, itemId, actor ?? null]
       );
       outstanding = round2(outstanding - take);
+      allocated = round2(allocated + take);
     }
+    return allocated;
   }
 
   // Put an order's dispatched quantities back into the exact lots they came from. Read

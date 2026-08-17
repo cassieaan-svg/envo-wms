@@ -1,5 +1,18 @@
 import { query, withTransaction } from '../db.js';
 import { OutboxService } from './outboxService.js';
+import { DispatchService } from './dispatchService.js';
+
+function _digits(s) {
+  return (s || '').toString().replace(/\D/g, '');
+}
+
+function isCompleteNigerianNumber(s) {
+  const d = _digits(s);
+  // Accept +234XXXXXXXXXX (digits '234' + 10) or 0XXXXXXXXXX (11 digits starting 0)
+  if (d.startsWith('234') && d.length === 13) return true;
+  if (d.startsWith('0') && d.length === 11) return true;
+  return false;
+}
 
 function round2(v) { return Math.round(Number(v) * 100) / 100; }
 
@@ -153,6 +166,11 @@ export class RequestService {
     // Stock is not released to an unnamed carrier — the pair is the handover record.
     if (!carrierName?.trim()) { const e = new Error("the carrier's name is required"); e.status = 400; throw e; }
     if (!carrierPhone?.trim()) { const e = new Error("the carrier's phone number is required"); e.status = 400; throw e; }
+    if (!isCompleteNigerianNumber(carrierPhone)) {
+      const e = new Error("the carrier phone must be a complete Nigerian number, e.g. 08012345678 or +2348012345678");
+      e.status = 400;
+      throw e;
+    }
 
     await withTransaction(async (client) => {
       const { rows } = await client.query('SELECT * FROM requests WHERE id = $1 FOR UPDATE', [id]);
@@ -165,8 +183,40 @@ export class RequestService {
       const picker = req.picked_by || pickedBy?.trim() || null;
       if (!picker) { const e = new Error('the name of the person who picked this order is required'); e.status = 400; throw e; }
 
-      // Dispatch each line at its requested quantity.
-      await client.query('UPDATE request_items SET qty_dispatched = quantity WHERE request_id = $1', [id]);
+      // Short-dispatch: allocate each line FEFO up to what's physically on hand and record
+      // the actual amount shipped. A line the warehouse can't cover yet ships 0 and stays
+      // visible as requested-minus-dispatched, rather than blocking the whole delivery.
+      // allocateFefo decrements `commodity_batches.quantity_remaining` and writes
+      // `batch_movements` in this same transaction, so WMS stock reflects the handover.
+      const { rows: reqItems } = await client.query(
+        'SELECT id, commodity_id, quantity, unit_price FROM request_items WHERE request_id = $1', [id]);
+
+      let anyDispatched = false;
+      const dispatchedLines = [];   // the lines that actually shipped, for the dispatch order
+      for (const it of reqItems) {
+        const want = Number(it.quantity || 0);
+        const allocated = want > 0
+          ? await DispatchService.allocateFefo(client, {
+              commodityId: it.commodity_id,
+              quantity: want,
+              facilityId: req.facility_id,
+              itemId: null,
+              actor: dispatchedBy ?? null,
+              allowShort: true,
+            })
+          : 0;
+        await client.query('UPDATE request_items SET qty_dispatched = $2 WHERE id = $1', [it.id, allocated]);
+        if (allocated > 0) {
+          anyDispatched = true;
+          const unitPrice = Number(it.unit_price);
+          dispatchedLines.push({ commodityId: it.commodity_id, quantity: allocated, unitPrice, lineTotal: round2(allocated * unitPrice) });
+        }
+      }
+      if (!anyDispatched) {
+        const e = new Error('None of the requested commodities are in stock yet — nothing to dispatch.');
+        e.status = 409; throw e;
+      }
+
       const { rows: upd } = await client.query(
         `UPDATE requests
             SET status = 'dispatched', dispatched_at = now(), dispatched_by = $2,
@@ -176,9 +226,27 @@ export class RequestService {
         [id, dispatchedBy ?? null, carrierName.trim(), carrierPhone.trim(), picker]);
       const dispatched = upd[0];
 
-      // Read the dispatched lines on the same connection so the payload matches exactly
-      // what this transaction committed, and queue the callback alongside it. Stock has
-      // left the building; EnVo must find out even if the link is down right now.
+      // Record the fulfilment as a dispatch order so it shows in dispatch history, and
+      // link it back to the request. Only the lines that actually shipped are included
+      // (dispatch_order_items.quantity must be > 0). The batch draw above already wrote
+      // batch_movements; this is the order-level document over the same handover.
+      const orderTotal = round2(dispatchedLines.reduce((s, l) => s + l.lineTotal, 0));
+      const { rows: ord } = await client.query(
+        `INSERT INTO dispatch_orders (facility_id, total_amount, dispatched_by, notes)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [req.facility_id, orderTotal, dispatchedBy ?? null,
+         `Essential request #${dispatched.id}${dispatched.envo_request_id ? ` (${dispatched.envo_request_id})` : ''}`]);
+      const dispatchOrderId = ord[0].id;
+      for (const l of dispatchedLines) {
+        await client.query(
+          `INSERT INTO dispatch_order_items (dispatch_order_id, commodity_id, quantity, unit_price, line_total)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [dispatchOrderId, l.commodityId, l.quantity, l.unitPrice, l.lineTotal]);
+      }
+      await client.query('UPDATE requests SET dispatch_order_id = $2 WHERE id = $1', [id, dispatchOrderId]);
+
+      // Read the actually-dispatched lines on the same connection so the callback payload
+      // matches exactly what this transaction committed. EnVo credits qty_dispatched.
       const { rows: items } = await client.query(
         'SELECT commodity_id, qty_dispatched FROM request_items WHERE request_id = $1', [id]);
 
