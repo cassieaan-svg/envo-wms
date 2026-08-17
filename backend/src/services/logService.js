@@ -299,11 +299,21 @@ export class LogService {
           const current = await binSoh(exec, bin)
           const target = current + delta
           if (target < 0) {
-            const msg = `Cannot apply this edit: ${binLabel(bin)} holds ${current}, and the change would take it to ${target}.`
-            if (enforceBinStock()) { const e = new Error(msg); e.status = 409; throw e }
-            console.warn(`[bin-stock] edit clamped (ENFORCE_BIN_STOCK is off): ${msg}`)
+            // ALWAYS refuse, whatever ENFORCE_BIN_STOCK says. That flag exists so a
+            // live movement can still be recorded when the balance on file disagrees
+            // with the shelf — recording what happened matters more than the figure
+            // being tidy. An edit is the opposite case: nothing is happening in the
+            // real world, someone is correcting the record. Clamping here would set
+            // the bin to zero and report success, silently writing off whatever it
+            // held — a loss the edit never authorised and that nothing in the UI
+            // would show. Better to refuse and name the shortfall.
+            const e = new Error(
+              `Cannot apply this edit: ${binLabel(bin)} holds ${current}, ` +
+              `and the change would take it to ${target}.`)
+            e.status = 409
+            throw e
           }
-          await setBinSoh(exec, bin, Math.max(0, target))
+          await setBinSoh(exec, bin, target)
         }
       }
 

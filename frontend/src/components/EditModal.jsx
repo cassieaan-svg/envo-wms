@@ -24,6 +24,14 @@ export function EditModal({ record, onClose, onSave }) {
 
   const fid = store.currentFacility?.id
 
+  // Which way this record moved the stock, mirroring the sign LogService.updateLog
+  // applies: an intake or an Increase adjustment ADDED stock, so cancelling it takes
+  // stock away. Everything else (a dispense, a Decrease adjustment) took stock out,
+  // so cancelling it gives the stock back.
+  const creditsStock = record._type === 'intake' ||
+    (record._type === 'adjustment' && record.adjustment_type === 'Increase')
+  const unit = record.commodities?.unit || 'unit'
+
   // Stock is NOT adjusted here. The server moves it inside the same transaction that
   // updates the log row (LogService.updateLog), so the record and the stock can never
   // disagree. Writing it from here — a second, separate request that set the stock
@@ -32,11 +40,28 @@ export function EditModal({ record, onClose, onSave }) {
   // STORE, so editing a dispensary, SDP or DSD record moved the wrong bin.
 
   async function save() {
-    if (qty < 1) { setErr('Quantity must be at least 1.'); return }
+    // Zero cancels a DISPENSE, and is the way to undo one that should never have been
+    // recorded: the server moves the stock by the same delta inside the transaction
+    // that edits the row, so the bin returns to exactly what it held before.
+    // Requiring at least 1 left no way to do that — the nearest alternative was a
+    // compensating adjustment, which fixes the balance but leaves the false
+    // consumption standing in the record and in the AMC that derives from it.
+    //
+    // The row is kept rather than deleted, so the edit history still shows what was
+    // entered and who cancelled it. Negatives stay rejected: they would invert the
+    // movement rather than cancel it.
+    //
+    // All three types, once db/migrations/20260817_intake_adjustment_allow_zero_quantity.sql
+    // is applied — intake_log and stock_adjustment_log carried a CHECK (quantity > 0)
+    // until then, and zero would come back as a raw constraint violation rather than
+    // anything a user could act on.
+    const n = parseInt(qty)
+    if (qty === '' || Number.isNaN(n)) { setErr('Quantity is required.'); return }
+    if (n < 0) { setErr('Quantity cannot be negative.'); return }
     if (!editedBy) { setErr('Edited by is required.'); return }
     setSaving(true)
 
-    const newQty = parseInt(qty)
+    const newQty = n
     const oldQty = record.quantity
     let table = '', updateData = {}
 
@@ -94,7 +119,18 @@ export function EditModal({ record, onClose, onSave }) {
           </div>
           <div>
             <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Quantity</label>
-            <input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+            <input type="number" min="0" value={qty} onChange={e=>setQty(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"/>
+            {/* Zero is a real choice here, not a typo — say which way the stock moves,
+                so nobody has to guess. Cancelling an intake TAKES stock away, which is
+                the opposite of what cancelling a dispense does. */}
+            {parseInt(qty) === 0 && (
+              <p className="text-xs text-amber-400/90 mt-1.5">
+                Cancels this {record._type}. {record.quantity} {unit}{record.quantity === 1 ? '' : 's'}{' '}
+                {creditsStock ? 'will be REMOVED from' : 'returns to'} stock, and the record is
+                kept showing it was cancelled.
+                {creditsStock && ' If that stock has already been used, this edit will be refused.'}
+              </p>
+            )}
           </div>
           {record._type==='dispense' && <>
             <div>
