@@ -97,6 +97,8 @@ router.put('/:id/prices', requireAdmin, async (req, res, next) => {
       return res.status(400).json({ error: 'unitPrice must be a non-negative number' });
     }
 
+    // setCurrentPrice enqueues the EnVo price push to the outbox in the same transaction,
+    // so the change survives EnVo being offline and is delivered when it returns.
     const price = await PriceService.setCurrentPrice(Number(req.params.id), {
       unitPrice: Number(unitPrice),
       effectiveDate: effectiveDate || null,

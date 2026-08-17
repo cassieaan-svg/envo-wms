@@ -1,5 +1,5 @@
 import { query } from '../db.js';
-import { postRequestStatus } from '../lib/envoClient.js';
+import { postRequestStatus, postPriceUpdate } from '../lib/envoClient.js';
 
 // Durable delivery of outbound calls to EnVo.
 //
@@ -17,6 +17,7 @@ const MAX_BACKOFF_SECONDS = 3600;
 // What each `kind` means. Adding a new outbound call means adding a sender here.
 const SENDERS = {
   request_status: (payload) => postRequestStatus(payload, { attempts: 1 }),
+  commodity_price: (payload) => postPriceUpdate(payload, { attempts: 1 }),
 };
 
 export class OutboxService {
@@ -60,7 +61,9 @@ export class OutboxService {
                SELECT 1 FROM outbox earlier
                 WHERE earlier.delivered_at IS NULL
                   AND earlier.id < o.id
-                  AND earlier.payload->>'envoRequestId' IS NOT DISTINCT FROM o.payload->>'envoRequestId'
+                  AND COALESCE(earlier.payload->>'envoRequestId', earlier.payload->>'causeKey')
+                      IS NOT DISTINCT FROM
+                      COALESCE(o.payload->>'envoRequestId', o.payload->>'causeKey')
              )
            ORDER BY o.id
            LIMIT ${BATCH}

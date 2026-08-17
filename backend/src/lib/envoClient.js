@@ -34,6 +34,23 @@ export function postRequestStatus(payload, opts) {
   }, opts)
 }
 
+// Push a price change to EnVo so its Essential Commodities display price stays live
+// (EnVo remains a cached mirror; the WMS is the master). Delivered through the outbox,
+// which owns retry/backoff — hence `{ attempts: 1 }` from there. The payload may carry a
+// causeKey for outbox ordering; only the two fields below are sent on the wire.
+export function postPriceUpdate(payload, opts) {
+  const { wmsCommodityId, unitPrice } = payload;
+  return retry(async () => {
+    const res = await fetch(`${process.env.ENVO_API_URL}/hooks/commodities/price`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-service-token': process.env.SERVICE_TOKEN || '' },
+      body: JSON.stringify({ wmsCommodityId, unitPrice }),
+    });
+    if (!res.ok) throw new Error(`EnVo price hook returned ${res.status}`);
+    return res.json().catch(() => ({}));
+  }, opts);
+}
+
 // A facility's Essential Commodities stock-on-hand, read from EnVo's service-token hook.
 // `facilityCode` is EnVo's facilities.code — what we store as envo_facility_id.
 // Returns { facilityId, facilityName, asOf, items:[{ commodityId, name, quantityOnHand, unit }] },

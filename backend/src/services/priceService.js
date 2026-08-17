@@ -1,4 +1,5 @@
 import { query, withTransaction } from '../db.js';
+import { OutboxService } from './outboxService.js';
 
 export class PriceService {
   static async history(commodityId) {
@@ -27,6 +28,16 @@ export class PriceService {
          RETURNING id, commodity_id, unit_price, effective_date, is_current, created_at`,
         [commodityId, unitPrice, effectiveDate ?? null, createdBy ?? null]
       );
+
+      // Push the new price to EnVo through the outbox, in the same transaction — so a
+      // change made while EnVo is down (or offline) is delivered the moment it's back,
+      // rather than lost after a few retries. causeKey chains per-commodity price rows.
+      await OutboxService.enqueue(
+        'commodity_price',
+        { wmsCommodityId: commodityId, unitPrice: Number(unitPrice), causeKey: `price:${commodityId}` },
+        client
+      );
+
       return rows[0];
     });
   }
