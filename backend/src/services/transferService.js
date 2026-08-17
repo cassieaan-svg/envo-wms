@@ -169,6 +169,31 @@ export class TransferService {
    * issued quantity, append dispatch metadata to notes, and decrement the sender
    * store stock.
    */
+  /**
+   * Fill in a missing batch number / expiry date on the lots of one bin that match
+   * `batch` ('' selects the unbatched lot; null matches every lot in the bin).
+   *
+   * Only ever FILLS: `coalesce` and the null/'' guards mean an existing value is
+   * never overwritten. This runs on the dispatch path, where the operator is
+   * correcting a gap that blocks the transfer — it must not become a way to silently
+   * rewrite the expiry of stock that already had one.
+   */
+  static async fillLotGaps(exec, bin, batch, { expiry, batch: newBatch } = {}) {
+    if (!expiry && !newBatch) return
+    const params = [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
+    const sets = []
+    if (expiry)   { params.push(expiry);   sets.push(`expiry_date = coalesce(expiry_date, $${params.length}::date)`) }
+    if (newBatch) { params.push(newBatch); sets.push(`batch_number = case when batch_number is null or btrim(batch_number) = '' then $${params.length} else batch_number end`) }
+
+    let where = `facility_id=$1 and commodity_id=$2 and location_type=$3
+                   and coalesce(site_name,'') = coalesce($4,'') and quantity > 0`
+    if (batch !== null && batch !== undefined) {
+      params.push(batch)
+      where += ` and coalesce(batch_number,'') = coalesce($${params.length},'')`
+    }
+    await exec(`update stock_lot set ${sets.join(', ')}, updated_at = now() where ${where}`, params)
+  }
+
   static async dispatch(transferId, data) {
     const { approved_by, carrier, expiry, batch, quantity, lots } = data
     const transfer = await this.getTransferById(transferId)
@@ -202,16 +227,67 @@ export class TransferService {
           for (const l of lots) {
             const take = Math.round(l.quantity || 0)
             if (take <= 0) continue
+
+            // Identify the picked lot by its CURRENT batch number. '' is meaningful
+            // here — it selects the unbatched lot — whereas null means "no batch
+            // constraint" and would draw FEFO across the whole bin. Only a genuinely
+            // absent field may become null.
+            let pickBatch = l.batch === undefined || l.batch === null ? null : String(l.batch)
+
+            // Fill a gap the dispatcher supplied. Stock is required to carry a batch
+            // and an expiry; when the picked lot is missing one, the form collects it
+            // and it is written back to the ledger here, so the correction persists
+            // instead of living only in this transfer's note.
+            if (l.set_expiry || l.set_batch) {
+              await this.fillLotGaps(exec, bin, pickBatch, { expiry: l.set_expiry, batch: l.set_batch })
+              // The lot now answers to its new batch number, so debit by that.
+              if (l.set_batch) pickBatch = String(l.set_batch)
+            }
+
             // Debit exactly from the named batch; enforce=true makes this fail
             // when the chosen batch cannot cover the requested amount.
-            const res = await LotService.debit(exec, bin, take, { batch: l.batch || null, enforce: true })
+            const res = await LotService.debit(exec, bin, take, { batch: pickBatch, enforce: true })
             drawn = drawn.concat(res.drawn)
           }
         } else {
           ;({ drawn } = await LotService.debit(exec, { facility_id: transfer.sending_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }, qty, { enforce: true }))
         }
       }
-      const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${expiry || ''}] [Batch: ${batch || ''}]`
+      // Batch and expiry for the paper-form note. The dispatch screen no longer has
+      // inputs for either — the batch comes from the picker and the expiry from the
+      // lot it belongs to — so when the caller omits them, derive them from the lots
+      // actually drawn. Without this the FEFO path would record "[Expiry: ] [Batch: ]"
+      // even though the exact lots are known here.
+      //
+      // Expiry is the EARLIEST across the drawn lots: the consignment as a whole is
+      // only good until its soonest-expiring component.
+      const drawnBatches = [...new Set(drawn.map(d => d.batch).filter(Boolean))]
+      const drawnExpiry = drawn.map(d => d.expiry).filter(Boolean).sort()[0] || null
+
+      // Every commodity is meant to carry an expiry date, so stock with none must not
+      // move: dispatching it would put an undated consignment on the receiver's shelf
+      // and record "[Expiry: ]" as the only trace. Refuse, and name the batch so the
+      // lot can be corrected. Throwing inside withTransaction rolls back the stock
+      // decrement and the lot debits, so a blocked dispatch changes nothing.
+      //
+      // Only when the caller supplied no expiry of its own — an explicit value from
+      // some other caller is still honoured.
+      if (!expiry) {
+        const undated = drawn.filter(d => !d.expiry)
+        if (undated.length) {
+          const names = [...new Set(undated.map(d => d.batch || '(no batch number)'))].join(', ')
+          const e = new Error(
+            `Cannot dispatch: batch ${names} has no expiry date recorded. ` +
+            `Correct the batch's expiry date, then dispatch.`)
+          e.status = 409
+          throw e
+        }
+      }
+
+      const metaBatch = batch || drawnBatches.join(', ') || ''
+      const metaExpiry = expiry || drawnExpiry || ''
+
+      const meta = `[Approved by: ${approved_by || ''}] [Carrier: ${carrier || ''}] [Expiry: ${metaExpiry}] [Batch: ${metaBatch}]`
       const newNotes = transfer.notes ? `${transfer.notes} ${meta}` : meta
       const { rows } = await exec(
         `update stock_transfer_log set status = 'in_transit', quantity = $2, notes = $3, lots = $4

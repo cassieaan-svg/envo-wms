@@ -97,7 +97,9 @@ export function Transfers() {
   const [dispatchingId, setDispatchingId] = useState(null)
   const [dispatchApprovedBy, setDispatchApprovedBy] = useState('')
   const [dispatchCarrier, setDispatchCarrier] = useState('')
-  const [dispatchExpiry, setDispatchExpiry] = useState('')
+  // No dispatchExpiry state: an expiry is never typed for the consignment as a whole.
+  // It comes from the picked batch, from a per-lot correction when that batch has
+  // none on file, or from the lots the server draws on the FEFO path.
   const [dispatchBatch, setDispatchBatch] = useState('')
   const [dispatchQty, setDispatchQty] = useState(1)
   const [dispatchLoading, setDispatchLoading] = useState(false)
@@ -285,17 +287,19 @@ export function Transfers() {
 
     if (!dispatchApprovedBy.trim()) { toast('Record approved by is required', 'red'); return }
     if (!dispatchCarrier.trim()) { toast('Carrier is required', 'red'); return }
-    // Expiry is typed by hand ONLY on the FEFO path. When batches are picked from
-    // the ledger each one already carries its expiry_date, so demanding a typed one
-    // asks for data the screen already has.
-    //
-    // Note there is deliberately NO dispatchBatch check. The picker REPLACED the
-    // free-text "Batch / lot no." input, so nothing can ever set that state again —
-    // the old check could not be satisfied by any user action, which is what blocked
-    // pharmacy dispatch outright. On the FEFO path the batch is whatever the server
-    // draws, and it records the real lots on the transfer.
-    if (!pickedLots.length && !dispatchExpiry.trim()) {
-      toast('Expiry date is required', 'red'); return
+    // Every commodity must carry a batch number and an expiry date. Most lots already
+    // do, so nothing is asked for; where the ledger has a gap, the picker shows an
+    // inline input for it and it is required here. The value is written back to the
+    // lot on the server, so the gap is fixed rather than papered over for this one
+    // dispatch. Nothing is asked for on the FEFO path — the server picks the lots
+    // only at confirm time, so it refuses there instead and names the batch.
+    for (const l of pickedLots) {
+      if (!l.selected.expiry_date && !String(l.fixExpiry || '').trim()) {
+        toast(`Batch ${l.selected.batch_number || '(no batch)'} has no expiry date recorded — enter it to continue`, 'red'); return
+      }
+      if (!l.selected.batch_number && !String(l.fixBatch || '').trim()) {
+        toast('This lot has no batch number recorded — enter it to continue', 'red'); return
+      }
     }
     const parsedQty = parseInt(dispatchQty)
     if (!parsedQty || parsedQty < 1) { toast('Qty issued must be at least 1', 'red'); return }
@@ -306,16 +310,23 @@ export function Transfers() {
       if (pickedLots.length) {
         const totalPicked = pickedLots.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)
         if (totalPicked !== parsedQty) { toast(`Sum of selected batch quantities (${totalPicked}) must equal issued qty (${parsedQty})`, 'red'); setDispatchLoading(false); return }
-        const lotsPayload = pickedLots.map(l => ({ batch: l.selected.batch_number || null, quantity: parseInt(l.qty) }))
-        // Derive the paper-form metadata from the batches actually drawn, so the
-        // dispatch note still records a batch and an expiry. Earliest expiry across
-        // the picked lots — that is the date the consignment as a whole is good to.
-        // filter(Boolean): a lot received without a batch number contributes nothing
-        // to the label rather than an empty segment (", ").
-        const batchLabel = [...new Set(pickedLots.map(l => l.selected.batch_number).filter(Boolean))]
-          .join(', ') || '(no batch)'
-        const earliestExpiry = pickedLots
-          .map(l => l.selected.expiry_date).filter(Boolean).sort()[0] || dispatchExpiry.trim()
+        // batch identifies the lot to draw from and '' is meaningful — it selects the
+        // unbatched lot. Sending null would mean "no batch constraint" and draw FEFO
+        // across the whole bin instead of the one that was picked.
+        // set_* carry the operator's corrections; the server writes them onto the lot.
+        const lotsPayload = pickedLots.map(l => ({
+          batch: l.selected.batch_number || '',
+          quantity: parseInt(l.qty),
+          set_expiry: l.selected.expiry_date ? null : String(l.fixExpiry || '').trim() || null,
+          set_batch: l.selected.batch_number ? null : String(l.fixBatch || '').trim() || null,
+        }))
+        // Paper-form metadata for the note, falling back to the correction just
+        // entered so it records the real value rather than the gap. Earliest expiry
+        // across the picked lots — the date the consignment as a whole is good to.
+        const batchOf = l => l.selected.batch_number || String(l.fixBatch || '').trim()
+        const expiryOf = l => l.selected.expiry_date || String(l.fixExpiry || '').trim()
+        const batchLabel = [...new Set(pickedLots.map(batchOf).filter(Boolean))].join(', ')
+        const earliestExpiry = pickedLots.map(expiryOf).filter(Boolean).sort()[0] || null
         updatedRow = await api.transfers.dispatch(t.id, {
           approved_by: dispatchApprovedBy.trim(),
           carrier: dispatchCarrier.trim(),
@@ -325,11 +336,11 @@ export function Transfers() {
           lots: lotsPayload,
         })
       } else {
+        // Nothing typed on the FEFO path: the server derives batch and expiry from the
+        // lots it draws, and refuses if any of them is undated.
         updatedRow = await api.transfers.dispatch(t.id, {
           approved_by: dispatchApprovedBy.trim(),
           carrier: dispatchCarrier.trim(),
-          expiry: dispatchExpiry.trim(),
-          batch: dispatchBatch.trim(),
           quantity: parsedQty,
         })
       }
@@ -337,7 +348,7 @@ export function Transfers() {
     await loadStock()
     toast('Transfer dispatched — awaiting receiver acceptance', 'green')
     setPending(prev => prev.map(p => p.id === t.id ? { ...p, status: 'in_transit', quantity: parsedQty, notes: updatedRow?.notes ?? p.notes } : p))
-    setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]); setDispatchLoading(false)
+    setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]); setDispatchLoading(false)
   }
 
   async function confirmAssignFacility(t) {
@@ -1160,7 +1171,7 @@ export function Transfers() {
                             )}
                             {t.status === 'pending' && isSender && !isDispenser && (
                               <>
-                                <Button variant="success" size="sm" onClick={() => { setDispatchingId(t.id); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchQty(t.quantity); setDispatchExpiry(''); setDispatchBatch(''); setDispatchLots([{ id: Date.now(), selected: null, qty: t.quantity }]) }}>Arrange transfer</Button>
+                                <Button variant="success" size="sm" onClick={() => { setDispatchingId(t.id); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchQty(t.quantity); setDispatchBatch(''); setDispatchLots([{ id: Date.now(), selected: null, qty: t.quantity, fixExpiry: '', fixBatch: '' }]) }}>Arrange transfer</Button>
                                 <Button variant="danger" size="sm" onClick={() => cancelRequest(t.id)}>Cancel</Button>
                               </>
                             )}
@@ -1250,26 +1261,40 @@ export function Transfers() {
                                 <input type="text" value={dispatchCarrier} onChange={e => setDispatchCarrier(e.target.value)}
                                   placeholder="Carrier / transporter name" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                               </div>
-                              <div>
-                                {/* Only required on the FEFO path — a picked batch brings its own expiry. */}
-                                <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">
-                                  {dispatchLots.some(d => d.selected)
-                                    ? 'Expiry date (from batch)'
-                                    : 'Expiry date *'}
-                                </label>
-                                <input type="date" value={dispatchExpiry} onChange={e => setDispatchExpiry(e.target.value)}
-                                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
-                              </div>
+                              {/* No expiry input here: it is never typed for stock that
+                                  already carries one. Where a lot is missing it, the
+                                  picker below asks for that lot specifically. */}
                               <div>
                                 <label className="block text-xs text-gray-200 uppercase tracking-widest mb-1">Batches (optional — pick batches and per-batch qty)</label>
                                 <div className="space-y-2">
                                   {dispatchLots.map((dl, i) => (
-                                    <div key={dl.id} className="flex gap-2 items-center">
-                                      <BatchSelect facilityId={fid} commodityId={t.commodity_id} locationType={"store"} value={dl.selected?.key || null} onSelect={opt => {
-                                        const copy = [...dispatchLots]; copy[i] = { ...copy[i], selected: opt }; setDispatchLots(copy)
-                                      }} className={inputCls} />
-                                      <input type="number" min="0" value={dl.qty} onChange={e => { const copy = [...dispatchLots]; copy[i] = { ...copy[i], qty: e.target.value }; setDispatchLots(copy) }} className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
-                                      {dispatchLots.length > 1 && <button type="button" onClick={() => { setDispatchLots(dispatchLots.filter((_, idx) => idx !== i)) }} className="text-xs text-red-400">Remove</button>}
+                                    <div key={dl.id} className="space-y-1">
+                                      <div className="flex gap-2 items-center">
+                                        {/* Clearing selected also clears the corrections, so a
+                                            value typed for one batch can't follow another. */}
+                                        <BatchSelect facilityId={fid} commodityId={t.commodity_id} locationType={"store"} value={dl.selected?.key || null} onSelect={opt => {
+                                          const copy = [...dispatchLots]; copy[i] = { ...copy[i], selected: opt, fixExpiry: '', fixBatch: '' }; setDispatchLots(copy)
+                                        }} className={inputCls} />
+                                        <input type="number" min="0" value={dl.qty} onChange={e => { const copy = [...dispatchLots]; copy[i] = { ...copy[i], qty: e.target.value }; setDispatchLots(copy) }} className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
+                                        {dispatchLots.length > 1 && <button type="button" onClick={() => { setDispatchLots(dispatchLots.filter((_, idx) => idx !== i)) }} className="text-xs text-red-400">Remove</button>}
+                                      </div>
+                                      {/* Gap fillers: shown only for a picked lot the ledger is
+                                          missing data for. What is entered is saved onto the lot. */}
+                                      {dl.selected && (!dl.selected.expiry_date || !dl.selected.batch_number) && (
+                                        <div className="flex gap-2 items-center pl-1">
+                                          <span className="text-xs text-amber-400">This batch is incomplete — it will be corrected on file:</span>
+                                          {!dl.selected.batch_number && (
+                                            <input type="text" value={dl.fixBatch || ''} placeholder="Batch / lot no. *"
+                                              onChange={e => { const copy = [...dispatchLots]; copy[i] = { ...copy[i], fixBatch: e.target.value }; setDispatchLots(copy) }}
+                                              className="w-40 bg-white/5 border border-amber-500/40 rounded-lg px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-amber-400" />
+                                          )}
+                                          {!dl.selected.expiry_date && (
+                                            <input type="date" value={dl.fixExpiry || ''}
+                                              onChange={e => { const copy = [...dispatchLots]; copy[i] = { ...copy[i], fixExpiry: e.target.value }; setDispatchLots(copy) }}
+                                              className="w-44 bg-white/5 border border-amber-500/40 rounded-lg px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-amber-400" />
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                   ))}
                                   <div className="flex gap-2">
@@ -1283,7 +1308,7 @@ export function Transfers() {
                               <Button variant="success" size="sm" disabled={dispatchLoading} onClick={() => confirmDispatch(t)}>
                                 {dispatchLoading ? 'Confirming…' : 'Confirm dispatch'}
                               </Button>
-                              <Button variant="default" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchExpiry(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]) }}>Cancel</Button>
+                              <Button variant="default" size="sm" onClick={() => { setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]) }}>Cancel</Button>
                             </div>
                           </div>
                         )}
