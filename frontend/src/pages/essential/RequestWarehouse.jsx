@@ -2,16 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
+import { isValidNgPhone as validNgPhone } from '../../lib/phone'
 
 const naira = (n) => '₦' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-
-// Valid Nigerian phone: 11 digits starting with 0 (a +234… form is normalised first).
-const validNgPhone = (p) => {
-  let d = String(p || '').replace(/[^\d+]/g, '')
-  if (d.startsWith('+234')) d = '0' + d.slice(4)
-  else if (d.startsWith('234')) d = '0' + d.slice(3)
-  return /^0\d{10}$/.test(d)
-}
 
 const STATUS_STYLE = {
   pending:    'bg-amber-500/15 text-amber-400',

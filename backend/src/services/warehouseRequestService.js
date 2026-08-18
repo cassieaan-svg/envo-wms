@@ -1,20 +1,15 @@
 import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
 import { OutboxService } from './outboxService.js'
+import { normalizeNgPhone } from '../lib/phone.js'
 
 const WMS_API_URL = process.env.WMS_API_URL || 'http://localhost:5100'
 const SERVICE_TOKEN = process.env.SERVICE_TOKEN
 
 function round2(v) { return Math.round(Number(v) * 100) / 100 }
 
-// A valid Nigerian phone number is 11 digits starting with 0 (e.g. 08031234567).
-// Spaces / dashes are stripped first; a +234... form is normalised to its 0-leading 11.
-export function normalizeNgPhone(raw) {
-  let d = String(raw || '').replace(/[^\d+]/g, '')
-  if (d.startsWith('+234')) d = '0' + d.slice(4)
-  else if (d.startsWith('234')) d = '0' + d.slice(3)
-  return /^0\d{10}$/.test(d) ? d : null
-}
+// normalizeNgPhone is re-exported so existing importers (e.g. the request route) keep working.
+export { normalizeNgPhone }
 
 // Facility-raised, priced requests to the central warehouse (envo-wms). See
 // db/migrations/20260801_warehouse_requests.sql for the lifecycle.
