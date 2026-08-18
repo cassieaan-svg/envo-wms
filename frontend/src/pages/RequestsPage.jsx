@@ -5,9 +5,9 @@ import DayHistory from '../components/DayHistory.jsx';
 import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
 import { printDrfVoucher } from '../lib/drfVoucher.js';
 
-const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched', rejected: 'Rejected' };
+const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched', rejected: 'Rejected', cancelled: 'Cancelled' };
 // Reuses the shared badge palette rather than a private set of chip classes.
-const STATUS_BADGE = { pending: 'soon', picking: 'default', dispatched: 'ok', rejected: 'inactive' };
+const STATUS_BADGE = { pending: 'soon', picking: 'default', dispatched: 'ok', rejected: 'inactive', cancelled: 'inactive' };
 
 // The day's requests — matched on the day they arrived or the day they shipped, since
 // both are that day's work.

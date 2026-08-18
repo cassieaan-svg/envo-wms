@@ -176,6 +176,20 @@ export class RequestService {
     return this.recordReceipt(rows[0].id, opts);
   }
 
+  // The facility cancelled the request on the EnVo side. Drop it from the queue if it
+  // hasn't shipped; if it's already dispatched/received/rejected, leave it (stock moved).
+  // Idempotent and safe if the request never arrived (returns null).
+  static async cancelByEnvoId(envoRequestId, { reason } = {}) {
+    const { rows } = await query('SELECT * FROM requests WHERE envo_request_id = $1', [envoRequestId]);
+    const req = rows[0];
+    if (!req) return null;
+    if (!['pending', 'picking'].includes(req.status)) return req;
+    const { rows: upd } = await query(
+      `UPDATE requests SET status = 'cancelled', notes = COALESCE(notes, '') || $2 WHERE id = $1 RETURNING *`,
+      [req.id, ` [Cancelled by facility${reason ? ': ' + reason : ''}]`]);
+    return upd[0];
+  }
+
   // Delivery confirmation, pushed back from EnVo once the facility signs for the stock.
   static async recordReceipt(id, { receivedBy, receivedAt } = {}) {
     const { rows } = await query(
