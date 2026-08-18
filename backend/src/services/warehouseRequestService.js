@@ -82,53 +82,27 @@ export class WarehouseRequestService {
           [req.id, l.commodityId, l.wmsCommodityId, l.qty, l.unitPrice, l.lineTotal]
         )
       }
+      // Deliver the request to the WMS through the outbox, enqueued in this same
+      // transaction — so a request raised while the warehouse is down is delivered the
+      // moment it returns, not lost. The WMS acknowledges by calling back 'submitted'.
+      await OutboxService.enqueue('wms_submit', { envoRequestId: req.id }, exec)
       return req
     })
 
-    // Fire the request at the warehouse. Best-effort: on failure it stays 'pending'.
-    await this._submitToWms(request.id).catch(err =>
-      console.warn(`[warehouse-request] submit ${request.id} deferred: ${err.message}`))
+    // Kick a drain so it reaches the WMS immediately when it's up; the worker retries otherwise.
+    OutboxService.drainOnce().catch(() => {})
 
     return this.getById(request.id)
   }
 
-  // POST the request to the WMS inbound queue. On a 2xx, record the wms_request_id and
-  // flip to 'submitted'. Throws on any failure so the caller can leave it 'pending'.
-  static async _submitToWms(requestId) {
+  // Nudge a still-'pending' request's delivery (the WMS was down when it was raised).
+  // The outbox is the durable path; this just re-enqueues and drains for an immediate retry.
+  static async resubmit(requestId) {
     const req = await this.getById(requestId)
     if (!req || req.status !== 'pending') return req
-
-    const { rows: fac } = await query('select code, name, state, lga from facilities where id = $1', [req.facility_id])
-    const facility = fac[0] || {}
-
-    const res = await fetch(`${WMS_API_URL}/inbound/requests`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-service-token': SERVICE_TOKEN || '' },
-      body: JSON.stringify({
-        envoRequestId: req.id,
-        envoFacilityId: facility.code,
-        facilityName: facility.name,
-        requestedBy: req.requested_by,
-        requesterPhone: req.requester_phone,
-        notes: req.notes,
-        items: req.items.map(i => ({ wmsCommodityId: i.wms_commodity_id, quantity: i.qty_requested })),
-      }),
-    })
-    if (!res.ok) throw new Error(`WMS /api/requests -> ${res.status}`)
-    const body = await res.json().catch(() => ({}))
-    const wmsId = body?.requestId ?? body?.data?.id ?? null
-
-    const { rows } = await query(
-      `update warehouse_requests set status = 'submitted', wms_request_id = $2, submitted_at = now()
-       where id = $1 and status = 'pending' returning *`,
-      [requestId, wmsId]
-    )
-    return rows[0] || req
-  }
-
-  // Retry a still-'pending' submit (WMS was down when it was raised).
-  static async resubmit(requestId) {
-    return this._submitToWms(requestId)
+    await OutboxService.enqueue('wms_submit', { envoRequestId: requestId })
+    OutboxService.drainOnce().catch(() => {})
+    return this.getById(requestId)
   }
 
   static async getById(id, exec = query) {
@@ -174,7 +148,15 @@ export class WarehouseRequestService {
       `update warehouse_requests set status = 'cancelled', notes = coalesce(notes,'') || $2
          where id = $1 and status in ('pending','submitted') returning *`,
       [id, cancelledBy ? ` [Cancelled by: ${cancelledBy}]` : ' [Cancelled]'])
-    return rows[0] || null
+    const updated = rows[0] || null
+    if (updated) {
+      // Tell the WMS to drop it too, durably. Idempotent there: if the submit hasn't been
+      // delivered yet it's skipped (the sender sees 'cancelled'), and if the WMS never got
+      // the request the cancel is a no-op.
+      await OutboxService.enqueue('wms_cancel', { envoRequestId: id, reason: cancelledBy ? `by ${cancelledBy}` : null })
+      OutboxService.drainOnce().catch(() => {})
+    }
+    return updated
   }
 
   // How far through the lifecycle each status is. A callback that would move a request
