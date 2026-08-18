@@ -5,6 +5,29 @@ import DispatchLineEditor from '../components/DispatchLineEditor.jsx';
 import { CommodityPicker, FacilityPicker } from '../components/pickers.jsx';
 import { ymd } from '../components/PeriodFilter.jsx';
 import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
+import { printDrfVoucher } from '../lib/drfVoucher.js';
+
+// A dispatch order shaped for the DRF voucher: what was dispatched is what was issued,
+// and the "to be completed by" sections stay open (no request/receipt to pre-fill).
+function orderAsVoucher(order) {
+  return {
+    id: order.id,
+    facility_name: order.facility_name,
+    lga: order.lga,
+    state: order.state,
+    total_amount: order.total_amount,
+    received_by: '',
+    received_at: null,
+    items: (order.items || []).map((i) => ({
+      commodity_name: i.commodity_name,
+      unit: i.unit,
+      quantity: i.quantity,
+      qty_dispatched: i.quantity,
+      unit_price: i.unit_price,
+      line_total: i.line_total,
+    })),
+  };
+}
 
 
 // One order as flat rows, shared by the CSV and PDF writers so both stay in step.
@@ -513,6 +536,9 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
         </button>
         <button className="btn small" onClick={pdf} disabled={editing}>
           ⭳ PDF
+        </button>
+        <button className="btn small" onClick={() => printDrfVoucher(orderAsVoucher(order))} disabled={editing}>
+          ⎙ DRF Voucher
         </button>
         {isAdmin && !editing && !/^Essential request #/.test(order.notes || '') && (
           <button className="btn small" onClick={startEdit} style={{ marginLeft: 'auto' }}>

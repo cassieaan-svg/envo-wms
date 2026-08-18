@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 import { Banner, Empty, Field, Modal, blockEnterSubmit, money, qty, dateTime } from '../components/ui.jsx';
 import DayHistory from '../components/DayHistory.jsx';
 import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
+import { printDrfVoucher } from '../lib/drfVoucher.js';
 
 const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched' };
 // Reuses the shared badge palette rather than a private set of chip classes.
@@ -321,6 +322,9 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         </button>
         <button className="btn small" onClick={pdf}>
           ⭳ PDF
+        </button>
+        <button className="btn small" onClick={() => printDrfVoucher(request)}>
+          ⎙ DRF Voucher
         </button>
       </div>
 
