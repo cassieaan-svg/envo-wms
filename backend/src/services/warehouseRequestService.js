@@ -188,7 +188,7 @@ export class WarehouseRequestService {
 
   // WMS status callback: picking / dispatched (with per-line dispatched quantities and
   // the authoritative total). Matched by our envoRequestId.
-  static async applyWmsStatus({ envoRequestId, wmsRequestId, status, totalAmount, items }) {
+  static async applyWmsStatus({ envoRequestId, wmsRequestId, status, totalAmount, reason, items }) {
     return withTransaction(async exec => {
       const { rows } = await exec('select * from warehouse_requests where id = $1 for update', [envoRequestId])
       const req = rows[0]
@@ -210,14 +210,17 @@ export class WarehouseRequestService {
         }
       }
       const dispatchedAt = status === 'dispatched' ? 'now()' : 'dispatched_at'
+      // When the warehouse rejects, record why alongside the cancellation.
+      const note = reason && status === 'cancelled' ? ` [Warehouse rejected: ${reason}]` : null
       const { rows: upd } = await exec(
         `update warehouse_requests
             set status = $2,
                 wms_request_id = coalesce($3, wms_request_id),
                 total_amount = coalesce($4, total_amount),
-                dispatched_at = ${dispatchedAt}
+                dispatched_at = ${dispatchedAt},
+                notes = case when $5::text is not null then coalesce(notes, '') || $5 else notes end
           where id = $1 returning *`,
-        [envoRequestId, status, wmsRequestId ?? null, totalAmount ?? null])
+        [envoRequestId, status, wmsRequestId ?? null, totalAmount ?? null, note])
       return upd[0]
     })
   }
