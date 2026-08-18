@@ -41,7 +41,13 @@ const STATUS_TILES = [
   // Only commodities that hold stock reach this bucket — an empty shelf is counted as
   // out of stock whether or not levels were ever set for it.
   ['untracked', 'No reorder/max levels', ''],
+  // Not a stock bucket but a pricing one: commodities with no current price. They can't
+  // be requested until priced, so this tile is the reconciliation worklist.
+  ['unpriced', 'Unpriced', 'alert'],
 ];
+
+// The 'unpriced' tile slices on price, not on stock level, so it lives outside stockStatus.
+const isUnpriced = (c) => c.current_price == null;
 
 export default function CommoditiesPricesPage({ isAdmin }) {
   const [commodities, setCommodities] = useState([]);
@@ -62,7 +68,9 @@ export default function CommoditiesPricesPage({ isAdmin }) {
     setLoading(true);
     try {
       const [list, cats] = await Promise.all([
-        api.commodities.list(filters),
+        // Inactive commodities are pulled in too: 10 of the unpriced items are inactive,
+        // and they can't be priced and reconciled from a list that hides them.
+        api.commodities.list({ ...filters, includeInactive: true }),
         api.commodities.categories(),
       ]);
       setCommodities(list);
@@ -84,15 +92,19 @@ export default function CommoditiesPricesPage({ isAdmin }) {
   // Counted over everything the category/search filters returned, so selecting a tile
   // narrows the table without collapsing the other tiles to zero.
   const counts = useMemo(() => {
-    const tally = { all: commodities.length, optimal: 0, low: 0, out: 0, over: 0, untracked: 0 };
-    for (const item of commodities) tally[stockStatus(item)] += 1;
+    const tally = { all: commodities.length, optimal: 0, low: 0, out: 0, over: 0, untracked: 0, unpriced: 0 };
+    for (const item of commodities) {
+      tally[stockStatus(item)] += 1;
+      if (isUnpriced(item)) tally.unpriced += 1;
+    }
     return tally;
   }, [commodities]);
 
-  const visible = useMemo(
-    () => (status === 'all' ? commodities : commodities.filter((c) => stockStatus(c) === status)),
-    [commodities, status]
-  );
+  const visible = useMemo(() => {
+    if (status === 'all') return commodities;
+    if (status === 'unpriced') return commodities.filter(isUnpriced);
+    return commodities.filter((c) => stockStatus(c) === status);
+  }, [commodities, status]);
 
   const grouped = useMemo(() => {
     const groups = new Map();
@@ -266,7 +278,12 @@ export default function CommoditiesPricesPage({ isAdmin }) {
                     </tr>
                     {items.map((item) => (
                       <tr key={item.id}>
-                        <td className="wrap">{item.name}</td>
+                        <td className="wrap">
+                          {item.name}
+                          {!item.is_active && (
+                            <span className="badge" style={{ marginLeft: 6 }}>inactive</span>
+                          )}
+                        </td>
                         <td>{unitLabel(item.unit) || '—'}</td>
                         <td className="num">
                           {item.current_price == null ? (

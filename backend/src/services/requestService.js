@@ -47,6 +47,19 @@ export class RequestService {
     )).rows;
     const byId = new Map(priced.map(r => [r.id, r]));
 
+    // We are the price authority. A line whose commodity has no current price can't be
+    // costed, and a request half-priced at ₦0 is worse than one refused — EnVo already
+    // hides unpriced commodities from the request form, so this only fires on a stale or
+    // hand-made request. Reject it, naming the offenders, rather than banking a ₦0 line.
+    const unpriced = items
+      .filter(i => byId.get(i.wmsCommodityId)?.unit_price == null)
+      .map(i => byId.get(i.wmsCommodityId)?.name || i.wmsCommodityId);
+    if (unpriced.length) {
+      const e = new Error(`cannot accept request — no current price for: ${unpriced.join(', ')}`);
+      e.status = 422;
+      throw e;
+    }
+
     const lines = items.map(i => {
       const row = byId.get(i.wmsCommodityId);
       const unitPrice = row?.unit_price != null ? Number(row.unit_price) : 0;
