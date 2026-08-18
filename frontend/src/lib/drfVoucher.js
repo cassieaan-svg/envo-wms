@@ -18,9 +18,11 @@ function fmtDate(v) {
   return isNaN(d) ? '' : d.toLocaleDateString('en-GB');
 }
 
-// A labelled value with an underline, for the header fields.
-const line = (label, value) =>
-  `<div class="fld"><span class="lbl">${esc(label)}</span><span class="val">${esc(value)}</span></div>`;
+// A labelled value with an underline, for the header fields. An optional flex weight
+// lets fields in a shared row split the width unevenly (e.g. a wide Requisition No.
+// beside a narrower Date).
+const line = (label, value, flex) =>
+  `<div class="fld"${flex ? ` style="flex:${flex}"` : ''}><span class="lbl">${esc(label)}</span><span class="val">${esc(value)}</span></div>`;
 
 const ROW_COUNT = 14;   // the paper form has 14 numbered lines
 
@@ -109,7 +111,7 @@ export function buildDrfVoucherHtml(request) {
     </div>
     <div class="box">
       <h4>To be completed by Requisitioning Officer</h4>
-      <div style="display:flex; gap:8px;">${line('Requisition No.', '')}${line('Date', '')}</div>
+      <div style="display:flex; gap:8px;">${line('Requisition No.', '', 3)}${line('Date', '', 1)}</div>
       ${line('Requisition authorised by', '')}
       <div class="sig">${line('Signed', '')}${line('Designation', '')}</div>
     </div>
