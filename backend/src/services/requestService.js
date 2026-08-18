@@ -1,18 +1,7 @@
 import { query, withTransaction } from '../db.js';
 import { OutboxService } from './outboxService.js';
 import { DispatchService } from './dispatchService.js';
-
-function _digits(s) {
-  return (s || '').toString().replace(/\D/g, '');
-}
-
-function isCompleteNigerianNumber(s) {
-  const d = _digits(s);
-  // Accept +234XXXXXXXXXX (digits '234' + 10) or 0XXXXXXXXXX (11 digits starting 0)
-  if (d.startsWith('234') && d.length === 13) return true;
-  if (d.startsWith('0') && d.length === 11) return true;
-  return false;
-}
+import { normalizeNgPhone } from '../lib/phone.js';
 
 function round2(v) { return Math.round(Number(v) * 100) / 100; }
 
@@ -220,7 +209,10 @@ export class RequestService {
     // Stock is not released to an unnamed carrier — the pair is the handover record.
     if (!carrierName?.trim()) { const e = new Error("the carrier's name is required"); e.status = 400; throw e; }
     if (!carrierPhone?.trim()) { const e = new Error("the carrier's phone number is required"); e.status = 400; throw e; }
-    if (!isCompleteNigerianNumber(carrierPhone)) {
+    // Stored in the same 0-leading shape EnVo uses, so a +234… or spaced entry doesn't
+    // leave two stores holding the same number in two forms.
+    const carrierPhoneNorm = normalizeNgPhone(carrierPhone);
+    if (!carrierPhoneNorm) {
       const e = new Error("the carrier phone must be a complete Nigerian number, e.g. 08012345678 or +2348012345678");
       e.status = 400;
       throw e;
@@ -285,7 +277,7 @@ export class RequestService {
                 carrier_name = $3, carrier_phone = $4,
                 picked_by = $5, picked_at = COALESCE(picked_at, now())
           WHERE id = $1 RETURNING *`,
-        [id, dispatchedBy ?? null, carrierName.trim(), carrierPhone.trim(), picker]);
+        [id, dispatchedBy ?? null, carrierName.trim(), carrierPhoneNorm, picker]);
       const dispatched = upd[0];
 
       // Record the fulfilment as a dispatch order so it shows in dispatch history, and

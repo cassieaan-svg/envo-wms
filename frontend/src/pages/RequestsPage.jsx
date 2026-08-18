@@ -4,6 +4,7 @@ import { Banner, Empty, Field, Modal, blockEnterSubmit, money, qty, dateTime } f
 import DayHistory from '../components/DayHistory.jsx';
 import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
 import { printDrfVoucher } from '../lib/drfVoucher.js';
+import { isValidNgPhone } from '../lib/phone.js';
 
 const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched', rejected: 'Rejected', cancelled: 'Cancelled' };
 // Reuses the shared badge palette rather than a private set of chip classes.
@@ -280,14 +281,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
 
   const canDispatch = (request.picked_by || pickedBy.trim()) && carrierName.trim() && carrierPhone.trim();
 
-  function isCompleteNigerianNumber(s) {
-    const d = (s || '').toString().replace(/\D/g, '');
-    if (d.startsWith('234') && d.length === 13) return true;
-    if (d.startsWith('0') && d.length === 11) return true;
-    return false;
-  }
-
-  const phoneValid = isCompleteNigerianNumber(carrierPhone);
+  const phoneValid = isValidNgPhone(carrierPhone);
 
   function pdf() {
     return downloadPdf({
