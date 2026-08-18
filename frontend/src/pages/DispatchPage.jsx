@@ -4,7 +4,7 @@ import { Banner, Empty, Field, Modal, blockEnterSubmit, dateOnly, dateTime, mone
 import DispatchLineEditor from '../components/DispatchLineEditor.jsx';
 import { CommodityPicker, FacilityPicker } from '../components/pickers.jsx';
 import { ymd } from '../components/PeriodFilter.jsx';
-import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
+import { downloadCsv, slug, stamp } from '../lib/download.js';
 import { printDrfVoucher } from '../lib/drfVoucher.js';
 
 // A dispatch order shaped for the DRF voucher: what was dispatched is what was issued,
@@ -506,24 +506,6 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
     downloadCsv(`${base}.csv`, ORDER_COLUMNS, order.items);
   }
 
-  function pdf() {
-    return downloadPdf({
-      filename: `${base}.pdf`,
-      title: `Dispatch Note #${order.id}`,
-      subtitle: 'EnVo Warehouse — Ministry of Health Central Medical Stores, Uyo',
-      meta: [
-        ['Facility', order.facility_name],
-        ['LGA / State', [order.lga, order.state].filter(Boolean).join(' / ') || '—'],
-        ['Dispatched', dateTime(order.dispatched_at)],
-        ['Dispatched by', order.dispatched_by || '—'],
-        ...(order.notes ? [['Notes', order.notes]] : []),
-      ],
-      columns: ORDER_COLUMNS,
-      rows: order.items,
-      total: { label: 'Order total', value: money(order.total_amount) },
-    });
-  }
-
   return (
     <Modal
       title={`Dispatch order #${order.id}`}
@@ -533,9 +515,6 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
       <div className="toolbar" style={{ marginBottom: 12 }}>
         <button className="btn small" onClick={csv} disabled={editing}>
           ⭳ CSV
-        </button>
-        <button className="btn small" onClick={pdf} disabled={editing}>
-          ⭳ PDF
         </button>
         <button className="btn small" onClick={() => printDrfVoucher(orderAsVoucher(order))} disabled={editing}>
           ⎙ DRF Voucher
