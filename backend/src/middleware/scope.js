@@ -114,6 +114,11 @@ export function attachScope(req, res, next) {
     sectionCategories,
     sectionCommodityNames,
     module,
+    // Per-login grant for Essential Commodities. Facility enrolment (facility_modules)
+    // says the facility does Essential at all; this says THIS login may open it. Existing
+    // logins don't carry it, so they stay HIV-only even at an enrolled facility — only the
+    // separate dual-module store-manager logins are granted it.
+    essentialAccess: meta.essential === true,
   }
   next()
 }
@@ -311,6 +316,10 @@ export async function enforceModuleAccess(req, res) {
   // Essential Commodities is a pharmacy-section module — lab accounts can't open it.
   if (s.module === 'essential' && s.section !== 'pharmacy') {
     return forbid(res, 'Essential Commodities is available to pharmacy only'), false
+  }
+  // …and only a login explicitly granted it, so existing pharmacy logins stay HIV-only.
+  if (s.module === 'essential' && !s.essentialAccess) {
+    return forbid(res, 'This login is not enabled for Essential Commodities'), false
   }
   return true
 }

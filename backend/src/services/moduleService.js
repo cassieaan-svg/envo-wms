@@ -15,10 +15,11 @@ export class ModuleService {
         'select module from facility_modules where facility_id = $1', [scope.facilityId]
       )).rows
       const set = new Set(rows.map(r => r.module))
-      // Essential Commodities is a pharmacy-section module — lab accounts don't get it.
-      enrolled = new Set(
-        all.map(m => m.key).filter(k => set.has(k) && !(k === 'essential' && scope.section !== 'pharmacy'))
-      )
+      // Essential Commodities is a pharmacy-section module, and only shown to a login that
+      // carries the grant — so existing pharmacy logins at an enrolled facility still see
+      // HIV only, and just the separate dual-module store-manager logins get both cards.
+      const essentialOk = (k) => k !== 'essential' || (scope.section === 'pharmacy' && scope.essentialAccess === true)
+      enrolled = new Set(all.map(m => m.key).filter(k => set.has(k) && essentialOk(k)))
     } else {
       enrolled = new Set(all.map(m => m.key)) // admin tiers see every module
     }
