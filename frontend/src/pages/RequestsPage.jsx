@@ -5,9 +5,9 @@ import DayHistory from '../components/DayHistory.jsx';
 import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
 import { printDrfVoucher } from '../lib/drfVoucher.js';
 
-const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched' };
+const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched', rejected: 'Rejected' };
 // Reuses the shared badge palette rather than a private set of chip classes.
-const STATUS_BADGE = { pending: 'soon', picking: 'default', dispatched: 'ok' };
+const STATUS_BADGE = { pending: 'soon', picking: 'default', dispatched: 'ok', rejected: 'inactive' };
 
 // The day's requests — matched on the day they arrived or the day they shipped, since
 // both are that day's work.
@@ -275,6 +275,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
   // clamped to [0, requested] on submit. Only meaningful before dispatch.
   const [issue, setIssue] = useState(() =>
     Object.fromEntries(request.items.map((i) => [i.id, String(i.qty_dispatched ?? i.quantity)])));
+  const [rejectReason, setRejectReason] = useState('');
   const clampIssue = (i) => Math.max(0, Math.min(Number(issue[i.id] ?? i.quantity) || 0, Number(i.quantity)));
 
   const canDispatch = (request.picked_by || pickedBy.trim()) && carrierName.trim() && carrierPhone.trim();
@@ -455,6 +456,38 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
           <p className="muted" style={{ marginBottom: 0 }}>
             Stock isn&apos;t released without a named carrier — this is the handover record.
           </p>
+        </form>
+      )}
+
+      {(request.status === 'pending' || request.status === 'picking') && (
+        <form
+          className="card"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onAct(
+              () => api.requests.reject(request.id, { reason: rejectReason.trim() }),
+              'Request rejected — the facility will be notified to re-request.'
+            );
+          }}
+        >
+          <h2>Reject request</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Use this when nothing can be filled. No stock moves; EnVo cancels the request and the
+            facility re-requests once CMS confirms stock.
+          </p>
+          <div className="form-grid">
+            <Field label="Reason *">
+              <input
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. out of stock"
+                required
+              />
+            </Field>
+            <button className="btn danger" type="submit" disabled={busy || !rejectReason.trim()}>
+              Reject request
+            </button>
+          </div>
         </form>
       )}
 

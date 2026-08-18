@@ -141,6 +141,33 @@ export class RequestService {
     });
   }
 
+  // Reject a request the warehouse can't fill (nothing in stock). Marks it 'rejected' and
+  // tells EnVo — which cancels it, so the facility simply re-requests once CMS has stock.
+  // Only a request still in the queue (pending/picking) can be rejected. No stock has moved.
+  static async reject(id, { rejectedBy, reason } = {}) {
+    if (!reason?.trim()) { const e = new Error('a reason for rejecting is required'); e.status = 400; throw e; }
+    return withTransaction(async (client) => {
+      const { rows } = await client.query('SELECT * FROM requests WHERE id = $1 FOR UPDATE', [id]);
+      const req = rows[0];
+      if (!req) { const e = new Error('request not found'); e.status = 404; throw e; }
+      if (!['pending', 'picking'].includes(req.status)) {
+        const e = new Error(`Cannot reject a ${req.status} request`); e.status = 409; throw e;
+      }
+
+      const { rows: upd } = await client.query(
+        `UPDATE requests SET status = 'rejected', notes = COALESCE(notes, '') || $2 WHERE id = $1 RETURNING *`,
+        [id, ` [Rejected by ${rejectedBy || 'warehouse'}: ${reason.trim()}]`]);
+      const request = upd[0];
+
+      await OutboxService.enqueue(
+        'request_status',
+        { envoRequestId: request.envo_request_id, wmsRequestId: request.id, status: 'cancelled', reason: reason.trim() },
+        client
+      );
+      return request;
+    });
+  }
+
   // Same as recordReceipt, but keyed by EnVo's own request id — the only identifier EnVo
   // has when it calls back.
   static async recordReceiptByEnvoId(envoRequestId, opts = {}) {

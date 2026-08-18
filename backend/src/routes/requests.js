@@ -63,6 +63,21 @@ router.post('/:id/fulfil', async (req, res) => {
   }
 });
 
+/** POST /api/requests/:id/reject — reject a request the warehouse can't fill. Body: { reason }. */
+router.post('/:id/reject', async (req, res) => {
+  try {
+    const request = await RequestService.reject(Number(req.params.id), {
+      rejectedBy: who(req),
+      reason: req.body?.reason,
+    });
+    res.json(request);
+  } catch (err) {
+    const status = err.status || 500;
+    if (status >= 500) console.error('reject request error:', err);
+    res.status(status).json({ error: err.message });
+  }
+});
+
 /** POST /api/requests/:id/receipt — record who received it at the facility. */
 router.post('/:id/receipt', async (req, res) => {
   try {

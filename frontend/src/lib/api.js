@@ -113,6 +113,7 @@ export const api = {
     get: (id) => request(`/api/requests/${id}`),
     markPicking: (id, body) => request(`/api/requests/${id}/picking`, { method: 'PATCH', body }),
     fulfil: (id, body) => request(`/api/requests/${id}/fulfil`, { method: 'POST', body }),
+    reject: (id, body) => request(`/api/requests/${id}/reject`, { method: 'POST', body }),
     recordReceipt: (id, body) => request(`/api/requests/${id}/receipt`, { method: 'POST', body }),
   },
   monitoring: {
