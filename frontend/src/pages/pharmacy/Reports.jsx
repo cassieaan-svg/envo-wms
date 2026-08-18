@@ -110,7 +110,7 @@ export function Reports({ embedded = false } = {}) {
   // Download helper.
   function downloadCsv(csv, name) {
     // Prepend a UTF-8 BOM so Excel decodes special characters (—, →, accents)
-    // correctly instead of showing mojibake like "â€"".
+    // correctly instead of showing mojibake in place of the em dash.
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = name
