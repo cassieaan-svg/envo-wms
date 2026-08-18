@@ -390,23 +390,38 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
                   <th className="wrap">Commodity</th>
                   <th className="num">Requested</th>
                   <th className="num">Issue qty</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {request.items.map((i) => (
-                  <tr key={i.id}>
-                    <td className="wrap">{i.commodity_name}</td>
-                    <td className="num">{qty(i.quantity)}</td>
-                    <td className="num">
-                      <input
-                        type="number" min="0" max={i.quantity} step="1"
-                        value={issue[i.id] ?? ''}
-                        onChange={(e) => setIssue((s) => ({ ...s, [i.id]: e.target.value }))}
-                        style={{ width: 90, textAlign: 'right' }}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                {request.items.map((i) => {
+                  const removed = Number(issue[i.id] ?? i.quantity) <= 0;
+                  return (
+                    <tr key={i.id} style={removed ? { opacity: 0.5, textDecoration: 'line-through' } : undefined}>
+                      <td className="wrap">{i.commodity_name}</td>
+                      <td className="num">{qty(i.quantity)}</td>
+                      <td className="num">
+                        <input
+                          type="number" min="0" max={i.quantity} step="1"
+                          value={issue[i.id] ?? ''}
+                          onChange={(e) => setIssue((s) => ({ ...s, [i.id]: e.target.value }))}
+                          style={{ width: 90, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td className="c">
+                        {removed ? (
+                          <button type="button" className="btn small" onClick={() => setIssue((s) => ({ ...s, [i.id]: String(i.quantity) }))}>
+                            Restore
+                          </button>
+                        ) : (
+                          <button type="button" className="btn small" onClick={() => setIssue((s) => ({ ...s, [i.id]: '0' }))}>
+                            Remove
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -25,7 +25,11 @@ const line = (label, value) =>
 const ROW_COUNT = 14;   // the paper form has 14 numbered lines
 
 export function buildDrfVoucherHtml(request) {
-  const items = request.items || [];
+  // Once dispatched, a line the warehouse removed (issued 0) isn't part of the voucher —
+  // the facility re-requests it later. Before dispatch (qty_dispatched null) every
+  // requested line still shows, so the pick list is complete.
+  const items = (request.items || []).filter(
+    (i) => i.qty_dispatched == null || Number(i.qty_dispatched) > 0);
   const rowsHtml = [];
   for (let i = 0; i < Math.max(items.length, ROW_COUNT); i += 1) {
     const it = items[i];
