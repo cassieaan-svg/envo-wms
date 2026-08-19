@@ -327,6 +327,59 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
 
       {request.notes && <Banner kind="warn">{request.notes}</Banner>}
 
+      {(request.status === 'pending' || request.status === 'picking') && (
+        <div className="card" onKeyDown={blockEnterSubmit}>
+          <h2>Quantities to issue</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Set the quantity actually issued for each line (defaults to requested; can't exceed it).
+            What's on hand is the hard cap — a line short of stock issues what's available. Adjust
+            these before picking and up until the stock is handed to the carrier.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th className="wrap">Commodity</th>
+                  <th className="num">Requested</th>
+                  <th className="num">Issue qty</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {request.items.map((i) => {
+                  const removed = Number(issue[i.id] ?? i.quantity) <= 0;
+                  return (
+                    <tr key={i.id} style={removed ? { opacity: 0.5, textDecoration: 'line-through' } : undefined}>
+                      <td className="wrap">{i.commodity_name}</td>
+                      <td className="num">{qty(i.quantity)}</td>
+                      <td className="num">
+                        <input
+                          type="number" min="0" max={i.quantity} step="1"
+                          value={issue[i.id] ?? ''}
+                          onChange={(e) => setIssue((s) => ({ ...s, [i.id]: e.target.value }))}
+                          style={{ width: 90, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td className="c">
+                        {removed ? (
+                          <button type="button" className="btn small" onClick={() => setIssue((s) => ({ ...s, [i.id]: String(i.quantity) }))}>
+                            Restore
+                          </button>
+                        ) : (
+                          <button type="button" className="btn small" onClick={() => setIssue((s) => ({ ...s, [i.id]: '0' }))}>
+                            Remove
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {request.status === 'pending' && (
         <form
           className="card"
@@ -375,53 +428,10 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         >
           <h2>Hand over to carrier</h2>
           <p className="muted" style={{ marginTop: 0 }}>
-            Set the quantity actually issued for each line (defaults to requested; can't exceed it).
-            What's on hand is the hard cap — a line short of stock issues what's available.
+            Issue quantities are set in “Quantities to issue” above. Naming the carrier releases
+            that stock.
           </p>
-          <div className="table-wrap" style={{ marginBottom: 12 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th className="wrap">Commodity</th>
-                  <th className="num">Requested</th>
-                  <th className="num">Issue qty</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {request.items.map((i) => {
-                  const removed = Number(issue[i.id] ?? i.quantity) <= 0;
-                  return (
-                    <tr key={i.id} style={removed ? { opacity: 0.5, textDecoration: 'line-through' } : undefined}>
-                      <td className="wrap">{i.commodity_name}</td>
-                      <td className="num">{qty(i.quantity)}</td>
-                      <td className="num">
-                        <input
-                          type="number" min="0" max={i.quantity} step="1"
-                          value={issue[i.id] ?? ''}
-                          onChange={(e) => setIssue((s) => ({ ...s, [i.id]: e.target.value }))}
-                          style={{ width: 90, textAlign: 'right' }}
-                        />
-                      </td>
-                      <td className="c">
-                        {removed ? (
-                          <button type="button" className="btn small" onClick={() => setIssue((s) => ({ ...s, [i.id]: String(i.quantity) }))}>
-                            Restore
-                          </button>
-                        ) : (
-                          <button type="button" className="btn small" onClick={() => setIssue((s) => ({ ...s, [i.id]: '0' }))}>
-                            Remove
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
           <div className="form-grid">
-            {/* Removed duplicate 'Picked by' field here; use 'Start picking' above instead */}
             <Field label="Carrier name *">
               <input
                 value={carrierName}
