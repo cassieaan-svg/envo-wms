@@ -1,19 +1,22 @@
 -- TDF/3TC/EFV is a 90-tablet bottle (confirmed 2026-08-25).
 --
--- 20260825_add_commodities.sql created it without a pack size, because the count
--- was not known at the time and the sibling ARVs carry one. This finishes the row:
--- the name gains the count, matching 'TDF/3TC 300/300mg (30 tabs)' and
--- 'TDF/3TC/DTG 300/300/50mg (90 tabs)', and pack_size gains '90 tablets' so the
--- dispensing maths has the same basis as its siblings.
+-- 20260825_add_commodities.sql now inserts the final name and pack size directly,
+-- so on a database that has never seen the earlier version of that file this does
+-- nothing. It exists for databases where the FIRST version already ran and created
+-- 'TDF/3TC/EFV 300/300/400mg' with no tablet count — it brings those into line.
 --
--- A follow-up rather than an edit to the original: that file is already applied
--- locally and pushed, so changing its INSERT would leave the two databases holding
--- rows with different names under the same migration. This converges both.
---
--- Idempotent: matches nothing once applied, and nothing at all if the row was
--- already created with its final name.
-update commodities
+-- The `not exists` guard is the important part. Without it, a database holding BOTH
+-- names (which the earlier, re-runnable-but-wrong version could produce) would hit
+-- `commodities_name_unique` and abort the batch. Here the rename is skipped when the
+-- correct row is already present, leaving the stray to be removed deliberately
+-- rather than by a migration guessing which one carries the history.
+update commodities c
    set name = 'TDF/3TC/EFV 300/300/400mg (90 tabs)',
        pack_size = '90 tablets'
- where name = 'TDF/3TC/EFV 300/300/400mg'
-   and module = 'hiv';
+ where c.name = 'TDF/3TC/EFV 300/300/400mg'
+   and c.module = 'hiv'
+   and not exists (
+     select 1 from commodities x
+      where x.name = 'TDF/3TC/EFV 300/300/400mg (90 tabs)'
+        and x.module = 'hiv'
+   );
