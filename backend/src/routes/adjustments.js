@@ -1,7 +1,8 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
 import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection, sectionFilter } from '../middleware/scope.js'
-import { LogService } from '../services/logService.js'
+import { narrowGrantsToCategories } from '../constants/sections.js'
+import { LogService, ADJUSTMENT_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
@@ -124,6 +125,68 @@ router.post('/', async (req, res) => {
 })
 
 /**
+ * GET /api/adjustments/summary - adjustments aggregated server-side.
+ *
+ * Same contract as the dispense / intake / transfer summaries — allowlisted
+ * group_by, same scope and section enforcement, same { qty, txn } rows — so
+ * Monitoring's Adjustments tab is built exactly like its siblings. Adds the
+ * `type` (Increase / Decrease) and `reason` dimensions, and an `adjustment_type`
+ * filter to request one direction on its own.
+ *
+ * MUST stay above any '/:id' route so 'summary' is not read as an id.
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, from, to, commodity_ids, section,
+            group_by, commodity_id, category, tz, adjustment_type, reason } = req.query
+    const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+
+    const groupBy = group_by ? String(group_by) : 'commodity,type'
+    if (!ADJUSTMENT_GROUP_BY_KEYS.includes(groupBy)) {
+      return sendValidationError(res,
+        `Unsupported group_by. Must be one of: ${ADJUSTMENT_GROUP_BY_KEYS.join(' | ')}`, 'group_by')
+    }
+    if (adjustment_type && !['Increase', 'Decrease'].includes(adjustment_type)) {
+      return sendValidationError(res, 'adjustment_type must be "Increase" or "Decrease"', 'adjustment_type')
+    }
+    if (commodity_id && !validators.isUUID(commodity_id)) {
+      return sendValidationError(res, 'Invalid commodity_id format', 'commodity_id')
+    }
+    if (tz && !/^[A-Za-z][A-Za-z0-9_+\-/]{0,63}$/.test(String(tz))) {
+      return sendValidationError(res, 'Invalid tz', 'tz')
+    }
+
+    // A `category` drill must stay inside the caller's section, never widen it.
+    const tokenCats = req.scope.sectionCategories
+    const grants = req.scope.sectionCommodityNames
+    const viaGrant = !!category && narrowGrantsToCategories(grants, [String(category)]).length > 0
+    if (category && Array.isArray(tokenCats) && !tokenCats.includes(String(category)) && !viaGrant) {
+      return res.json({ success: true, data: [], count: 0, timestamp: new Date().toISOString() })
+    }
+
+    const base = {
+      from, to, commodityIds, categories: tokenCats, commodityNames: grants, section,
+      groupBy, commodityId: commodity_id || null, category: category || null, tz: tz || null,
+      adjustmentType: adjustment_type || null,
+      reason: reason || null,
+    }
+    let rows
+    if (facility_id) {
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      if (!(await enforceFacilityRead(req, res, facility_id, 'adjustment_log'))) return
+      rows = await LogService.getAdjustmentSummary(facility_id, base)
+    } else {
+      const facilityIds = await resolveListFacilityIds(req, 'adjustment_log', facility_ids)
+      rows = await LogService.getAdjustmentSummary(null, { ...base, facilityIds: facilityIds === null ? undefined : facilityIds })
+    }
+    res.json({ success: true, data: rows, count: rows.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching adjustment summary:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
+  }
+})
+
+/**
  * GET /api/adjustments - Get adjustment history
  * Query params: facility_id (required), adjustment_type (optional), reason (optional), date (optional, YYYY-MM-DD)
  */
@@ -183,8 +246,17 @@ router.patch('/:id', async (req, res) => {
     const updated = await LogService.updateLog('adjustment', req.params.id, req.body || {})
     res.json({ success: true, data: updated, timestamp: new Date().toISOString() })
   } catch (err) {
-    console.error('Error updating adjustment record:', err)
-    res.status(500).json({ success: false, error: err.message, code: 'UPDATE_ERROR' })
+    // A rejected edit (missing batch on an "Expired" write-off, or a change the bin
+    // can't cover) is the caller's to fix, not a server fault. Pass the status the
+    // service chose through, so the UI shows the real reason instead of a generic
+    // error — and keep 500 only for what is genuinely unexpected.
+    const status = err.status === 400 || err.status === 409 ? err.status : 500
+    if (status === 500) console.error('Error updating adjustment record:', err)
+    res.status(status).json({
+      success: false,
+      error: err.message,
+      code: status === 400 ? 'VALIDATION_ERROR' : status === 409 ? 'INSUFFICIENT_STOCK' : 'UPDATE_ERROR',
+    })
   }
 })
 

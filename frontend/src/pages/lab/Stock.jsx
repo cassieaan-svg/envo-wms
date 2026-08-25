@@ -218,14 +218,14 @@ export function Stock() {
                 <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={setBatchDrill} />
+                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
               </div>
             </Card>
           ))
         ) : (
           <Card className="stick-cols">
             <div className="table-wrap">
-              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={setBatchDrill} />
+              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
             </div>
           </Card>
         )
@@ -236,7 +236,8 @@ export function Stock() {
       )}
 
       {batchDrill && (
-        <BatchBreakdownModal commodity={batchDrill} fid={fid} onClose={() => setBatchDrill(null)} />
+        <BatchBreakdownModal commodity={batchDrill.row} fid={fid}
+          locationType={batchDrill.bin} onClose={() => setBatchDrill(null)} />
       )}
     </div>
   )

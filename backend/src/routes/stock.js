@@ -196,7 +196,14 @@ router.get('/lots', async (req, res) => {
  */
 router.get('/lots/expiry', async (req, res) => {
   try {
-    const { facility_id, facility_ids, commodity_ids, expiry_to, include_unknown, section } = req.query
+    const { facility_id, facility_ids, commodity_ids, expiry_to, include_unknown, section,
+            location_type, site_name } = req.query
+    // Optional bin filter (Stock Levels: "what batches does the dispensary hold?").
+    // Allowlisted rather than passed through, so the value reaching SQL is one of
+    // the four real bins and never arbitrary text from the query string.
+    if (location_type && !['store', 'dispensary', 'dsd', 'sdp'].includes(String(location_type))) {
+      return sendValidationError(res, "location_type must be 'store', 'dispensary', 'dsd' or 'sdp'", 'location_type')
+    }
     const csv = v => v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null
     if (expiry_to && !validators.isValidISODate(String(expiry_to))) {
       return sendValidationError(res, 'expiry_to must be a valid YYYY-MM-DD date', 'expiry_to')
@@ -239,6 +246,7 @@ router.get('/lots/expiry', async (req, res) => {
     const lots = await StockService.getScopedLots({
       facilityIds, commodityIds: csv(commodity_ids), categories, commodityNames,
       expiryTo: expiry_to || null, includeUnknown: include_unknown === '1' || include_unknown === 'true',
+      locationType: location_type || null, siteName: site_name || null,
     })
     res.json({ success: true, data: lots, count: lots.length, timestamp: new Date().toISOString() })
   } catch (err) {

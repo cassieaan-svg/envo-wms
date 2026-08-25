@@ -149,7 +149,11 @@ export function RecordStock() {
           ...(isDSD
             ? { notes: `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`, dsd_site_name: dsdSiteName }
             : { notes: notes || null, location_type: 'dispensary',
-                batch_number: item.batch?.batch_number || undefined,
+                // A picked lot sends its batch, using '' for the "(no batch)" lot so the
+                // server debits THAT lot. `|| undefined` dropped the field entirely, so
+                // the server fell back to FEFO and could retire a different batch than
+                // the one the dispenser actually took off the shelf.
+                batch_number: item.batch ? (item.batch.batch_number || '') : undefined,
                 expiry_date:  item.batch?.expiry_date  || undefined }),
           section:       commoditySection,
         })

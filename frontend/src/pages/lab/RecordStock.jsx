@@ -153,7 +153,10 @@ export function RecordStock() {
       dispensed_by: by || null,
       dispensed_at: entryTimestamp(date),
       section:      commoditySection,
-      batch_number: item.batch?.batch_number || undefined,
+      // A picked lot sends its batch, using '' for the "(no batch)" lot so the server
+      // debits THAT lot. `|| undefined` dropped the field entirely, so the server fell
+      // back to FEFO and could retire a different batch than the one actually taken.
+      batch_number: item.batch ? (item.batch.batch_number || '') : undefined,
       expiry_date:  item.batch?.expiry_date  || undefined,
     }
     if (isSDP)  return { ...base, notes: `[SDP: ${sdpName}]${notes ? ' ' + notes : ''}`, sdp_name: sdpName }

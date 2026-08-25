@@ -1,7 +1,8 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
 import { enforceTransferAccess, enforceTransferWrite, mayWriteTransferFacility, enforceCommoditySection, ownFacilityId, resolveListFacilityIds, sectionFilter } from '../middleware/scope.js'
-import { TransferService } from '../services/transferService.js'
+import { narrowGrantsToCategories } from '../constants/sections.js'
+import { TransferService, TRANSFER_IN_GROUP_BY_KEYS } from '../services/transferService.js'
 
 const router = express.Router()
 
@@ -37,7 +38,7 @@ router.get('/', async (req, res) => {
   try {
     const {
       facility_id, facility_ids, direction = 'any', status, section,
-      date_field, from, to, notes_includes, limit = 1000, offset = 0
+      date_field, from, to, notes_includes, commodity_ids, limit = 1000, offset = 0
     } = req.query
 
     if (facility_id && !validators.isUUID(facility_id)) {
@@ -78,6 +79,9 @@ router.get('/', async (req, res) => {
       from,
       to,
       notesIncludes: notes_includes,
+      commodityIds: commodity_ids
+        ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean)
+        : null,
       ...sectionFilter(req),
       limit: parseInt(limit),
       offset: parseInt(offset)
@@ -86,6 +90,78 @@ router.get('/', async (req, res) => {
     res.json({ success: true, data: transfers, count: transfers.length, timestamp: new Date().toISOString() })
   } catch (err) {
     console.error('Error fetching transfers:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
+  }
+})
+
+/**
+ * GET /api/transfers/summary - accepted transfers IN, aggregated server-side.
+ *
+ * Monitoring's "Total transfer-in" card and its drill-ins. Same contract as
+ * /api/dispense/summary and /api/intake/summary — same allowlisted group_by shapes,
+ * same { qty, txn } rows — so the dashboard can put all three side by side.
+ * Scoped on the RECEIVING facility, since this counts stock arriving.
+ *
+ * MUST stay above GET /:id, or Express matches 'summary' as a transfer id.
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, from, to, commodity_ids, section,
+            group_by, commodity_id, category, tz, direction } = req.query
+    const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+
+    // 'in' = stock arriving (default, preserves the original behaviour), 'out' =
+    // stock leaving. Scoping follows the direction, so a facility user asking for
+    // 'out' sees what IT sent, never what was sent to it.
+    const dir = direction ? String(direction) : 'in'
+    if (dir !== 'in' && dir !== 'out') {
+      return sendValidationError(res, `Unsupported direction. Must be one of: in | out`, 'direction')
+    }
+
+    const groupBy = group_by ? String(group_by) : 'commodity'
+    if (!TRANSFER_IN_GROUP_BY_KEYS.includes(groupBy)) {
+      return sendValidationError(res,
+        `Unsupported group_by. Must be one of: ${TRANSFER_IN_GROUP_BY_KEYS.join(' | ')}`, 'group_by')
+    }
+    if (commodity_id && !validators.isUUID(commodity_id)) {
+      return sendValidationError(res, 'Invalid commodity_id format', 'commodity_id')
+    }
+    if (tz && !/^[A-Za-z][A-Za-z0-9_+\-/]{0,63}$/.test(String(tz))) {
+      return sendValidationError(res, 'Invalid tz', 'tz')
+    }
+
+    // A `category` drill must stay inside the caller's section, never widen it.
+    const tokenCats = req.scope.sectionCategories
+    const grants = req.scope.sectionCommodityNames
+    const viaGrant = !!category && narrowGrantsToCategories(grants, [String(category)]).length > 0
+    if (category && Array.isArray(tokenCats) && !tokenCats.includes(String(category)) && !viaGrant) {
+      return res.json({ success: true, data: [], count: 0, timestamp: new Date().toISOString() })
+    }
+
+    const base = {
+      from, to, commodityIds, categories: tokenCats, commodityNames: grants, section,
+      groupBy, commodityId: commodity_id || null, category: category || null, tz: tz || null,
+      direction: dir,
+    }
+
+    // Scope on whichever side `direction` reports. A facility-level caller is pinned
+    // to its own facility; an admin tier gets its jurisdiction, intersected with any
+    // client facility_ids view-filter — the same resolution the transfer LIST uses.
+    let rows
+    if (facility_id) {
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      const allowed = await resolveListFacilityIds(req, 'transfers', facility_id)
+      if (allowed !== null && !allowed.includes(facility_id)) {
+        return res.status(403).json({ success: false, error: 'Not authorized for this facility', code: 'FORBIDDEN' })
+      }
+      rows = await TransferService.getTransferSummary(facility_id, base)
+    } else {
+      const facilityIds = await resolveListFacilityIds(req, 'transfers', facility_ids)
+      rows = await TransferService.getTransferSummary(null, { ...base, facilityIds: facilityIds === null ? undefined : facilityIds })
+    }
+    res.json({ success: true, data: rows, count: rows.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching transfer summary:', err)
     res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
   }
 })

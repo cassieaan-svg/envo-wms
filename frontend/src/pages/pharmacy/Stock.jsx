@@ -20,7 +20,9 @@ export function Stock() {
   const [stsFilter, setSts]   = useState('')
   const [sortBy, setSortBy]   = useState('category')
   const [drill, setDrill]     = useState(null)
-  const [batchDrill, setBatchDrill] = useState(null)  // commodity row for the batch modal
+  // { row, bin } — bin is null when opened from the commodity name (all bins), or
+  // 'store' / 'dispensary' when a specific cell was clicked.
+  const [batchDrill, setBatchDrill] = useState(null)
 
   // Admin facility scope: a single facility, an LGA/state worth of facilities,
   // or all (resolved from the hierarchical filter). Facility users get their own.
@@ -218,14 +220,14 @@ export function Stock() {
                 <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={setBatchDrill} />
+                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
               </div>
             </Card>
           ))
         ) : (
           <Card className="stick-cols">
             <div className="table-wrap">
-              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={setBatchDrill} />
+              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
             </div>
           </Card>
         )
@@ -236,7 +238,8 @@ export function Stock() {
       )}
 
       {batchDrill && (
-        <BatchBreakdownModal commodity={batchDrill} fid={fid} scopeIds={scopeIds} onClose={() => setBatchDrill(null)} />
+        <BatchBreakdownModal commodity={batchDrill.row} fid={fid} scopeIds={scopeIds}
+          locationType={batchDrill.bin} onClose={() => setBatchDrill(null)} />
       )}
     </div>
   )

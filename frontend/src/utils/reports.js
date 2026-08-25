@@ -130,6 +130,65 @@ const queryLog = async ({ listFn, from, to, fid, scopeIds, commIds, section }) =
   return all
 }
 
+// ─── Paged activity feed ─────────────────────────────────────────────────────
+// GET /api/activity merges the four logs server-side and returns one page. The
+// row already carries the columns the table needs, so this only maps names onto
+// the shape the existing renderers expect — no per-log normalizer branching.
+const FEED_ACTIVITY = { dispense: 'Consumption', intake: 'Intake', adjustment: 'Adjustment', transfer: 'Transfer' }
+
+export function normalizeFeedRow(row, fid) {
+  const isOut = fid && row.sending_facility_name && row.receiving_facility_name
+    && row.facility_id !== fid
+  // Adjustments and outbound transfers reduce stock, so they read negative — the
+  // same convention the per-log normalizers used.
+  const signed = row.type === 'adjustment'
+    ? (row.status === 'Decrease' ? -(row.quantity || 0) : (row.quantity || 0))
+    : row.type === 'transfer' && isOut ? -(row.quantity || 0)
+    : (row.quantity || 0)
+  const external = row.type === 'transfer'
+    && !!row.sending_facility_name && !!row.receiving_facility_name
+    && row.sending_facility_name !== row.receiving_facility_name
+  return {
+    id: row.id,
+    activity: FEED_ACTIVITY[row.type] || row.type,
+    commodity: row.commodity_name || 'Unknown',
+    category: row.category || 'Unknown',
+    quantity: signed,
+    unit: row.unit || '',
+    date: row.at || '',
+    facility: row.type === 'transfer'
+      ? `${row.sending_facility_name || ''} → ${row.receiving_facility_name || ''}`.trim()
+      : (row.facility_name || ''),
+    status: row.status || '',
+    notes: row.notes || '',
+    external,
+    qtyAbs: row.quantity || 0,
+    sendingName: row.sending_facility_name || '',
+    receivingName: row.receiving_facility_name || '',
+  }
+}
+
+// One page of the merged feed. Returns { rows, total } so the caller can page
+// without a second count query.
+export async function fetchActivityPage({
+  from, to, fid, scopeIds, commIds, section, types, category, externalOnly, limit = 50, offset = 0,
+}) {
+  const { start, end } = toRange(from, to)
+  const res = await api.activity({
+    facility_id: fid || undefined,
+    facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
+    commodity_ids: (commIds && commIds.length) ? commIds : undefined,
+    from: start, to: end,
+    section: section || undefined,
+    types: (types && types.length) ? types.join(',') : undefined,
+    category: category || undefined,
+    external_only: externalOnly ? 1 : undefined,
+    limit, offset,
+  }).catch(() => null)
+  if (!res) return { rows: [], total: 0 }
+  return { rows: (res.data || []).map(r => normalizeFeedRow(r, fid)), total: res.total || 0 }
+}
+
 export async function fetchReportRows({ category = 'all', from, to, fid, scopeIds, commIds, section }) {
   const getDispense = async () =>
     (await queryLog({ listFn: api.dispense.history, from, to, fid, scopeIds, commIds, section })).map(normalizeDispense)

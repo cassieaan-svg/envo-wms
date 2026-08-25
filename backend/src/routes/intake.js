@@ -1,7 +1,8 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
 import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection, sectionFilter } from '../middleware/scope.js'
-import { LogService } from '../services/logService.js'
+import { narrowGrantsToCategories } from '../constants/sections.js'
+import { LogService, INTAKE_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 
 const router = express.Router()
@@ -162,6 +163,70 @@ router.get('/', async (req, res) => {
       error: err.message,
       code: 'FETCH_ERROR'
     })
+  }
+})
+
+/**
+ * GET /api/intake/summary - intake aggregated server-side.
+ *
+ * The receiving-side mirror of GET /api/dispense/summary, and deliberately the same
+ * contract: the same allowlisted `group_by` shapes (minus the AMC-only ones — see
+ * INTAKE_GROUP_BY_KEYS), the same scope/section enforcement, and the same
+ * { qty, txn } row shape. Monitoring's "Units received" card and its commodity /
+ * facility drill-ins read this, so a received figure is always scoped exactly like
+ * the consumed figure beside it.
+ *
+ * Query params: facility_id | facility_ids | state / lga, from, to, commodity_ids,
+ * section, group_by, commodity_id / category (drill-in narrowing), tz.
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, from, to, commodity_ids, section,
+            group_by, commodity_id, category, tz } = req.query
+    const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+
+    const groupBy = group_by ? String(group_by) : 'commodity'
+    if (!INTAKE_GROUP_BY_KEYS.includes(groupBy)) {
+      return sendValidationError(res,
+        `Unsupported group_by. Must be one of: ${INTAKE_GROUP_BY_KEYS.join(' | ')}`, 'group_by')
+    }
+    if (commodity_id && !validators.isUUID(commodity_id)) {
+      return sendValidationError(res, 'Invalid commodity_id format', 'commodity_id')
+    }
+    // tz reaches SQL as a bind parameter, never interpolated; still validated so a
+    // bad zone is a clear 400 instead of a Postgres error surfacing as a 500.
+    if (tz && !/^[A-Za-z][A-Za-z0-9_+\-/]{0,63}$/.test(String(tz))) {
+      return sendValidationError(res, 'Invalid tz', 'tz')
+    }
+
+    // A `category` drill must stay inside the caller's section, never widen it. A
+    // category the caller only reaches through an individual grant is still allowed
+    // through — the section filter in SQL then narrows it to the granted commodity
+    // alone, so this cannot return the rest of that category.
+    const tokenCats = req.scope.sectionCategories
+    const grants = req.scope.sectionCommodityNames
+    const viaGrant = !!category && narrowGrantsToCategories(grants, [String(category)]).length > 0
+    if (category && Array.isArray(tokenCats) && !tokenCats.includes(String(category)) && !viaGrant) {
+      return res.json({ success: true, data: [], count: 0, timestamp: new Date().toISOString() })
+    }
+
+    const base = {
+      from, to, commodityIds, categories: tokenCats, commodityNames: grants, section,
+      groupBy, commodityId: commodity_id || null, category: category || null, tz: tz || null,
+    }
+    let rows
+    if (facility_id) {
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      if (!(await enforceFacilityRead(req, res, facility_id, 'intake_log'))) return
+      rows = await LogService.getIntakeSummary(facility_id, base)
+    } else {
+      const facilityIds = await resolveListFacilityIds(req, 'intake_log', facility_ids)
+      rows = await LogService.getIntakeSummary(null, { ...base, facilityIds: facilityIds === null ? undefined : facilityIds })
+    }
+    res.json({ success: true, data: rows, count: rows.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching intake summary:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
   }
 })
 

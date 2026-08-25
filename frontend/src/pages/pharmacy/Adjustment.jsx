@@ -21,7 +21,7 @@ const SITE_CFG = { table: 'dsd_stock', col: 'dsd_site_name', label: 'DSD site' }
 const DISP_RETURN_REASON = 'Returned from Dispensary'
 
 const RULES = {
-  'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock', binSelect:true },
+  'Expired':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase expired stock', binSelect:true, requireBatch:true },
   'Damaged':                   { type:'Decrease', lock:true,  label:'Negative — cannot increase damaged stock', binSelect:true },
   'Lost / Stolen':             { type:'Decrease', lock:true,  label:'Negative — cannot increase lost/stolen stock', binSelect:true, requireNotes:true },
   // A DELTA, like every other reason here: enter the difference you are correcting,
@@ -54,6 +54,13 @@ export function Adjustment() {
   const [adjExpiry, setAdjExpiry] = useState('')
   const [adjBatch, setAdjBatch]   = useState('')
   const [selectedLot, setSelectedLot] = useState(null)
+  // The batch to send with an adjustment. Three distinct meanings, and the ledger
+  // treats them differently — collapsing them with `adjBatch || null` is what made a
+  // "(no batch)" pick debit some other lot entirely:
+  //   'ABC123' — that batch
+  //   ''       — the lot that has NO batch number (LotService.debit matches it exactly)
+  //   null     — no lot named; the ledger draws FEFO
+  const lotBatchParam = () => selectedLot ? (selectedLot.batch_number || '') : (adjBatch || null)
   // Which bin a count correction applies to. Adjustments used to always hit the
   // store, so correcting a dispensary/site shelf silently moved the wrong bin.
   const [adjBin, setAdjBin] = useState('store')
@@ -202,6 +209,13 @@ export function Adjustment() {
     if (RULES[reason]?.binSelect && adjBin==='dsd' && !adjBinSite) {
       setMsg({type:'error',text:'Select which DSD site you are correcting.'}); return
     }
+    // A write-off names ONE lot. What matters is that a lot was deliberately PICKED,
+    // not that it has a batch number printed on it — some genuinely don't, and those
+    // are chosen from the same dropdown as "(no batch)". Requiring a non-empty batch
+    // string would leave that stock impossible to write off at all.
+    if (RULES[reason]?.requireBatch && !selectedLot) {
+      setMsg({type:'error',text:`Select the batch being written off — "${reason}" must name the exact lot.`}); return
+    }
     if (RULES[reason]?.requireNotes && !adjNotes.trim()) {
       setMsg({type:'error',text:`Notes are required for "${reason}" — say what was counted and why the figure differs.`}); return
     }
@@ -243,7 +257,7 @@ export function Adjustment() {
           facility_id:fid, commodity_id:commId, quantity:qtyN,
           adjustment_type:'Increase', reason, adjusted_by:adjBy||null,
           reference_number:adjRef||null, notes:returnNote, adjusted_at:new Date().toISOString(),
-          expiry_date:adjExpiry||null, batch_number:adjBatch||null,
+          expiry_date:adjExpiry||null, batch_number:lotBatchParam(),
           section:commoditySection,
         })
       } catch (logErr) { setMsg({type:'error',text:'Error: '+logErr.message}); setSaving(false); return }
@@ -278,7 +292,7 @@ export function Adjustment() {
           facility_id:fid, commodity_id:commId, quantity:qtyN,
           adjustment_type:'Increase', reason, adjusted_by:adjBy||null,
           reference_number:adjRef||null, notes:returnNote, adjusted_at:new Date().toISOString(),
-          expiry_date:adjExpiry||null, batch_number:adjBatch||null,
+          expiry_date:adjExpiry||null, batch_number:lotBatchParam(),
           section:commoditySection,
         })
       } catch (logErr) { setMsg({type:'error',text:'Error: '+logErr.message}); setSaving(false); return }
@@ -309,7 +323,7 @@ export function Adjustment() {
         facility_id:fid, commodity_id:commId, quantity:parseInt(qty),
         adjustment_type:adjType, reason, adjusted_by:adjBy||null,
         reference_number:adjRef||null, notes:adjNotes||null, adjusted_at:new Date().toISOString(),
-        expiry_date:adjExpiry||null, batch_number:adjBatch||null,
+        expiry_date:adjExpiry||null, batch_number:lotBatchParam(),
         section:commoditySection,
         location_type:adjBin, site_name:adjBin==='dsd' ? adjBinSite : null,
       })

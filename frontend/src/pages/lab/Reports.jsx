@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { Badge, CatBadge } from '../../components/ui/Badge'
+import { Pagination } from '../../components/ui/Pagination'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 
 // Activity Log colour scheme reused for the report table.
@@ -17,7 +18,7 @@ function renderQty(row) {
 }
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
-import { REPORT_CATEGORIES, getReportCategoryLabel, fetchReportRows, buildCrrfCsv, buildActivityCsv, buildCrrfByFacilityCsv, buildConsumptionByFacilityCsv, getSummaryMetrics } from '../../utils/reports'
+import { REPORT_CATEGORIES, getReportCategoryLabel, fetchActivityPage, fetchReportRows, buildCrrfCsv, buildActivityCsv, buildCrrfByFacilityCsv, buildConsumptionByFacilityCsv, getSummaryMetrics } from '../../utils/reports'
 
 export function Reports({ embedded = false } = {}) {
   const store = useAppStore()
@@ -34,6 +35,13 @@ export function Reports({ embedded = false } = {}) {
   const [wTo, setWTo]         = useState(wTo0)
   const [month, setMonth]     = useState(month0)
   const [summary, setSummary] = useState(null)
+  // The table now shows ONE page fetched from /api/activity instead of every row
+  // for the period. A month is ~23,000 rows across four logs — previously drained
+  // in ~24 sequential requests to fill one screen.
+  const [range, setRange]     = useState(null)   // { from, to, label }
+  const [feed, setFeed]       = useState(null)   // { rows, total }
+  const [feedPage, setFeedPage] = useState(0)
+  const [feedLoading, setFeedLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [selectedActivities, setSelectedActivities] = useState(new Set())
   const [selectedActivityTypes, setSelectedActivityTypes] = useState(() => {
@@ -91,21 +99,43 @@ export function Reports({ embedded = false } = {}) {
   const notInternalForAdmin = row => !(isAdmin && row.activity === 'Transfer' && !row.external)
 
   async function loadWeekly() {
-    setLoading(true)
-    const rows = await fetchReportRows({ category, from: wFrom, to: wTo, fid, scopeIds, commIds, section: commoditySection })
-    setSummary({ rows, label: `${wFrom} to ${wTo}` })
-    setLoading(false)
+    setFeedPage(0)
+    setRange({ from: wFrom, to: wTo, label: `${wFrom} to ${wTo}` })
   }
 
   async function loadMonthly() {
-    setLoading(true)
+    setFeedPage(0)
     const from = month + '-01'
     const lastDay = new Date(month.split('-')[0], month.split('-')[1], 0).getDate()
-    const to = `${month}-${String(lastDay).padStart(2,'0')}`
-    const rows = await fetchReportRows({ category, from, to, fid, scopeIds, commIds, section: commoditySection })
-    setSummary({ rows, label: month })
-    setLoading(false)
+    setRange({ from, to: `${month}-${String(lastDay).padStart(2,'0')}`, label: month })
   }
+
+  // The activity types the checkboxes leave selected, as feed `types`. Filtering
+  // server-side is what keeps the page count honest: dropping rows in the browser
+  // would leave "page 2 of 24" counting rows that are never shown.
+  const feedTypes = ['dispense','intake','adjustment','transfer'].filter(t => selectedActivityTypes.has(t))
+  const feedTypesKey = feedTypes.join(',')
+  const scopeIdsKey = (scopeIds && scopeIds.length) ? scopeIds.join(',') : ''
+
+  useEffect(() => {
+    if (!range) { setFeed(null); return }
+    let live = true
+    setFeedLoading(true)
+    fetchActivityPage({
+      from: range.from, to: range.to, fid, scopeIds, commIds,
+      section: commoditySection,
+      types: category === 'all' ? feedTypes : [category],
+      category: catFilter || undefined,
+      externalOnly: isAdmin,
+      limit: 50, offset: feedPage * 50,
+    }).then(res => {
+      if (!live) return
+      setFeed(res)
+      setSummary({ rows: res.rows, label: range.label })
+      setFeedLoading(false)
+    })
+    return () => { live = false }
+  }, [range?.from, range?.to, feedPage, category, catFilter, fid, scopeIdsKey, feedTypesKey])
 
   // Download helper.
   function downloadCsv(csv, name) {
@@ -118,9 +148,18 @@ export function Reports({ embedded = false } = {}) {
   }
 
   async function exportCSV(includeAll = false) {
-    if (!summary?.rows) { toast('Load data first','red'); return }
-    const rows = summary.rows.filter(r => rowMatchesFilter(r) && matchesCategory(r) && notInternalForAdmin(r))
-    const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report, ${summary.label}`
+    if (!range) { toast('Load data first','red'); return }
+    // The TABLE shows one page; an export must not. Fetch the whole period here
+    // rather than exporting `summary.rows`, which is now just the visible 50 —
+    // a silent truncation would be far worse than a slow download.
+    setLoading(true)
+    const allRows = await fetchReportRows({
+      category, from: range.from, to: range.to, fid, scopeIds, commIds, section: commoditySection,
+    }).catch(() => [])
+    setLoading(false)
+    const rows = allRows.filter(r => rowMatchesFilter(r) && matchesCategory(r) && notInternalForAdmin(r))
+    if (!rows.length) { toast('Nothing to export for this selection','red'); return }
+    const title = `${getReportCategoryLabel(category)} ${tab === 'weekly' ? 'Weekly' : 'Monthly'} Report, ${range.label}`
     const commLookup = {}
     store.allCommodities.forEach(c => { commLookup[c.id] = c.name })
 
@@ -289,7 +328,7 @@ export function Reports({ embedded = false } = {}) {
               <input type="month" value={month} onChange={e => setMonth(e.target.value)} className={inputCls} />
             </div>
           )}
-          <button onClick={tab === 'weekly' ? loadWeekly : loadMonthly} disabled={loading}
+          <button onClick={tab === 'weekly' ? loadWeekly : loadMonthly} disabled={loading || feedLoading}
             className="bg-green-500 hover:bg-green-400 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
             Load
           </button>
@@ -332,7 +371,7 @@ export function Reports({ embedded = false } = {}) {
                     }}
                     className="w-4 h-4 cursor-pointer"
                   />
-                  <span className="text-xs text-gray-400">{selectedActivities.size > 0 ? `${selectedActivities.size} selected` : 'Select all'}</span>
+                  <span className="text-xs text-gray-400">{selectedActivities.size > 0 ? `${selectedActivities.size} selected` : 'Select all on this page'}</span>
                 </div>
                 <div className="table-wrap"><table className="w-full text-sm">
                   <thead>
@@ -377,6 +416,18 @@ export function Reports({ embedded = false } = {}) {
                     })}
                   </tbody>
                 </table></div>
+                {/* Page numbers come from the server's `total`, so this counts the
+                    whole period rather than the rows currently in memory. */}
+                <Pagination
+                  pager={{
+                    page: feedPage,
+                    pages: Math.max(1, Math.ceil((feed?.total || 0) / 50)),
+                    total: feed?.total || 0,
+                    from: (feed?.total || 0) ? feedPage * 50 + 1 : 0,
+                    to: Math.min(feed?.total || 0, (feedPage + 1) * 50),
+                  }}
+                  onPage={setFeedPage}
+                  unit="records"/>
               </>
             ) : <EmptyState message={`No ${category === 'all' ? 'activity' : categoryLabel.toLowerCase()} recorded for this ${tab}.`} />}
           </Card>

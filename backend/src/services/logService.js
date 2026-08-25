@@ -87,6 +87,39 @@ async function assertBinCovers(exec, soh, qty, commodityId, binLabel) {
 // self-describing, so they stay optional.
 export const REASONS_REQUIRING_NOTES = new Set(['Physical count correction', 'Lost / Stolen', 'Other'])
 
+// Reasons that must name the exact lot being adjusted. Without one, a Decrease
+// debits the lot ledger FEFO (soonest expiry first) — a sensible default for a
+// generic removal, but wrong for a write-off: "Expired" is a claim about ONE
+// specific lot, and letting the ledger choose can retire a different batch than the
+// one physically discarded. The stock total stays correct either way; the lot the
+// expiry reports are built from does not.
+//
+// NAMING A LOT IS NOT THE SAME AS HAVING A BATCH NUMBER. Some stock was received
+// without one (188 on-hand lots at the time of writing), and it appears in the
+// picker as "(no batch)". Demanding a non-empty string would make that stock
+// impossible to write off once it expires — it would sit on the expiry report
+// forever with no legal way to clear it. So the three values are distinguished:
+//
+//   'ABC123'  → that batch
+//   ''        → the unbatched lot, a deliberate and valid pick, allowed only when
+//               the bin actually holds one (otherwise it is just an omission)
+//   null/absent → no lot named at all; refused for these reasons
+export const REASONS_REQUIRING_BATCH = new Set(['Expired'])
+
+// Does this bin hold stock with no batch number? Decides whether an empty batch is
+// a real "(no batch)" selection or a caller that simply left the field out.
+async function binHasUnbatchedLot(exec, bin) {
+  const { rows } = await exec(
+    `select 1 from stock_lot
+      where facility_id=$1 and commodity_id=$2 and location_type=$3
+        and coalesce(site_name,'') = coalesce($4,'')
+        and quantity > 0 and coalesce(trim(batch_number),'') = ''
+      limit 1`,
+    [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
+  )
+  return rows.length > 0
+}
+
 // The bin an edited log row accounts for. dispense_log has no bin column — the
 // site is carried in the notes tag, exactly as the bin card reads it, and an
 // untagged dispense belongs to the dispensary. Adjustments carry the bin explicitly
@@ -226,6 +259,120 @@ const LIFETIME_FLOOR = '2024-01-01'
 
 export const DISPENSE_GROUP_BY_KEYS = Object.keys(DISPENSE_GROUP_BY)
 
+// Intake serves the same groupings MINUS the AMC-only ones. 'commodity,month' and
+// 'commodity,lifetime' exist to feed average-monthly-consumption; an AMC computed
+// from receipts would be meaningless, so they are not offered rather than being
+// offered and misused.
+export const INTAKE_GROUP_BY_KEYS = DISPENSE_GROUP_BY_KEYS
+  .filter(k => !['commodity,month', 'commodity,lifetime'].includes(k))
+
+// Adjustments carry two dimensions the movement logs don't: `adjustment_type`
+// (Increase / Decrease) and a free-text `reason`. Every grouping pairs with `type`
+// because a positive and a negative adjustment are different events with different
+// reasons — netting them, or pooling their reasons, would hide a facility that
+// added 5,000 and removed 5,000 on the same commodity.
+const ADJUSTMENT_GROUP_BY = {
+  'commodity,type': { dimensions: ['commodity', 'type'] },
+  'facility,type':  { dimensions: ['facility', 'type'] },
+  'day,type':       { dimensions: ['day', 'type'], needsDay: true },
+  'reason,type':    { dimensions: ['reason', 'type'] },
+  'commodity':      { dimensions: ['commodity'] },
+  'facility':       { dimensions: ['facility'] },
+}
+export const ADJUSTMENT_GROUP_BY_KEYS = Object.keys(ADJUSTMENT_GROUP_BY)
+
+// SQL for each group dimension. Only 'commodity' and 'facility' are ids; 'reason'
+// and 'type' are plain text columns, and a blank reason is bucketed explicitly
+// rather than becoming a null the caller has to guess at.
+const DIMENSION_SQL = {
+  commodity: { sql: 'l.commodity_id',      alias: 'commodity_id' },
+  facility:  { sql: 'l.facility_id',       alias: 'facility_id' },
+  type:      { sql: 'l.adjustment_type',   alias: 'type' },
+  reason:    { sql: `coalesce(nullif(trim(l.reason), ''), '(not stated)')`, alias: 'reason' },
+}
+
+/**
+ * Shared builder behind getDispenseSummary / getIntakeSummary. The two logs differ
+ * only in table name and date column — everything else (the group_by allowlist, the
+ * scope/section filters, drill-in narrowing, tz day bucketing, the { qty, txn } row
+ * shape) is identical, so it lives here once. Keeping them on one code path is what
+ * guarantees a "received" figure is scoped and section-filtered exactly like the
+ * "consumed" figure it sits beside on the dashboard.
+ */
+async function logSummary({ table, dateField, specs = DISPENSE_GROUP_BY }, facilityId, options = {}) {
+  const {
+    from, to, facilityIds, commodityIds, categories, commodityNames, section,
+    groupBy = 'commodity,month', commodityId = null, category = null, tz = null,
+    adjustmentType = null, reason = null,
+  } = options
+  if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+  const spec = specs[groupBy]
+  if (!spec) throw new Error(`Unsupported group_by: ${groupBy}`)
+
+  const params = []
+  const conds = []
+  applyLogFilters({ conds, params, dateField, facilityId, facilityIds, commodityIds, categories, commodityNames, from, to, section })
+
+  // Drill-in narrowing: ONE commodity, or ONE category. These are additional
+  // filters on top of the caller's scope — they can only narrow it, never widen
+  // it (the section `categories` condition above still applies independently).
+  if (commodityId) { params.push(commodityId); conds.push(`l.commodity_id = $${params.length}`) }
+  if (category) { params.push(category); conds.push(`c.category = $${params.length}`) }
+
+  // Join commodities only when something actually needs it.
+  const needCommJoin = (Array.isArray(categories) && categories.length) || !!category
+
+  // Day bucketing happens in a caller-supplied timezone. The date column is
+  // timestamptz, so `at time zone $n` yields that zone's wall-clock date. The
+  // caller decides the zone precisely because the two Monitoring charts
+  // currently disagree (see the note on DISPENSE_GROUP_BY); passing it in
+  // reproduces each one exactly instead of silently picking a winner.
+  let dayExpr = null
+  if (spec.needsDay) {
+    if (tz) { params.push(tz); dayExpr = `to_char(l.${dateField} at time zone $${params.length}, 'YYYY-MM-DD')` }
+    else dayExpr = `to_char(l.${dateField} at time zone 'UTC', 'YYYY-MM-DD')`
+  }
+
+  // Narrow to one adjustment direction (Increase / Decrease) when asked.
+  if (adjustmentType) { params.push(adjustmentType); conds.push(`l.adjustment_type = $${params.length}`) }
+  // Narrow to ONE reason. Matched against the same normalised expression the
+  // `reason` dimension groups by, so the '(not stated)' bucket the UI shows can be
+  // drilled into like any other rather than being a label with nothing behind it.
+  if (reason) {
+    params.push(reason)
+    conds.push(`coalesce(nullif(trim(l.reason), ''), '(not stated)') = $${params.length}`)
+  }
+
+  const dimSql = d => DIMENSION_SQL[d]?.sql ?? `l.${d}_id`
+  const dimAlias = d => DIMENSION_SQL[d]?.alias ?? `${d}_id`
+  const selects = spec.dimensions.map(d => (d === 'day' ? `${dayExpr} as day` : `${dimSql(d)} as ${dimAlias(d)}`))
+  if (spec.month) selects.push(`to_char(l.${dateField} at time zone 'UTC', 'YYYY-MM') as ym`)
+  const groupCols = spec.dimensions.map(d => (d === 'day' ? 'day' : dimSql(d)))
+  if (spec.month) groupCols.push('ym')
+
+  // Lifetime: the caller needs the first record's date to know how many weeks
+  // this commodity has actually been recorded for. Bound the range so one stray
+  // mistyped year can't define the span — a single 2029 row would otherwise
+  // stretch it and drive the AMC toward zero, hiding a stockout.
+  const aggregates = ['sum(l.quantity)::int as qty', 'count(*)::int as txn']
+  if (spec.lifetime) {
+    aggregates.push(`min(l.${dateField}) as first_at`, `max(l.${dateField}) as last_at`)
+    conds.push(`l.${dateField} >= '${LIFETIME_FLOOR}'::timestamptz`, `l.${dateField} <= now()`)
+  }
+
+  let sql = `
+      select ${selects.join(', ')},
+             ${aggregates.join(',\n             ')}
+      from ${table} l
+      ${needCommJoin ? 'left join commodities c on c.id = l.commodity_id' : ''}`
+  if (conds.length) sql += ` where ${conds.join(' and ')}`
+  sql += ` group by ${groupCols.join(', ')}`
+
+  const { rows } = await query(sql, params)
+  return rows
+}
+
 // Log-edit support (EditModal). Maps the frontend's record _type to its table and
 // the metadata columns that edit is allowed to change. Stock reconciliation is NOT
 // done here — the client adjusts stock separately (matching the original flow).
@@ -259,6 +406,27 @@ export class LogService {
 
     const old = await this.getLogRow(type, id)
     if (!old) return null
+
+    // An edit can change `reason` and `batch_number` independently, so the rule is
+    // checked against the row as it WILL be — not as it was. Otherwise a write-off
+    // could be relabelled "Expired" after the fact, or have its batch cleared, and
+    // skip the check that the create path enforces.
+    if (type === 'adjustment') {
+      const nextReason = fields.reason !== undefined ? fields.reason : old.reason
+      const nextBatch  = fields.batch_number !== undefined ? fields.batch_number : old.batch_number
+      const blank = v => !String(v || '').trim()
+      // Grandfathered: a row recorded before this rule that ALREADY had no batch is
+      // left editable, so long as the edit doesn't touch reason or batch. Blocking it
+      // would strand old records — someone fixing a quantity typo on a months-old
+      // write-off cannot produce a batch number nobody wrote down.
+      const alreadyBlank = blank(old.batch_number) && REASONS_REQUIRING_BATCH.has(old.reason)
+      const untouched = fields.reason === undefined && fields.batch_number === undefined
+      if (REASONS_REQUIRING_BATCH.has(nextReason) && blank(nextBatch) && !(alreadyBlank && untouched)) {
+        const e = new Error(`Batch number is required for "${nextReason}" — name the exact lot being written off, so the right one leaves the expiry report.`)
+        e.status = 400
+        throw e
+      }
+    }
 
     const sets = []
     const params = [id]
@@ -709,7 +877,11 @@ export class LogService {
       }
       // Enforce (phase 3): a chosen batch must cover qty and not be expired; with
       // no batch, FEFO skips expired lots. Blocks (409) if eligible stock is short.
-      await LotService.debit(exec, bin, qty, { batch: batch_number || null, enforce: true })
+      // '' and null mean different things and must not be flattened: '' is the lot
+      // that HAS no batch number (LotService.debit matches it exactly), null is "no
+      // lot named, draw FEFO". `x || null` collapses the first into the second, which
+      // silently debits a batched lot when the operator picked "(no batch)".
+      await LotService.debit(exec, bin, qty, { batch: batch_number == null ? null : batch_number, enforce: true })
 
       return dispenseLog
     })
@@ -753,64 +925,178 @@ export class LogService {
    * getDispenseHistory, just pre-aggregated server-side.
    */
   static async getDispenseSummary(facilityId, options = {}) {
-    const {
-      from, to, facilityIds, commodityIds, categories, commodityNames, section,
-      groupBy = 'commodity,month', commodityId = null, category = null, tz = null,
-    } = options
-    if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
+    return logSummary({ table: 'dispense_log', dateField: 'dispensed_at' }, facilityId, options)
+  }
 
-    const spec = DISPENSE_GROUP_BY[groupBy]
-    if (!spec) throw new Error(`Unsupported group_by: ${groupBy}`)
+  /**
+   * Intake summed over a facility set and date window — the receiving-side mirror
+   * of getDispenseSummary, powering Monitoring's "Units received" card and its
+   * commodity/facility drill-ins. Same groupings, same { qty, txn } row shape, so
+   * the two aggregates line up field-for-field and a caller can subtract one from
+   * the other. Bucketed on received_at (intake_log's date column).
+   */
+  static async getIntakeSummary(facilityId, options = {}) {
+    return logSummary({ table: 'intake_log', dateField: 'received_at' }, facilityId, options)
+  }
+
+  /**
+   * Stock adjustments aggregated — the third movement type, alongside consumption
+   * (out) and intake (in). An adjustment changes stock WITHOUT a physical movement:
+   * count corrections, expiries written off, returns. Same { qty, txn } row shape as
+   * the other two, plus `type` (Increase / Decrease) and `reason` dimensions.
+   *
+   * `adjustmentType` narrows to one direction. Positive and negative adjustments are
+   * never netted here — the caller asks for one or gets both broken out — because a
+   * net of zero can equally mean nothing happened or that 5,000 units were added and
+   * 5,000 removed.
+   */
+  static async getAdjustmentSummary(facilityId, options = {}) {
+    return logSummary(
+      { table: 'stock_adjustment_log', dateField: 'adjusted_at', specs: ADJUSTMENT_GROUP_BY },
+      facilityId, options
+    )
+  }
+
+
+  /**
+   * One activity feed across all four logs, ordered by time, with limit/offset.
+   *
+   * WHY THIS EXISTS. The Activity Log and the weekly/monthly report both show a
+   * merged, time-ordered stream of dispenses, intakes, adjustments and transfers.
+   * Building that in the browser means fetching each log separately and merging —
+   * which cannot be paged. Page 2 of a merged stream is not page 2 of any single
+   * log, so "the newest 500 of each, merged, cut to 500" silently drops whatever
+   * fell past one source's cap, and a Next button over it would return pages with
+   * records missing from the middle. A monthly report currently drains ~23,000 rows
+   * over ~24 sequential requests to show one screenful.
+   *
+   * Doing the merge in SQL makes the ordering total, so limit/offset are exact and
+   * the client fetches only what it displays. `total` rides along via a window
+   * count so the caller can render "page 2 of 24" without a second query.
+   *
+   * Row shape is deliberately uniform — the four logs disagree on column names
+   * (dispensed_at / received_at / adjusted_at / resolved_at), and normalising here
+   * keeps that knowledge in one place instead of in every caller.
+   */
+  static async getActivityFeed(options = {}) {
+    const {
+      from, to, facilityId, facilityIds, commodityIds, categories, commodityNames,
+      section, types = null, category = null, externalOnly = false,
+      limit = 50, offset = 0,
+    } = options
+    if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) {
+      return { rows: [], total: 0 }
+    }
 
     const params = []
-    const conds = []
-    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, commodityNames, from, to, section })
+    const P = v => { params.push(v); return `$${params.length}` }
 
-    // Drill-in narrowing: ONE commodity, or ONE category. These are additional
-    // filters on top of the caller's scope — they can only narrow it, never widen
-    // it (the section `categories` condition above still applies independently).
-    if (commodityId) { params.push(commodityId); conds.push(`l.commodity_id = $${params.length}`) }
-    if (category) { params.push(category); conds.push(`c.category = $${params.length}`) }
+    // Bind the shared filters ONCE and reuse the placeholders across all four
+    // branches — the same value repeated as four parameters would be four plan
+    // entries for one filter.
+    const pFrom = from ? P(from) : null
+    const pTo   = to   ? P(to)   : null
+    const pFid  = facilityId ? P(facilityId) : null
+    const pFids = (!facilityId && Array.isArray(facilityIds)) ? P(facilityIds) : null
+    const pComms = (Array.isArray(commodityIds) && commodityIds.length) ? P(commodityIds) : null
+    const pSection = section ? P(section) : null
+    const pCats = (Array.isArray(categories) && categories.length) ? P(categories) : null
+    const pNames = (Array.isArray(commodityNames) && commodityNames.length) ? P(commodityNames) : null
+    // A single commodity category, on top of (never widening) the section scope.
+    const pCat = category ? P(category) : null
 
-    // Join commodities only when something actually needs it.
-    const needCommJoin = (Array.isArray(categories) && categories.length) || !!category
+    // Section scope: the caller's categories, plus any individually granted
+    // commodity. Identical rule to the per-log queries.
+    const secCond = pCats
+      ? (pNames ? `(c.category = any(${pCats}) or c.name = any(${pNames}))` : `c.category = any(${pCats})`)
+      : null
 
-    // Day bucketing happens in a caller-supplied timezone. dispensed_at is
-    // timestamptz, so `at time zone $n` yields that zone's wall-clock date. The
-    // caller decides the zone precisely because the two Monitoring charts
-    // currently disagree (see the note on DISPENSE_GROUP_BY); passing it in
-    // reproduces each one exactly instead of silently picking a winner.
-    let dayExpr = null
-    if (spec.needsDay) {
-      if (tz) { params.push(tz); dayExpr = `to_char(l.dispensed_at at time zone $${params.length}, 'YYYY-MM-DD')` }
-      else dayExpr = `to_char(l.dispensed_at at time zone 'UTC', 'YYYY-MM-DD')`
+    const branch = ({ table, dateCol, type, statusCol, facilityJoin, extra }) => {
+      const w = [`${dateCol} is not null`]
+      if (pFrom) w.push(`${dateCol} >= ${pFrom}`)
+      if (pTo)   w.push(`${dateCol} <= ${pTo}`)
+      if (pComms) w.push(`l.commodity_id = any(${pComms})`)
+      if (pSection) w.push(`l.section = ${pSection}`)
+      if (secCond) w.push(secCond)
+      if (pCat) w.push(`c.category = ${pCat}`)
+      w.push(facilityJoin)
+      return `
+        select l.id, '${type}'::text as type, ${dateCol} as at,
+               ${extra.facility_id} as facility_id, ${extra.facility_name} as facility_name,
+               l.commodity_id, c.name as commodity_name, c.category, c.unit,
+               l.quantity::int as quantity,
+               ${statusCol} as status, ${extra.notes} as notes,
+               ${extra.sending} as sending_facility_name,
+               ${extra.receiving} as receiving_facility_name,
+               ${extra.sending_id} as sending_facility_id,
+               ${extra.receiving_id} as receiving_facility_id,
+               -- Who did it, and the one free-text field each log keeps. The
+               -- Activity Log shows these in its details column, so leaving them
+               -- out would mean fetching the row again just to render it.
+               ${extra.actor} as actor,
+               ${extra.supplier} as supplier_source,
+               ${extra.reason} as reason
+        from ${table} l
+        left join commodities c on c.id = l.commodity_id
+        ${extra.join}
+        where ${w.join(' and ')}`
     }
 
-    const selects = spec.dimensions.map(d => (d === 'day' ? `${dayExpr} as day` : `l.${d}_id as ${d}_id`))
-    if (spec.month) selects.push(`to_char(l.dispensed_at at time zone 'UTC', 'YYYY-MM') as ym`)
-    const groupCols = spec.dimensions.map(d => (d === 'day' ? 'day' : `l.${d}_id`))
-    if (spec.month) groupCols.push('ym')
+    const facWhere = pFid ? `l.facility_id = ${pFid}` : pFids ? `l.facility_id = any(${pFids})` : 'true'
+    // A transfer belongs to BOTH endpoints, so it is in scope if either is.
+    const trWhere = pFid
+      ? `(l.sending_facility_id = ${pFid} or l.receiving_facility_id = ${pFid})`
+      : pFids
+        ? `(l.sending_facility_id = any(${pFids}) or l.receiving_facility_id = any(${pFids}))`
+        : 'true'
 
-    // Lifetime: the caller needs the first record's date to know how many weeks
-    // this commodity has actually been recorded for. Bound the range so one stray
-    // mistyped year can't define the span — a single 2029 row would otherwise
-    // stretch it and drive the AMC toward zero, hiding a stockout.
-    const aggregates = ['sum(l.quantity)::int as qty', 'count(*)::int as txn']
-    if (spec.lifetime) {
-      aggregates.push('min(l.dispensed_at) as first_at', 'max(l.dispensed_at) as last_at')
-      conds.push(`l.dispensed_at >= '${LIFETIME_FLOOR}'::timestamptz`, 'l.dispensed_at <= now()')
+    const plain = {
+      facility_id: 'l.facility_id', facility_name: 'f.name', notes: 'l.notes',
+      sending: 'null::text', receiving: 'null::text',
+      sending_id: 'null::uuid', receiving_id: 'null::uuid',
+      supplier: 'null::text', reason: 'null::text', actor: 'null::text',
+      join: 'left join facilities f on f.id = l.facility_id',
+    }
+    const all = {
+      dispense:   branch({ table:'dispense_log',        dateCol:'l.dispensed_at', type:'dispense',   statusCol:`'Dispensed'::text`,      facilityJoin: facWhere, extra: { ...plain, actor:'l.dispensed_by' } }),
+      intake:     branch({ table:'intake_log',          dateCol:'l.received_at',  type:'intake',     statusCol:'l.condition_on_arrival', facilityJoin: facWhere, extra: { ...plain, actor:'l.received_by', supplier:'l.supplier_source' } }),
+      adjustment: branch({ table:'stock_adjustment_log',dateCol:'l.adjusted_at',  type:'adjustment', statusCol:'l.adjustment_type',      facilityJoin: facWhere, extra: { ...plain, actor:'l.adjusted_by', reason:'l.reason' } }),
+      // externalOnly drops internal movements — store→dispensary (same facility)
+      // and SDP/DSD dispatches (no receiving facility). Cross-facility admin views
+      // exclude them, and doing it here keeps the page count honest: filtering them
+      // out in the browser would leave "page 2 of 24" counting rows never shown.
+      transfer:   branch({ table:'stock_transfer_log',  dateCol:'l.initiated_at', type:'transfer',   statusCol:'l.status',
+        facilityJoin: externalOnly
+          ? `(${trWhere}) and l.sending_facility_id is not null and l.receiving_facility_id is not null and l.sending_facility_id <> l.receiving_facility_id`
+          : trWhere,
+        extra: {
+        // A transfer has two facilities; the receiving one is reported as "the"
+        // facility, with both names carried so the caller can show direction.
+        facility_id: 'coalesce(l.receiving_facility_id, l.sending_facility_id)',
+        facility_name: 'coalesce(l.receiving_facility_name, l.sending_facility_name)',
+        notes: 'l.notes', sending: 'l.sending_facility_name', receiving: 'l.receiving_facility_name',
+        sending_id: 'l.sending_facility_id', receiving_id: 'l.receiving_facility_id',
+        supplier: 'null::text', reason: 'null::text', actor: 'l.resolved_by',
+        join: '',
+      }}),
     }
 
-    let sql = `
-      select ${selects.join(', ')},
-             ${aggregates.join(',\n             ')}
-      from dispense_log l
-      ${needCommJoin ? 'left join commodities c on c.id = l.commodity_id' : ''}`
-    if (conds.length) sql += ` where ${conds.join(' and ')}`
-    sql += ` group by ${groupCols.join(', ')}`
+    const wanted = Array.isArray(types) && types.length
+      ? types.filter(t => all[t]).map(t => all[t])
+      : Object.values(all)
+    if (!wanted.length) return { rows: [], total: 0 }
+
+    const pLimit = P(parseInt(limit) || 50)
+    const pOffset = P(parseInt(offset) || 0)
+    const sql = `
+      with feed as (${wanted.join('\n        union all\n')})
+      select *, count(*) over()::int as total
+      from feed
+      order by at desc
+      limit ${pLimit} offset ${pOffset}`
 
     const { rows } = await query(sql, params)
-    return rows
+    return { rows, total: rows.length ? rows[0].total : 0 }
   }
 
   /**
@@ -948,6 +1234,20 @@ export class LogService {
       e.status = 400
       throw e
     }
+    if (REASONS_REQUIRING_BATCH.has(reason) && !String(batch_number || '').trim()) {
+      // An empty STRING is the "(no batch)" pick — valid, but only if such a lot is
+      // really on the shelf. Null/absent means no lot was named at all.
+      const picked = batch_number === ''
+      const bin = { facility_id, commodity_id, location_type, site_name: site_name || null }
+      const ok = picked && await binHasUnbatchedLot(query, bin)
+      if (!ok) {
+        const e = new Error(picked
+          ? `No unbatched stock is on hand in ${binLabel(bin)}, so "(no batch)" is not a valid pick for "${reason}" — choose the batch being written off.`
+          : `Batch number is required for "${reason}" — name the exact lot being written off, so the right one leaves the expiry report. Pick "(no batch)" if that lot has none recorded.`)
+        e.status = 400
+        throw e
+      }
+    }
 
     const qty = parseInt(quantity)
 
@@ -988,7 +1288,11 @@ export class LogService {
       if (adjustment_type === 'Increase') {
         await LotService.credit(exec, bin, { batch: batch_number || null, expiry: expiry_date || null, qty, section: resolvedSection })
       } else {
-        await LotService.debit(exec, bin, qty, { batch: batch_number || null })
+        // Preserve the difference between '' and null. LotService.debit matches an
+        // empty batch to the lot that HAS no batch number; `batch_number || null`
+        // would flatten that into "no preference" and draw FEFO across every lot —
+        // retiring a batched lot when the operator explicitly picked "(no batch)".
+        await LotService.debit(exec, bin, qty, { batch: batch_number == null ? null : batch_number })
       }
 
       return adjustmentLog
