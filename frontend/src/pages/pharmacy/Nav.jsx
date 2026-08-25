@@ -82,6 +82,7 @@ export function PharmacyNav() {
       {!isRestricted && <NavSection>Reports</NavSection>}
       {!isRestricted && <NavItem page="log"        icon={icons.log}>Activity Log</NavItem>}
       {!isRestricted && <NavItem page="monitoring" icon={icons.monitoring}>Monitoring</NavItem>}
+      {isEssential && !isRestricted && <NavItem page="spend" icon={icons.report}>Spend</NavItem>}
       {!isRestricted && <NavItem page="crrf"       icon={icons.crrf} disabled={isDispenser}>CRRF</NavItem>}
     </>
   )

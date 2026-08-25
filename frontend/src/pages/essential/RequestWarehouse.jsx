@@ -50,6 +50,12 @@ export function RequestWarehouse() {
   // login account. Remembered locally like the phone, so it isn't retyped each time.
   const [name, setName]     = useState(() => localStorage.getItem('envo_requester_name') || '')
   const [phone, setPhone]   = useState(() => localStorage.getItem('envo_requester_phone') || '')
+  // Funding schemes come from the server (GET /api/schemes), not a constant here, so
+  // adding a fund is a database insert. No default is pre-selected on purpose: which
+  // fund an order is raised against decides who pays, and quietly defaulting to the DRF
+  // would hand a facility a debt nobody chose.
+  const [schemes, setSchemes] = useState([])
+  const [scheme, setScheme]   = useState('')
   const [requests, setRequests] = useState([])
   const [histView, setHistView] = useState('active')  // 'active' (pending) | 'history'
   const [busy, setBusy]     = useState(false)
@@ -60,6 +66,12 @@ export function RequestWarehouse() {
     try { setRequests(await api.warehouseRequests.list() || []) } catch { /* ignore */ }
   }
 
+  useEffect(() => { api.schemes.list().then(r => setSchemes(r || [])).catch(() => {}) }, [])
+  // key -> label/flags, so a row can render "BHCPF" rather than "bhcpf" and can say
+  // whether the fund bills the facility without hardcoding which one does.
+  const schemeById = useMemo(() => Object.fromEntries((schemes || []).map(x => [x.key, x])), [schemes])
+  const schemeLabel = (k) => schemeById[k]?.label || k || '—'
+
   const grandTotal = lines.reduce((s, l) => s + l.unit_price * l.quantity, 0)
 
   // Pending = still in flight; History = closed (received / cancelled).
@@ -68,9 +80,9 @@ export function RequestWarehouse() {
     histView === 'active' ? ACTIVE_STATES.includes(r.status) : ['received', 'cancelled'].includes(r.status))
 
   function downloadRequestsCsv() {
-    const head = ['Date', 'Status', 'Line items', 'Units', 'Total (NGN)', 'WMS ref']
+    const head = ['Date', 'Status', 'Scheme', 'Line items', 'Units', 'Total (NGN)', 'WMS ref']
     const rows = shownRequests.map(r => [
-      new Date(r.requested_at).toISOString().slice(0, 10), r.status,
+      new Date(r.requested_at).toISOString().slice(0, 10), r.status, schemeLabel(r.scheme),
       r.line_count, r.total_quantity, r.total_amount, r.wms_request_id ?? '',
     ])
     const csv = [head, ...rows].map(row => row.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
@@ -102,6 +114,7 @@ export function RequestWarehouse() {
         items: lines.map(l => ({ commodity_id: l.commodity_id, quantity: l.quantity, unit_price: l.unit_price })),
         requestedBy: name.trim(),
         requesterPhone: phone.trim(),
+        scheme,
         notes: notes || undefined,
       })
       localStorage.setItem('envo_requester_name', name.trim())
@@ -202,6 +215,19 @@ export function RequestWarehouse() {
           )}
 
           <div className="flex flex-wrap gap-2 items-end justify-between">
+            <div className="w-full sm:w-56">
+              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Scheme *</label>
+              <select value={scheme} onChange={e => setScheme(e.target.value)}
+                className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
+                <option value="">Select scheme…</option>
+                {schemes.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+              </select>
+              {/* creates_debt comes from the scheme row, so the client never hardcodes
+                  which fund bills the facility. */}
+              {schemes.find(x => x.key === scheme)?.creates_debt && (
+                <p className="text-[11px] text-amber-400 mt-1">This order will be billed to the facility.</p>
+              )}
+            </div>
             <div className="w-full sm:w-52">
               <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Requested by *</label>
               <input value={name} onChange={e => setName(e.target.value)} placeholder="Full name"
@@ -214,7 +240,7 @@ export function RequestWarehouse() {
             </div>
             <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes (optional)"
               className="flex-1 min-w-[220px] bg-white/5 border border-white/15 rounded-lg px-3 py-2.5 text-sm text-gray-100 placeholder:text-gray-600 focus:outline-none focus:border-blue-500" />
-            <button onClick={submit} disabled={busy || !lines.length || !name.trim() || !validNgPhone(phone)}
+            <button onClick={submit} disabled={busy || !lines.length || !scheme || !name.trim() || !validNgPhone(phone)}
               className="bg-blue-500 hover:bg-blue-400 disabled:opacity-40 text-white text-sm font-semibold rounded-lg px-5 py-2.5">
               {busy ? 'Sending…' : `Send request${lines.length ? ' · ' + naira(grandTotal) : ''}`}
             </button>
@@ -222,7 +248,7 @@ export function RequestWarehouse() {
           {phone && !validNgPhone(phone) && (
             <p className="text-xs text-red-400">Enter a valid Nigerian phone number — 11 digits starting with 0 (e.g. 08031234567).</p>
           )}
-          {lines.length > 0 && (!name.trim() || !phone.trim()) && (
+          {lines.length > 0 && (!scheme || !name.trim() || !phone.trim()) && (
             <p className="text-xs text-gray-500">
               A requester name and contact phone are required — the warehouse uses them to confirm anything unclear on the order.
             </p>
@@ -255,8 +281,15 @@ export function RequestWarehouse() {
         ) : (
           <div className="space-y-2">
             {shownRequests.map(r => (
-              <div key={r.id} className="bg-gray-900 border border-white/10 rounded-lg px-4 py-3 flex flex-wrap items-center gap-3">
+              <div key={r.id} className="bg-gray-900 border border-white/10 rounded-lg px-4 py-3 flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-3">
                 <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_STYLE[r.status] || 'bg-white/10 text-gray-300'}`}>{r.status}</span>
+                {/* The fund actually issued against once dispatched, else the one asked for. */}
+                {/* A border, not just a tint: every bg-white/* is remapped to solid white
+                    in light mode, so a tint-only chip would dissolve into the card. */}
+                <span className="text-xs px-2 py-0.5 rounded border border-white/10 bg-white/8 text-gray-300">
+                  {schemeLabel(r.scheme)}
+                </span>
                 <span className="text-sm text-gray-200">{r.line_count} item{r.line_count === 1 ? '' : 's'} · {r.total_quantity} unit{r.total_quantity === 1 ? '' : 's'}</span>
                 <span className="text-sm text-gray-400">{naira(r.total_amount)}</span>
                 <span className="text-xs text-gray-600">{new Date(r.requested_at).toLocaleDateString()}</span>
@@ -268,6 +301,8 @@ export function RequestWarehouse() {
                   {r.status === 'dispatched' && canManage && (
                     <button onClick={() => act(r.id, api.warehouseRequests.receive)} className="text-xs px-2.5 py-1 rounded bg-green-500/15 hover:bg-green-500/25 text-green-400">Confirm receipt</button>)}
                 </div>
+                </div>
+
               </div>
             ))}
           </div>

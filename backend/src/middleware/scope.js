@@ -244,6 +244,14 @@ export async function enforceFacilityRead(req, res, facilityId, table) {
 // Guard a write that targets a single facility_id.
 export async function enforceFacilityWrite(req, res, facilityId, table) {
   const s = req.scope
+  // Admin tiers are read-only in Essential Commodities. Checked ahead of
+  // isWriteAdmin because state_admin DOES hold cross-facility write on stock /
+  // transfers / amc_settings for HIV, and without this it would carry into
+  // Essential too. Facility logins are untouched — isEssentialOversight is false
+  // for them, so they still write their own facility's rows.
+  if (isEssentialOversight(s)) {
+    return forbid(res, 'Essential Commodities is oversight-only for admin accounts'), false
+  }
   if (isWriteAdmin(s, table)) {
     const allowed = await narrowedAdminFacilityIds(req)
     if (allowed === null || allowed.includes(facilityId)) return true
@@ -310,18 +318,31 @@ async function callerModules(req) {
 // and returns false (caller should `return`).
 export async function enforceModuleAccess(req, res) {
   const s = req.scope
-  const mods = await callerModules(req)
-  if (mods === null) return true // admin tiers see every module
-  if (!mods.includes(s.module)) return forbid(res, 'Not enrolled in this module'), false
-  // Essential Commodities is a pharmacy-section module — lab accounts can't open it.
-  if (s.module === 'essential' && s.section !== 'pharmacy') {
-    return forbid(res, 'Essential Commodities is available to pharmacy only'), false
-  }
-  // …and only a login explicitly granted it, so existing pharmacy logins stay HIV-only.
+  // The per-login Essential grant is checked BEFORE the admin bypass below, so it
+  // applies to EVERY caller. Previously the bypass returned early for admin tiers,
+  // which meant any state/LGA/cluster admin could reach Essential endpoints without
+  // ever being granted the module — the grant only ever constrained facility logins.
+  // Admin oversight of Essential is now opt-in per login, exactly like a facility's.
   if (s.module === 'essential' && !s.essentialAccess) {
     return forbid(res, 'This login is not enabled for Essential Commodities'), false
   }
+  const mods = await callerModules(req)
+  if (mods === null) return true // admin tiers oversee every module they're granted
+  if (!mods.includes(s.module)) return forbid(res, 'Not enrolled in this module'), false
+  // Essential Commodities is a pharmacy-section module — lab accounts can't open it.
+  // Facility-only on purpose: an admin's `section` is null meaning "sees both", which
+  // is not a lab account, and testing it here would lock every admin out.
+  if (s.module === 'essential' && s.section !== 'pharmacy') {
+    return forbid(res, 'Essential Commodities is available to pharmacy only'), false
+  }
   return true
+}
+
+// Essential Commodities is OVERSIGHT-ONLY for every admin tier: admins watch it,
+// facilities run it. HIV is unaffected — a state_admin still writes there per
+// WRITE_ADMIN_LEVELS. Kept as one predicate so the write guards can't drift apart.
+export function isEssentialOversight(scope) {
+  return scope?.module === 'essential' && isAdminScope(scope)
 }
 
 // Guard a single-commodity read/write against the caller's section. Skips (allows)

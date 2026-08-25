@@ -179,8 +179,16 @@ export const api = {
   modules:     { list: () => get('/modules') },
 
   // Essential-commodity priced requests to the central warehouse.
+  schemes: { list: () => get('/schemes') },
+
   warehouseRequests: {
     list:    (params)     => get('/warehouse-requests', params),
+    // params: { group_by: facility|lga|state|commodity|status|month, from, to, status }
+    spend:   (params)     => get('/warehouse-requests/spend', params),
+    // What facilities owe the central store. Read from the WMS, which owns the money.
+    balances: (params)    => get('/warehouse-requests/balances', params),
+    // The orders behind a facility's balance — includes direct dispatches EnVo never saw.
+    balanceOrders: (facilityId) => get(`/warehouse-requests/balances/${facilityId}/orders`),
     get:     (id)         => get(`/warehouse-requests/${id}`),
     create:  (body)       => post('/warehouse-requests', body),   // { items:[{commodity_id, quantity}], requestedBy, requesterPhone, notes }
     cancel:  (id)         => patch(`/warehouse-requests/${id}/cancel`),

@@ -21,7 +21,13 @@ export class ModuleService {
       const essentialOk = (k) => k !== 'essential' || (scope.section === 'pharmacy' && scope.essentialAccess === true)
       enrolled = new Set(all.map(m => m.key).filter(k => set.has(k) && essentialOk(k)))
     } else {
-      enrolled = new Set(all.map(m => m.key)) // admin tiers see every module
+      // Admin tiers oversee every module — but Essential still requires the explicit
+      // per-login grant, matching enforceModuleAccess. Without this an ungranted admin
+      // was shown a card it would be 403'd out of the moment it opened anything.
+      // There is no facility_modules row to consult for an admin: they aren't attached
+      // to a facility, so the grant on the login is the whole test.
+      enrolled = new Set(all.map(m => m.key)
+        .filter(k => k !== 'essential' || scope.essentialAccess === true))
     }
     return all.map(m => ({ ...m, enrolled: enrolled.has(m.key) }))
   }

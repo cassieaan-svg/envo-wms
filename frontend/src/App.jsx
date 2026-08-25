@@ -52,6 +52,8 @@ import { CRRF as LabCRRF   } from './pages/lab/CRRF'
 
 // Essential Commodities module
 import { RequestWarehouse } from './pages/essential/RequestWarehouse'
+import { WarehouseRequestsAdmin } from './pages/essential/WarehouseRequestsAdmin'
+import { Spend } from './pages/essential/Spend'
 
 const dsdMap = {
   dispense: DsdDispense, transfers: DsdTransfers, stock: DsdStock, log: SiteActivityLog,
@@ -66,6 +68,10 @@ const pharmMap = {
   alerts: PharmAlerts, monitoring: PharmMonitoring,
   // Essential Commodities: facility-raised priced request to the central warehouse.
   'warehouse-requests': RequestWarehouse,
+  // The facility's own purchases, in naira. Same component the admins get — the
+  // endpoint pins a facility login to its own rows and hides the cross-facility
+  // groupings.
+  spend: Spend,
   // Reachable by the section-routed oversight viewers (cluster/lga/state) whose
   // AdminNav links here; AllFacilities adapts per-commodity, so one component fits
   // both sections. Facility users never link to it.
@@ -84,6 +90,11 @@ const labMap = {
 const adminMap = {
   dashboard: PharmDashboard, stock: PharmStock, 'all-facilities': AllFacilities,
   alerts: PharmAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
+  // Essential-only, and read-only: the admin's view of what facilities have asked
+  // the warehouse for. The facility page of the same name is a request FORM, so the
+  // two must not share a component — hence a distinct key resolved per role.
+  'warehouse-requests': WarehouseRequestsAdmin,
+  spend: Spend,
 }
 
 // ── Which pages still read the global stock array ────────────────────────────

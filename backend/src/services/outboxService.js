@@ -21,7 +21,7 @@ const SENDERS = {
   // request cancelled before it ever reached the warehouse.  payload: { envoRequestId }
   wms_submit: async ({ envoRequestId }) => {
     const { rows: r } = await query(
-      `select r.id, r.status, r.requested_by, r.requester_phone, r.notes,
+      `select r.id, r.status, r.requested_by, r.requester_phone, r.notes, r.scheme,
               f.code as facility_code, f.name as facility_name
          from warehouse_requests r join facilities f on f.id = r.facility_id
         where r.id = $1`, [envoRequestId])
@@ -35,6 +35,9 @@ const SENDERS = {
       body: JSON.stringify({
         envoRequestId: req.id, envoFacilityId: req.facility_code, facilityName: req.facility_name,
         requestedBy: req.requested_by, requesterPhone: req.requester_phone, notes: req.notes,
+        // The fund the facility raised this against. Binding — the warehouse fills from
+        // it or rejects the request.
+        scheme: req.scheme,
         items: items.map(i => ({ wmsCommodityId: i.wms_commodity_id, quantity: i.qty_requested })),
       }),
     })

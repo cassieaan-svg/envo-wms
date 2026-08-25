@@ -13,6 +13,19 @@ const ACCENT = {
 export function ModulePicker() {
   const modules   = useAppStore(s => s.availableModules)
   const setModule = useAppStore(s => s.setModule)
+  const store     = useAppStore()
+
+  // This screen sits between sign-in and the app, and it is a dead end for anyone whose
+  // account can't open any module shown — without this they'd have to clear the tab to
+  // get back to the login form. Mirrors the sidebar's sign-out exactly (close realtime,
+  // drop the token, reset the store) so the two can't drift.
+  async function signOut() {
+    const { auth } = await import('../lib/api')
+    const { closeRealtime } = await import('../lib/realtime')
+    closeRealtime()
+    auth.signOut()
+    store.reset()
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-6">
@@ -47,6 +60,19 @@ export function ModulePicker() {
               </button>
             )
           })}
+        </div>
+
+        <div className="mt-8 text-center">
+          <button
+            type="button"
+            onClick={signOut}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-gray-400 text-xs hover:bg-white/8 hover:text-gray-200 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h3M10 11l3-3-3-3M13 8H6"/>
+            </svg>
+            Sign out
+          </button>
         </div>
       </div>
     </div>

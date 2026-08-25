@@ -23,17 +23,24 @@ const icons = {
 
 export function AdminNav() {
   const store = useAppStore()
+  const module = useAppStore(s => s.module)
+  // Essential Commodities is oversight-only for admins, and its supply line is the
+  // central warehouse rather than facility-to-facility redistribution. So the nav
+  // swaps in the warehouse-request view and drops the items that are HIV-specific:
+  // CRRF is a national HIV reporting form, and the Alerts badge counts pending
+  // redistribution requests, which this module does not have.
+  const isEssential = module === 'essential'
   const [pendingRequestCount, setPendingRequestCount] = useState(0)
 
   useEffect(() => {
     loadPendingCount()
     return subscribeRealtime(['stock_transfer_log'], loadPendingCount)
-  }, [])
+  }, [module])
 
   async function loadPendingCount() {
     // Overall admin doesn't handle redistribution requests, so its Alerts badge
-    // shouldn't count them.
-    if (store.isOverallAdmin()) { setPendingRequestCount(0); return }
+    // shouldn't count them. Neither does Essential, which has no redistribution.
+    if (isEssential || store.isOverallAdmin()) { setPendingRequestCount(0); return }
     // Pending requests still awaiting a source assignment (sending_facility_id
     // null). The server scopes the list to the admin's jurisdiction.
     try {
@@ -44,6 +51,9 @@ export function AdminNav() {
 
   return (
     <>
+      {isEssential && <NavSection>Supply</NavSection>}
+      {isEssential && <NavItem page="warehouse-requests" icon={icons.transfers}>Warehouse Requests</NavItem>}
+
       <NavSection>Overview</NavSection>
       <NavItem page="dashboard"      icon={icons.dashboard}>Dashboard</NavItem>
       <NavItem page="stock"          icon={icons.stock}>Stock Levels</NavItem>
@@ -53,7 +63,8 @@ export function AdminNav() {
       <NavSection>Reports</NavSection>
       <NavItem page="log"          icon={icons.log}>Activity Log</NavItem>
       <NavItem page="monitoring"   icon={icons.monitoring}>Monitoring</NavItem>
-      <NavItem page="crrf"         icon={icons.crrf}>CRRF</NavItem>
+      {isEssential && <NavItem page="spend" icon={icons.report}>Spend</NavItem>}
+      {!isEssential && <NavItem page="crrf" icon={icons.crrf}>CRRF</NavItem>}
     </>
   )
 }

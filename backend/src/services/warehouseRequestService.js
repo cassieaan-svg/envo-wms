@@ -19,13 +19,30 @@ export class WarehouseRequestService {
   // recomputes the authoritative total when it accepts. Unpriced commodities are rejected
   // — they can't carry a line total. Writes the request 'pending', then tries to submit
   // to the WMS; a submit failure leaves it 'pending' (resubmittable), it is not lost.
-  static async create({ facilityId, items, requestedBy, requesterPhone, notes }) {
+  static async create({ facilityId, items, requestedBy, requesterPhone, notes, requestedScheme }) {
     if (!Array.isArray(items) || items.length === 0) {
       const e = new Error('At least one line item is required'); e.status = 400; throw e
     }
     if (!requestedBy || !requestedBy.trim()) {
       const e = new Error('A requester name is required'); e.status = 400; throw e
     }
+    // The fund the facility is drawing on. Validated against the schemes table rather
+    // than a hardcoded list, so adding a fund needs no code change here. Required: which
+    // fund an order is raised against decides who pays for it, and defaulting that
+    // silently to the DRF would hand a facility a debt it never chose.
+    //
+    // This choice is BINDING. The warehouse fills the request from this fund or rejects
+    // it; it cannot move the order onto another fund, because that would change who
+    // pays without the facility ever agreeing to it.
+    const scheme = String(requestedScheme || '').trim()
+    if (!scheme) {
+      const e = new Error('Choose the scheme you are requesting from'); e.status = 400; throw e
+    }
+    const { rows: sch } = await query('select key from schemes where key = $1 and active', [scheme])
+    if (!sch.length) {
+      const e = new Error(`Unknown scheme: ${scheme}`); e.status = 400; throw e
+    }
+
     const phone = normalizeNgPhone(requesterPhone)
     if (!phone) {
       const e = new Error('A valid Nigerian phone number (11 digits, e.g. 08031234567) is required'); e.status = 400; throw e
@@ -64,9 +81,9 @@ export class WarehouseRequestService {
     const request = await withTransaction(async exec => {
       const { rows } = await exec(
         `insert into warehouse_requests
-           (facility_id, status, total_amount, requested_by, requester_phone, notes)
-         values ($1, 'pending', $2, $3, $4, $5) returning *`,
-        [facilityId, total, requestedBy.trim(), phone, notes ?? null]
+           (facility_id, status, total_amount, requested_by, requester_phone, notes, scheme)
+         values ($1, 'pending', $2, $3, $4, $5, $6) returning *`,
+        [facilityId, total, requestedBy.trim(), phone, notes ?? null, scheme]
       )
       const req = rows[0]
       for (const l of lines) {
@@ -127,6 +144,7 @@ export class WarehouseRequestService {
     const where = conds.length ? `where ${conds.join(' and ')}` : ''
     const { rows } = await query(
       `select r.id, r.facility_id, f.name as facility_name, r.status, r.total_amount,
+              r.scheme,
               r.wms_request_id, r.requested_by, r.requested_at, r.dispatched_at, r.received_at,
               count(i.id)::int as line_count, coalesce(sum(i.qty_requested),0)::int as total_quantity
          from warehouse_requests r

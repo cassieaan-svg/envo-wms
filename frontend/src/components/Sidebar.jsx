@@ -12,11 +12,19 @@ export function Sidebar() {
   const [showChangePw, setShowChangePw] = useState(false)
   const sectionIcon = '⬡'
   const sectionName = store.commoditySection === 'lab' ? 'Laboratory' : store.commoditySection === 'pharmacy' ? 'Pharmacy' : 'EnVo'
-  // Active module label. Only the store manager can go back to the module picker,
-  // and only when there's more than one module to switch between.
+  // Active module label, and whether to offer a way back to the module picker.
+  //
+  // The test is simply "has more than one module to switch between" — deliberately NOT
+  // a role test. This used to also require isStoreManager(), which was true when the
+  // dual-module store managers were the only accounts holding two modules. Admin tiers
+  // now hold Essential as well, and were left stranded in whichever module they picked
+  // at login with no way back short of signing out.
+  //
+  // The count carries the whole rule on its own: anyone enrolled in one module sees no
+  // control, because there is nothing to switch to.
   const moduleLabel = store.availableModules.find(m => m.key === store.module)?.label
     || (store.module === 'essential' ? 'Essential Commodities' : 'HIV Commodities')
-  const canSwitchModule = store.isStoreManager() && store.availableModules.filter(m => m.enrolled).length > 1
+  const canSwitchModule = store.availableModules.filter(m => m.enrolled).length > 1
 
   const NavComponent = store.isAdmin()
     ? AdminNav

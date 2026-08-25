@@ -44,7 +44,10 @@ export function AuthScreen({ onSuccess }) {
           <div className="text-center mb-7">
             <div className="w-14 h-14 bg-green-500 rounded-2xl inline-flex items-center justify-center text-2xl mb-3">⬡</div>
             <h1 className="text-xl font-semibold text-gray-100">EnVo</h1>
-            <p className="text-sm text-gray-500 mt-1">HIV Programme Logistics Management</p>
+            {/* Not "HIV Programme…": EnVo now hosts more than one commodity programme,
+                and the sign-in screen comes BEFORE the module is chosen — so naming one
+                programme here is wrong for anyone signing in to work in the other. */}
+            <p className="text-sm text-gray-500 mt-1">Logistics Management</p>
           </div>
 
           <form onSubmit={handleSignIn} className="space-y-4">
