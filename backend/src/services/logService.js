@@ -87,6 +87,35 @@ async function assertBinCovers(exec, soh, qty, commodityId, binLabel) {
 // self-describing, so they stay optional.
 export const REASONS_REQUIRING_NOTES = new Set(['Physical count correction', 'Lost / Stolen', 'Other'])
 
+// Reasons that must name the exact lot being adjusted. Without one, a Decrease
+// debits the ledger FEFO (soonest expiry first) — a sensible default for a generic
+// removal, but wrong for a write-off: "Expired" is a claim about ONE specific lot,
+// and letting the ledger choose can retire a different batch than the one
+// discarded. The stock total stays correct either way; the lot the expiry reports
+// are built from does not.
+//
+// NAMING A LOT IS NOT THE SAME AS HAVING A BATCH NUMBER. Some stock was received
+// without one and appears in the picker as "(no batch)". Demanding a non-empty
+// string would make that stock impossible to write off once it expires. So:
+//   'ABC123'    → that batch
+//   ''          → the unbatched lot, valid only where the bin actually holds one
+//   null/absent → no lot named at all; refused for these reasons
+export const REASONS_REQUIRING_BATCH = new Set(['Expired'])
+
+// Does this bin hold stock with no batch number? Decides whether an empty batch is
+// a real "(no batch)" selection or a caller that simply left the field out.
+async function binHasUnbatchedLot(exec, bin) {
+  const { rows } = await exec(
+    `select 1 from stock_lot
+      where facility_id=$1 and commodity_id=$2 and location_type=$3
+        and coalesce(site_name,'') = coalesce($4,'')
+        and quantity > 0 and coalesce(trim(batch_number),'') = ''
+      limit 1`,
+    [bin.facility_id, bin.commodity_id, bin.location_type, bin.site_name || null]
+  )
+  return rows.length > 0
+}
+
 // The bin an edited log row accounts for. dispense_log has no bin column — the
 // site is carried in the notes tag, exactly as the bin card reads it, and an
 // untagged dispense belongs to the dispensary. Adjustments carry the bin explicitly
@@ -259,6 +288,23 @@ export class LogService {
 
     const old = await this.getLogRow(type, id)
     if (!old) return null
+
+    // An edit can change `reason` and `batch_number` independently, so the rule is
+    // checked against the row as it WILL be. Rows recorded before the rule that
+    // already had no batch are grandfathered when the edit touches neither field —
+    // blocking those would strand old records behind a batch number nobody wrote down.
+    if (type === 'adjustment') {
+      const nextReason = fields.reason !== undefined ? fields.reason : old.reason
+      const nextBatch  = fields.batch_number !== undefined ? fields.batch_number : old.batch_number
+      const blank = v => !String(v || '').trim()
+      const alreadyBlank = blank(old.batch_number) && REASONS_REQUIRING_BATCH.has(old.reason)
+      const untouched = fields.reason === undefined && fields.batch_number === undefined
+      if (REASONS_REQUIRING_BATCH.has(nextReason) && blank(nextBatch) && !(alreadyBlank && untouched)) {
+        const e = new Error(`Batch number is required for "${nextReason}" — name the exact lot being written off, so the right one leaves the expiry report.`)
+        e.status = 400
+        throw e
+      }
+    }
 
     const sets = []
     const params = [id]
@@ -745,7 +791,11 @@ export class LogService {
       }
       // Enforce (phase 3): a chosen batch must cover qty and not be expired; with
       // no batch, FEFO skips expired lots. Blocks (409) if eligible stock is short.
-      await LotService.debit(exec, bin, qty, { batch: batch_number || null, enforce: true })
+      // '' and null mean different things and must not be flattened: '' is the lot
+      // that HAS no batch number (LotService.debit matches it exactly), null is "no
+      // lot named, draw FEFO". `x || null` collapses the first into the second, which
+      // silently debits a batched lot when the operator picked "(no batch)".
+      await LotService.debit(exec, bin, qty, { batch: batch_number == null ? null : batch_number, enforce: true })
 
       return dispenseLog
     })
@@ -984,6 +1034,20 @@ export class LogService {
       e.status = 400
       throw e
     }
+    if (REASONS_REQUIRING_BATCH.has(reason) && !String(batch_number || '').trim()) {
+      // An empty STRING is the "(no batch)" pick — valid, but only if such a lot is
+      // really on the shelf. Null/absent means no lot was named at all.
+      const picked = batch_number === ''
+      const bin = { facility_id, commodity_id, location_type, site_name: site_name || null }
+      const ok = picked && await binHasUnbatchedLot(query, bin)
+      if (!ok) {
+        const e = new Error(picked
+          ? `No unbatched stock is on hand in ${binLabel(bin)}, so "(no batch)" is not a valid pick for "${reason}" — choose the batch being written off.`
+          : `Batch number is required for "${reason}" — name the exact lot being written off, so the right one leaves the expiry report. Pick "(no batch)" if that lot has none recorded.`)
+        e.status = 400
+        throw e
+      }
+    }
 
     const qty = parseInt(quantity)
 
@@ -1024,7 +1088,9 @@ export class LogService {
       if (adjustment_type === 'Increase') {
         await LotService.credit(exec, bin, { batch: batch_number || null, expiry: expiry_date || null, qty, section: resolvedSection })
       } else {
-        await LotService.debit(exec, bin, qty, { batch: batch_number || null })
+        // Same as the dispense path: preserve '' so the unbatched lot is the one
+        // debited, rather than FEFO retiring whichever batch expires soonest.
+        await LotService.debit(exec, bin, qty, { batch: batch_number == null ? null : batch_number })
       }
 
       return adjustmentLog

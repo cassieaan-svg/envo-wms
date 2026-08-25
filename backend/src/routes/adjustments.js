@@ -183,8 +183,16 @@ router.patch('/:id', async (req, res) => {
     const updated = await LogService.updateLog('adjustment', req.params.id, req.body || {})
     res.json({ success: true, data: updated, timestamp: new Date().toISOString() })
   } catch (err) {
-    console.error('Error updating adjustment record:', err)
-    res.status(500).json({ success: false, error: err.message, code: 'UPDATE_ERROR' })
+    // A rejected edit (missing batch on an "Expired" write-off, or a change the bin
+    // cannot cover) is the caller's to fix, not a server fault. Pass the status the
+    // service chose through, and keep 500 for what is genuinely unexpected.
+    const status = err.status === 400 || err.status === 409 ? err.status : 500
+    if (status === 500) console.error('Error updating adjustment record:', err)
+    res.status(status).json({
+      success: false,
+      error: err.message,
+      code: status === 400 ? 'VALIDATION_ERROR' : status === 409 ? 'INSUFFICIENT_STOCK' : 'UPDATE_ERROR',
+    })
   }
 })
 
