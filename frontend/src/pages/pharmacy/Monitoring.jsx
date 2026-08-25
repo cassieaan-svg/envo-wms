@@ -899,12 +899,24 @@ export function Monitoring() {
     return true
   })
 
-  const TabBtn=({id,label})=>(
-    <button onClick={()=>switchTab(id)}
-      style={{flex:1,padding:'10px',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:'13px',fontWeight:tab===id?500:400,background:tab===id?'rgba(255,255,255,0.08)':'transparent',color:tab===id?'#e6edf3':'#8b949e',borderRight:id!=='expiry'?'1px solid rgba(255,255,255,0.08)':'none'}}>
-      {label}
-    </button>
-  )
+  // Tailwind classes, not inline styles. Light mode is implemented in index.css by
+  // remapping class names (html:not(.dark) [class*="text-gray-100"] { ... }), which
+  // inline styles bypass entirely — so the active tab was #e6edf3 text on
+  // rgba(255,255,255,.08): near-white on white, and effectively invisible in light
+  // mode. The active state is now carried by an accent underline and text weight
+  // rather than a background tint, because every bg-white/* is remapped to solid
+  // white in light mode and would vanish against the bar it sits in.
+  const TabBtn=({id,label})=>{
+    const on = tab===id
+    return (
+      <button type="button" role="tab" aria-selected={on} onClick={()=>switchTab(id)}
+        className={`flex-1 px-4 py-2.5 text-sm border-b-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50 ${
+          on ? 'border-green-500 text-gray-100 font-medium bg-white/5'
+             : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-white/2'}`}>
+        {label}
+      </button>
+    )
+  }
 
   return (
     <div>
@@ -913,7 +925,7 @@ export function Monitoring() {
         <p className="text-sm text-gray-500 mt-1">Real-time programme performance</p>
       </div>
 
-      <div style={{display:'flex',gap:0,marginBottom:'1.25rem',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'8px',overflow:'hidden',background:'rgba(255,255,255,0.03)'}}>
+      <div role="tablist" className="flex mb-5 rounded-lg overflow-hidden border border-white/10 bg-white/3">
         <TabBtn id="consumption" label="Consumption"/>
         <TabBtn id="intake"      label="Intake"/>
         <TabBtn id="adjustments" label="Adjustments"/>
@@ -1098,8 +1110,12 @@ export function Monitoring() {
                             return seg
                           })}
                         </g>
-                        <text x="50" y="48" textAnchor="middle" style={{fill:'#e6edf3',fontSize:'12px',fontWeight:600}}>{centerVal.toLocaleString()}</text>
-                        <text x="50" y="57" textAnchor="middle" style={{fill:'#8b949e',fontSize:'6px',letterSpacing:'0.3px'}}>{centerSub}</text>
+                        {/* fill-current + a text-* class, not a hardcoded fill: light mode is
+                            applied by remapping `color` on class names, which an SVG fill
+                            attribute bypasses. Hardcoded #e6edf3 left this number
+                            near-white on a white card. */}
+                        <text x="50" y="48" textAnchor="middle" className="fill-current text-gray-100" style={{fontSize:'12px',fontWeight:600}}>{centerVal.toLocaleString()}</text>
+                        <text x="50" y="57" textAnchor="middle" className="fill-current text-gray-500" style={{fontSize:'6px',letterSpacing:'0.3px'}}>{centerSub}</text>
                       </svg>
                       <div className="flex-1 min-w-[180px] space-y-1">
                         {catEntries.map(([cat,qty],i)=>{
