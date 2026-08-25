@@ -54,6 +54,25 @@ function SohCell({ r, kind, qty, onDrill }) {
   )
 }
 
+// A store / dispensary cell. The number becomes a button opening the batches held
+// in THAT bin — the commodity-name link opens the same modal across all bins, which
+// cannot say where a batch physically sits.
+function BinCell({ r, bin, qty, colour, onBatchDrill }) {
+  const drillable = typeof onBatchDrill === 'function' && qty > 0
+  if (!drillable) {
+    return <td className={`px-4 py-3 font-mono text-sm ${qty === 0 ? 'text-gray-500' : colour}`}>{fmtStockQty(qty, r.commodities)}</td>
+  }
+  return (
+    <td className="px-4 py-3 font-mono text-sm">
+      <button type="button" onClick={() => onBatchDrill(r, bin)}
+        title={`View ${bin} stock by batch`}
+        className={`${colour} underline decoration-dotted underline-offset-2 hover:decoration-solid hover:text-white focus:outline-none`}>
+        {fmtStockQty(qty, r.commodities)}
+      </button>
+    </td>
+  )
+}
+
 function renderCell(r, key, onDrill, onBatchDrill) {
   switch (key) {
     case 'name':       return (
@@ -65,8 +84,8 @@ function renderCell(r, key, onDrill, onBatchDrill) {
       </td>
     )
     case 'unit':       return <td key={key} className="px-4 py-3 text-xs text-gray-400">{r.commodities?.unit||'—'}</td>
-    case 'store':      return <td key={key} className={`px-4 py-3 font-mono text-sm ${r.storeQty===0?'text-gray-500':'text-gray-200'}`}>{fmtStockQty(r.storeQty, r.commodities)}</td>
-    case 'dispensary': return <td key={key} className={`px-4 py-3 font-mono text-sm ${r.dispensaryQty===0?'text-gray-500':'text-blue-300'}`}>{fmtStockQty(r.dispensaryQty, r.commodities)}</td>
+    case 'store':      return <BinCell key={key} r={r} bin="store" qty={r.storeQty||0} colour="text-gray-200" onBatchDrill={onBatchDrill} />
+    case 'dispensary': return <BinCell key={key} r={r} bin="dispensary" qty={r.dispensaryQty||0} colour="text-blue-300" onBatchDrill={onBatchDrill} />
     case 'sdp':        return <SohCell key={key} r={r} kind="sdp" qty={r.sdpQty||0} onDrill={onDrill} />
     case 'dsd':        return <SohCell key={key} r={r} kind="dsd" qty={r.dsdQty||0} onDrill={onDrill} />
     case 'total':      return <td key={key} className="px-4 py-3 font-mono text-sm text-gray-200">{fmtStockQty(r.quantity, r.commodities)}</td>

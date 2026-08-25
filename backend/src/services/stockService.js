@@ -281,12 +281,17 @@ export class StockService {
    * already-expired lots are always included. `includeUnknown` keeps null-expiry
    * lots (they can't be bucketed, but the modal lists them).
    */
-  static async getScopedLots({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null, expiryTo = null, includeUnknown = false } = {}) {
+  static async getScopedLots({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null, expiryTo = null, includeUnknown = false, locationType = null, siteName = null } = {}) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
     const conds = ['l.quantity > 0']
     if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`l.facility_id = any($${params.length})`) }
+    // Narrow to ONE bin. Without this the ledger merges store, dispensary and every
+    // site into a single per-batch figure, which cannot answer "what does the
+    // dispensary actually hold". site_name is only meaningful for dsd/sdp.
+    if (locationType) { params.push(locationType); conds.push(`l.location_type = $${params.length}`) }
+    if (siteName) { params.push(siteName); conds.push(`coalesce(l.site_name,'') = $${params.length}`) }
     if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`l.commodity_id = any($${params.length})`) }
     { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
     // Expiry window: keep everything already expired (< today) OR expiring on/before
@@ -298,16 +303,20 @@ export class StockService {
       conds.push('l.expiry_date is not null')
     }
 
+    // location_type / site_name are grouped and returned ONLY when a bin was named.
+    // Adding them unconditionally would split every existing caller's rows per bin
+    // and change the numbers on the expiry dashboards, which read this same query.
+    const binCols = locationType ? ', l.location_type, l.site_name' : ''
     const sql = `
       select l.facility_id, l.commodity_id, l.batch_number, l.expiry_date,
-             sum(l.quantity)::int as quantity,
+             sum(l.quantity)::int as quantity${binCols},
              ${COMMODITY_OBJ}, ${FACILITY_OBJ}
       from stock_lot l
       left join facilities f on f.id = l.facility_id
       left join commodities c on c.id = l.commodity_id
       where ${conds.join(' and ')}
       group by l.facility_id, l.commodity_id, l.batch_number, l.expiry_date,
-               c.id, f.id
+               c.id, f.id${binCols}
       order by l.expiry_date asc nulls last`
     const { rows } = await query(sql, params)
     return rows

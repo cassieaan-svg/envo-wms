@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { BatchSelect } from '../../components/ui/BatchSelect'
+import { BatchSplitPicker } from '../../components/ui/BatchSplitPicker'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf, explicitReviewerName } from '../../utils/helpers'
@@ -190,6 +191,8 @@ export function Transfers() {
   const [dsdReceivedBy, setDsdReceivedBy] = useState('')
   const [dsdApproving, setDsdApproving] = useState(false)
   const [dsdApproveBatch, setDsdApproveBatch] = useState(null)
+  // Multi-batch issue for store→DSD/SDP, same shape as dispatchLots.
+  const [dsdApproveSplit, setDsdApproveSplit] = useState([])  // { id, selected, qty }
   const [dsdApproveLots, setDsdApproveLots] = useState([])   // raw on-hand lots for the expiry warning
   const [dsdHistory, setDsdHistory] = useState([])
   const [loadingD, setLoadingD] = useState(false)
@@ -662,7 +665,7 @@ export function Transfers() {
     // Server moves the qty store→dispensary and marks accepted (transactional).
     try {
       await api.transfers.approveInternal(record.id, { approved_by: intApprovedBy, quantity: parsedQty,
-        batch_number: intApproveBatch?.batch_number || undefined })
+        batch_number: intApproveBatch ? (intApproveBatch.batch_number || '') : undefined })
     } catch (err) {
       toast(err.status === 409 ? err.message : 'Error approving: ' + err.message, 'red'); setIntApproving(false); return
     }
@@ -770,7 +773,10 @@ export function Transfers() {
     // so the store manager doesn't need a separate receive step (credits sdp_stock).
     try {
       await api.transfers.approveDsd(record.id, { approved_by: dsdApprovedBy, quantity: parsedQty,
-        batch_number: dsdApproveBatch?.batch_number || undefined })
+        ...(((dsdApproveSplit||[]).filter(l => l.selected && parseInt(l.qty) > 0)).length
+          ? { lots: dsdApproveSplit.filter(l => l.selected && parseInt(l.qty) > 0)
+                .map(l => ({ batch: l.selected.batch_number || '', quantity: parseInt(l.qty) })) }
+          : { batch_number: dsdApproveBatch ? (dsdApproveBatch.batch_number || '') : undefined }) })
     } catch (updateErr) {
       toast(updateErr.status === 409 ? updateErr.message : 'Error updating transfer: ' + updateErr.message, 'red'); setDsdApproving(false); return
     }
@@ -778,13 +784,13 @@ export function Transfers() {
       await api.transfers.receive(record.id, { received_by: dsdApprovedBy })
     } catch (recvErr) {
       toast('Approved & dispatched, but auto-receipt failed: ' + recvErr.message + ' — confirm receipt manually.', 'amber')
-      setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null)
+      setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null); setDsdApproveSplit([])
       await loadStock(); loadDsdPendingApprovals(); loadDsdHistory(); loadAllIntHistory(); setDsdApproving(false); return
     }
     const comm = allCommodities.find(c => c.id === record.commodity_id)
     const sdpPointName = record.notes?.match(/\[(?:SDP|DSD): ([^\]]+)\]/)?.[1] || record.receiving_facility_name || ''
     toast(`${parsedQty} ${comm?.unit || 'units'} approved & received at ${sdpPointName || 'service delivery point'}`, 'green')
-    setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null)
+    setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null); setDsdApproveSplit([])
     await loadStock(); loadDsdPendingApprovals(); loadDsdHistory(); loadAllIntHistory(); setDsdApproving(false)
   }
 
@@ -1549,31 +1555,31 @@ export function Transfers() {
                           </div>
                           <div className="flex gap-2 flex-wrap">
                             {dsdApprovingId === r.id ? (
-                              <div className="flex flex-col gap-2">
-                                <div className="flex items-end gap-2 flex-wrap">
+                              <div className="flex flex-col gap-3 w-full sm:min-w-[34rem]">
+                                <div className="grid gap-3 sm:grid-cols-[7rem_13rem_minmax(0,1fr)] items-start">
                                   <div>
-                                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Stock issued *</label>
+                                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Stock issued *</label>
                                     <input type="number" min="1" value={dsdIssuedQty} onChange={e => setDsdIssuedQty(e.target.value)} placeholder={r.qty_requested || r.quantity}
-                                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500 w-28" />
+                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                                   </div>
                                   <div>
-                                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Approved by store manager *</label>
+                                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Approved by *</label>
                                     <input type="text" value={dsdApprovedBy} onChange={e => setDsdApprovedBy(e.target.value)} placeholder="Store manager name"
-                                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500 w-52" />
+                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
                                   </div>
-                                  <div className="min-w-[15rem]">
-                                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Batch issued</label>
-                                    <BatchSelect key={r.id} facilityId={fid} commodityId={r.commodity_id} locationType="store"
-                                      value={dsdApproveBatch?.key} onSelect={setDsdApproveBatch} onLotsLoaded={setDsdApproveLots} />
-                                  </div>
+                                  <BatchSplitPicker selectKey={r.id} facilityId={fid} commodityId={r.commodity_id}
+                                    issuedQty={dsdIssuedQty}
+                                    single={dsdApproveBatch} onSingle={setDsdApproveBatch}
+                                    split={dsdApproveSplit} onSplit={setDsdApproveSplit}
+                                    onLotsLoaded={setDsdApproveLots} />
                                 </div>
                                 <div className="flex gap-2">
                                   <Button variant="success" size="sm" onClick={() => approveDsd(r, dsdIssuedQty)} disabled={dsdApproving}>{dsdApproving ? 'Approving…' : 'Approve & dispatch'}</Button>
-                                  <Button variant="ghost" size="sm" onClick={() => { setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null) }}>Cancel</Button>
+                                  <Button variant="ghost" size="sm" onClick={() => { setDsdApprovingId(null); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null); setDsdApproveSplit([]) }}>Cancel</Button>
                                 </div>
                               </div>
                             ) : (
-                              <><Button variant="success" size="sm" onClick={() => { setDsdApprovingId(r.id); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null) }}>Approve</Button>
+                              <><Button variant="success" size="sm" onClick={() => { setDsdApprovingId(r.id); setDsdApprovedBy(''); setDsdIssuedQty(''); setDsdApproveBatch(null); setDsdApproveSplit([]) }}>Approve</Button>
                                 <Button variant="danger" size="sm" onClick={() => rejectDsd(r.id)}>Reject</Button></>
                             )}
                           </div>

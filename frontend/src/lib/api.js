@@ -74,6 +74,9 @@ function qs(params = {}) {
 }
 
 const get   = (path, params) => request(`/api${path}${qs(params)}`, { auth: true }).then(r => r?.data)
+// Same call, whole envelope. Paged endpoints return `total` alongside `data`, and
+// unwrapping to `data` would throw the page count away.
+const getRaw = (path, params) => request(`/api${path}${qs(params)}`, { auth: true })
 const post  = (path, body)   => request(`/api${path}`, { method: 'POST',   auth: true, body }).then(r => r?.data)
 const put   = (path, body)   => request(`/api${path}`, { method: 'PUT',    auth: true, body }).then(r => r?.data)
 const patch = (path, body)   => request(`/api${path}`, { method: 'PATCH',  auth: true, body }).then(r => r?.data)
@@ -122,6 +125,8 @@ export const api = {
     // params: facility_id, direction, status (csv), section, date_field, from, to,
     // notes_includes, limit, offset.
     list:   (params) => get('/transfers', params),
+    // Accepted transfers in/out, aggregated (Monitoring's transfer figures).
+    summary: (params) => get('/transfers/summary', params),
     get:    (id)     => get(`/transfers/${id}`),
     create: (lines)  => post('/transfers', lines),          // array | {lines:[]} | single row
     update: (id, body) => patch(`/transfers/${id}`, body),  // metadata-only
@@ -142,8 +147,12 @@ export const api = {
   // `update` edits an existing log row's metadata (EditModal); stock is reconciled
   // separately by the caller via the stock methods.
   dispense:    { record: (body) => post('/dispense', body),    history: (params) => get('/dispense', params),    summary: (params) => get('/dispense/summary', params),    update: (id, body) => patch(`/dispense/${id}`, body) },
-  intake:      { record: (body) => post('/intake', body),      history: (params) => get('/intake', params),      update: (id, body) => patch(`/intake/${id}`, body) },
-  adjustments: { record: (body) => post('/adjustments', body), history: (params) => get('/adjustments', params), update: (id, body) => patch(`/adjustments/${id}`, body) },
+  intake:      { record: (body) => post('/intake', body),      history: (params) => get('/intake', params), summary: (params) => get('/intake/summary', params),      update: (id, body) => patch(`/intake/${id}`, body) },
+  adjustments: { record: (body) => post('/adjustments', body), history: (params) => get('/adjustments', params), summary: (params) => get('/adjustments/summary', params), update: (id, body) => patch(`/adjustments/${id}`, body) },
+
+  // One time-ordered feed across all four logs, paged server-side. Returns the raw
+  // envelope ({ data, total, ... }) because the caller needs `total` to page.
+  activity: (params) => getRaw('/activity', params),
 
   reports: {
     daily:        (params) => get('/reports/daily', params),

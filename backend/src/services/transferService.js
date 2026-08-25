@@ -13,6 +13,20 @@ const COMM4_OBJ = `
 
 const DATE_FIELDS = new Set(['initiated_at', 'resolved_at'])
 
+// Groupings GET /api/transfers/summary will serve — an explicit allowlist, not a
+// generic GROUP BY, matching DISPENSE_GROUP_BY's rationale. The keys are a subset
+// of the dispense/intake ones so Monitoring can request the same shape from all
+// three aggregates; 'facility' here means the RECEIVING facility.
+const TRANSFER_IN_GROUP_BY = {
+  'commodity':          { dimensions: ['commodity'] },
+  'facility':           { dimensions: ['facility'] },
+  'day':                { dimensions: ['day'], needsDay: true },
+  'commodity,facility': { dimensions: ['commodity', 'facility'] },
+  'commodity,day':      { dimensions: ['commodity', 'day'], needsDay: true },
+}
+
+export const TRANSFER_IN_GROUP_BY_KEYS = Object.keys(TRANSFER_IN_GROUP_BY)
+
 // Columns written by createTransfers (transfer_type is NOT a column — type is
 // re-derived from notes; see _deriveTransferType).
 const INSERT_COLS = [
@@ -33,12 +47,13 @@ export class TransferService {
    *   section: pharmacy | lab.
    *   dateField ('initiated_at' | 'resolved_at') + from / to (YYYY-MM-DD).
    *   notesIncludes: substring the notes must contain (e.g. '[Internal:').
+   *   commodityIds: restrict to these commodities.
    *   limit / offset.
    */
   static async listTransfers(options = {}) {
     const {
       facilityId, facilityIds, direction = 'any', status, statuses, section, categories, commodityNames,
-      dateField, from, to, notesIncludes, limit = 1000, offset = 0
+      dateField, from, to, notesIncludes, commodityIds, limit = 1000, offset = 0
     } = options
 
     const params = []
@@ -51,11 +66,21 @@ export class TransferService {
       else if (direction === 'outgoing') conds.push(`t.sending_facility_id = ${p}`)
       else conds.push(`(t.receiving_facility_id = ${p} or t.sending_facility_id = ${p})`)
     } else if (facilityIds && facilityIds.length) {
-      // Scope an admin list to a set of facilities (state/lga narrowing): the
-      // transfer must have either endpoint inside the allowed set.
+      // Scope an admin list to a set of facilities (state/lga narrowing). `direction`
+      // is honoured here as well as on the single-facility path: without it an
+      // "incoming" list would also return the scope's OUTGOING transfers, which for
+      // an admin whose scope contains both endpoints is every internal movement
+      // twice over. Default stays 'any', so existing callers are unaffected.
       params.push(facilityIds)
       const p = `$${params.length}`
-      conds.push(`(t.sending_facility_id = any(${p}) or t.receiving_facility_id = any(${p}))`)
+      if (direction === 'incoming') conds.push(`t.receiving_facility_id = any(${p})`)
+      else if (direction === 'outgoing') conds.push(`t.sending_facility_id = any(${p})`)
+      else conds.push(`(t.sending_facility_id = any(${p}) or t.receiving_facility_id = any(${p}))`)
+    }
+
+    if (Array.isArray(commodityIds) && commodityIds.length) {
+      params.push(commodityIds)
+      conds.push(`t.commodity_id = any($${params.length})`)
     }
 
     const statusList = statuses || (status ? [status] : null)
@@ -85,6 +110,109 @@ export class TransferService {
     if (conds.length) sql += ` where ${conds.join(' and ')}`
     params.push(limit, offset)
     sql += ` order by t.${orderField} desc nulls last limit $${params.length - 1} offset $${params.length}`
+
+    const { rows } = await query(sql, params)
+    return rows
+  }
+
+  /**
+   * Transfers RECEIVED by a facility set, aggregated — the inter-facility half of
+   * "what came in", sitting beside the supplier-receipt half (LogService
+   * .getIntakeSummary) on Monitoring. Deliberately returns the SAME row shape
+   * ({ commodity_id | facility_id | day, qty, txn }) and accepts the same group_by
+   * keys, so the dashboard treats the two identically.
+   *
+   * Three modelling decisions, all of which make this count STOCK THAT ACTUALLY
+   * LANDED rather than movements that were merely started:
+   *   status = 'accepted'  — the only status where the receiving facility's stock
+   *     was credited. pending / in_transit / dispatched haven't arrived, cancelled
+   *     and disputed never did. Counting them would inflate a facility's intake
+   *     with stock it cannot put on a shelf.
+   *   qty = coalesce(qty_accepted, quantity) — a partial acceptance credits only
+   *     what was accepted; qty_accepted is null on older rows, which predate the
+   *     column and accepted in full.
+   *   date = resolved_at — when it landed, not when it was raised (initiated_at).
+   *     A transfer raised in June and accepted in July is July's intake, which is
+   *     the month whose stock it changed.
+   *
+   * `direction` picks which side is scoped and reported:
+   *   'in'  (default) — stock ARRIVING; scoped and grouped on receiving_facility_id
+   *   'out'           — stock LEAVING;  scoped and grouped on sending_facility_id
+   * Both exclude internal self-transfers, which are neither an arrival nor a
+   * departure. `facilityIds` / `facilityId` scope whichever side `direction` names.
+   */
+  static async getTransferSummary(facilityId, options = {}) {
+    const {
+      from, to, facilityIds, commodityIds, categories, commodityNames, section,
+      groupBy = 'commodity', commodityId = null, category = null, tz = null,
+      direction = 'in',
+    } = options
+    if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+    const spec = TRANSFER_IN_GROUP_BY[groupBy]
+    if (!spec) throw new Error(`Unsupported group_by: ${groupBy}`)
+    if (direction !== 'in' && direction !== 'out') throw new Error(`Unsupported direction: ${direction}`)
+
+    // The facility column this direction is about. Everything else — scoping, the
+    // 'facility' group dimension — keys off it, so 'out' is the exact mirror of 'in'.
+    const facCol = direction === 'out' ? 't.sending_facility_id' : 't.receiving_facility_id'
+
+    const params = []
+    const conds = [
+      `t.status = 'accepted'`,
+      't.resolved_at is not null',
+      // Count only movements BETWEEN TWO REAL, DIFFERENT FACILITIES. Two kinds of
+      // internal distribution otherwise slip in, and neither is stock entering or
+      // leaving a facility — in both, it stays put and only changes sub-location:
+      //
+      //   '[Internal: Store→Dispensary]' — sending_facility_id = receiving_facility_id.
+      //       ~922 rows / 111,579 units in a 30-day window.
+      //   '[SDP: Main Lab]' — receiving_facility_id IS NULL, with the sub-unit's name
+      //       in receiving_facility_name. A service delivery point is a site inside
+      //       the sending facility, not a facility row. 1,891 rows / 129,615 units.
+      //
+      // Requiring both ids to be present AND different excludes both, and makes the
+      // two directions symmetric: every counted row has a real sender and a real
+      // receiver, so an unscoped total is identical whichever way it is measured.
+      't.sending_facility_id is not null',
+      't.receiving_facility_id is not null',
+      't.sending_facility_id <> t.receiving_facility_id',
+    ]
+
+    if (facilityId) { params.push(facilityId); conds.push(`${facCol} = $${params.length}`) }
+    else if (Array.isArray(facilityIds)) { params.push(facilityIds); conds.push(`${facCol} = any($${params.length})`) }
+
+    if (Array.isArray(commodityIds) && commodityIds.length) { params.push(commodityIds); conds.push(`t.commodity_id = any($${params.length})`) }
+    { const secCond = sectionFilterSql('c', categories, commodityNames, params); if (secCond) conds.push(secCond) }
+    if (section) { params.push(section); conds.push(`t.section = $${params.length}`) }
+    if (from) { params.push(from); conds.push(`t.resolved_at >= $${params.length}`) }
+    if (to)   { params.push(to);   conds.push(`t.resolved_at <= $${params.length}`) }
+
+    // Drill-in narrowing: ONE commodity, or ONE category. Narrows only — the
+    // section condition above still applies independently.
+    if (commodityId) { params.push(commodityId); conds.push(`t.commodity_id = $${params.length}`) }
+    if (category) { params.push(category); conds.push(`c.category = $${params.length}`) }
+
+    let dayExpr = null
+    if (spec.needsDay) {
+      if (tz) { params.push(tz); dayExpr = `to_char(t.resolved_at at time zone $${params.length}, 'YYYY-MM-DD')` }
+      else dayExpr = `to_char(t.resolved_at at time zone 'UTC', 'YYYY-MM-DD')`
+    }
+
+    // The 'facility' dimension is whichever side `direction` reports, aliased to
+    // facility_id so the row is drop-in compatible with the intake/dispense aggregates.
+    const col = d => (d === 'facility' ? facCol : `t.${d}_id`)
+    const selects = spec.dimensions.map(d => (d === 'day' ? `${dayExpr} as day` : `${col(d)} as ${d}_id`))
+    const groupCols = spec.dimensions.map(d => (d === 'day' ? 'day' : col(d)))
+
+    let sql = `
+      select ${selects.join(', ')},
+             sum(coalesce(t.qty_accepted, t.quantity))::int as qty,
+             count(*)::int as txn
+      from stock_transfer_log t
+      left join commodities c on c.id = t.commodity_id
+      where ${conds.join(' and ')}
+      group by ${groupCols.join(', ')}`
 
     const { rows } = await query(sql, params)
     return rows
@@ -563,7 +691,7 @@ export class TransferService {
    * `quantity` from store to dispensary stock and mark accepted.
    */
   static async approveInternal(transferId, data) {
-    const { approved_by, quantity, batch_number } = data
+    const { approved_by, quantity, batch_number, lots } = data
     const transfer = await this.getTransferById(transferId)
     if (!transfer) return null
     const fid = transfer.sending_facility_id
@@ -580,10 +708,26 @@ export class TransferService {
       // inherits the store's batch/expiry. The store manager may name the batch
       // they are issuing; without one it draws FEFO. Enforced either way, so an
       // expired or short batch is refused rather than silently spilling.
-      await LotService.move(exec,
-        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
-        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'dispensary', site_name: null },
-        qty, { batch: batch_number || null, enforce: true }, transfer.section)
+      const from = { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }
+      const to   = { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'dispensary', site_name: null }
+      const picks = Array.isArray(lots) ? lots.filter(l => parseInt(l?.quantity) > 0) : null
+      if (picks && picks.length) {
+        // Multi-batch issue, mirroring dispatch: the store manager splits the issue
+        // across several lots. Totals must match exactly, or the dispensary would be
+        // credited a different amount than the store was debited.
+        const total = picks.reduce((s2, l) => s2 + parseInt(l.quantity), 0)
+        if (total !== qty) {
+          const e = new Error(`Supplied batches total ${total} but ${qty} is being issued`); e.status = 400; throw e
+        }
+        for (const l of picks) {
+          // batch '' names the UNBATCHED lot; null/undefined would mean FEFO.
+          await LotService.move(exec, from, to, parseInt(l.quantity),
+            { batch: l.batch == null ? null : l.batch, enforce: true }, transfer.section)
+        }
+      } else {
+        await LotService.move(exec, from, to, qty,
+          { batch: batch_number == null ? null : batch_number, enforce: true }, transfer.section)
+      }
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'accepted', quantity = $2, resolved_at = now(), resolved_by = $3
@@ -599,7 +743,7 @@ export class TransferService {
    * dispatched (the site user confirms receipt later via receive()).
    */
   static async approveDsd(transferId, data) {
-    const { approved_by, quantity, batch_number } = data
+    const { approved_by, quantity, batch_number, lots } = data
     const transfer = await this.getTransferById(transferId)
     if (!transfer) return null
     const fid = transfer.sending_facility_id
@@ -614,9 +758,27 @@ export class TransferService {
       // Draw the lots from the store now; the site is credited with them when the
       // site user confirms receipt (receive()). The store manager may name the
       // batch being issued; without one it draws FEFO. Enforced either way.
-      const { drawn } = await LotService.debit(exec,
-        { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
-        qty, { batch: batch_number || null, enforce: true })
+      const from = { facility_id: fid, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null }
+      const picks = Array.isArray(lots) ? lots.filter(l => parseInt(l?.quantity) > 0) : null
+      let drawn = []
+      if (picks && picks.length) {
+        // Multi-batch issue, mirroring dispatch and approveInternal. Totals must
+        // match exactly or the site would be credited a different amount on receipt
+        // than the store was debited here.
+        const total = picks.reduce((s2, l) => s2 + parseInt(l.quantity), 0)
+        if (total !== qty) {
+          const e = new Error(`Supplied batches total ${total} but ${qty} is being issued`); e.status = 400; throw e
+        }
+        for (const l of picks) {
+          // batch '' names the UNBATCHED lot; null/undefined would mean FEFO.
+          const res = await LotService.debit(exec, from, parseInt(l.quantity),
+            { batch: l.batch == null ? null : l.batch, enforce: true })
+          drawn = drawn.concat(res.drawn)
+        }
+      } else {
+        ;({ drawn } = await LotService.debit(exec, from, qty,
+          { batch: batch_number == null ? null : batch_number, enforce: true }))
+      }
 
       const { rows } = await exec(
         `update stock_transfer_log set status = 'dispatched', quantity = $2, resolved_by = $3, lots = $4

@@ -1,4 +1,7 @@
-export function MetricGrid({ children }) {
+// `cols` is the wide-screen column count (default 4). Pass 3, 5 or 6 for a different bar —
+// the default is left alone so every existing four-card bar is unchanged rather
+// than gaining a hole at the end.
+export function MetricGrid({ children, cols = 4 }) {
   // Pinned to the top while the content below scrolls. The window is the scroll
   // container, so sticky tracks the viewport. Offset clears the fixed mobile
   // top bar (h-13 ≈ 52px); on desktop there's no top bar so it sits at top-0.
@@ -7,7 +10,13 @@ export function MetricGrid({ children }) {
   // the dark page background and is remapped to white in light mode by index.css.
   return (
     <div className="sticky top-13 lg:top-0 z-20 -mx-6 px-6 pt-3 lg:pt-6 pb-3 mb-6 bg-gray-950">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">{children}</div>
+      {/* Full class strings, not `sm:grid-cols-${cols}` — Tailwind scans source
+          text, so an interpolated name is never emitted into the stylesheet. */}
+      <div className={`grid grid-cols-2 gap-3 ${
+        cols === 3 ? 'sm:grid-cols-3' :
+        cols === 6 ? 'sm:grid-cols-3 xl:grid-cols-6' :
+        cols === 5 ? 'sm:grid-cols-3 xl:grid-cols-5' :
+                     'sm:grid-cols-4'}`}>{children}</div>
     </div>
   )
 }

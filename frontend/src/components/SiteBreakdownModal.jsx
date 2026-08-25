@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { fmtStockQty } from '../utils/helpers'
 import { LoadingState, EmptyState } from './ui/Loading'
+import { BatchBreakdownModal } from './BatchBreakdownModal'
 
 // Drill-down modal: given an aggregated DSD/SDP SOH cell, fetch and show the
 // per-site stock levels that make up that total for a single commodity.
@@ -13,6 +14,7 @@ import { LoadingState, EmptyState } from './ui/Loading'
 export function SiteBreakdownModal({ commodity, kind, fid, scopeIds = null, onClose }) {
   const [rows, setRows]       = useState([])
   const [loading, setLoading] = useState(true)
+  const [batchSite, setBatchSite] = useState(null)  // site row drilled into for batches
 
   const table     = kind === 'sdp' ? 'sdp_stock' : 'dsd_stock'
   const siteCol   = kind === 'sdp' ? 'sdp_name'  : 'dsd_site_name'
@@ -42,7 +44,9 @@ export function SiteBreakdownModal({ commodity, kind, fid, scopeIds = null, onCl
       }
       if (!active) return
       const cleaned = raw
-        .map(r => ({ facility: r.facilities?.name || '—', site: r[siteCol] || '—', quantity: r.quantity || 0 }))
+        // facility_id is carried so the batch drill can pin to the right facility
+        // when an admin is viewing sites across several of them.
+        .map(r => ({ facility_id: r.facility_id, facility: r.facilities?.name || '—', site: r[siteCol] || '—', quantity: r.quantity || 0 }))
         .filter(r => r.quantity > 0)
         .sort((a, b) => b.quantity - a.quantity)
       setRows(cleaned)
@@ -53,6 +57,7 @@ export function SiteBreakdownModal({ commodity, kind, fid, scopeIds = null, onCl
   }, [table, siteCol, fid, scopeIds, commodity.commodity_id])
 
   const total = rows.reduce((s, r) => s + r.quantity, 0)
+
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -76,7 +81,17 @@ export function SiteBreakdownModal({ commodity, kind, fid, scopeIds = null, onCl
               {rows.map((r, i) => (
                 <tr key={i} className="border-b border-white/5">
                   {showFacility && <td className="px-3 py-2.5 text-gray-300">{r.facility}</td>}
-                  <td className="px-3 py-2.5 text-gray-100">{r.site}</td>
+                  <td className="px-3 py-2.5">
+                    {/* Site name opens that site's batches. Kept as a second step
+                        rather than replacing this view: "which site holds it" and
+                        "which batch is it" are different questions, and the site
+                        totals here come from dsd_stock/sdp_stock, not the lot ledger. */}
+                    <button type="button" onClick={() => setBatchSite(r)}
+                      title={`View batches at ${r.site}`}
+                      className="text-gray-100 hover:text-white underline decoration-dotted underline-offset-2 hover:decoration-solid text-left">
+                      {r.site}<span className="text-gray-600 ml-1">›</span>
+                    </button>
+                  </td>
                   <td className="px-3 py-2.5 text-right font-mono text-gray-200">{fmtStockQty(r.quantity, commodity.commodities)}</td>
                 </tr>
               ))}
@@ -90,6 +105,16 @@ export function SiteBreakdownModal({ commodity, kind, fid, scopeIds = null, onCl
           </table>
         )}
       </div>
+
+      {batchSite && (
+        <BatchBreakdownModal
+          commodity={commodity}
+          fid={batchSite.facility_id || fid}
+          locationType={kind}
+          siteName={batchSite.site}
+          onClose={() => setBatchSite(null)}
+        />
+      )}
     </div>
   )
 }

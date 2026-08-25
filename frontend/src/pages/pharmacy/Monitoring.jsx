@@ -9,6 +9,7 @@ import { fmtDate } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DailyTrendChart } from '../../components/DailyTrendChart'
 import { exportCsv, exportPdf } from '../../utils/download'
+import { Pagination, pageSlice } from '../../components/ui/Pagination'
 
 // ── Reporting period ──────────────────────────────────────────────────────────
 // "Last N days" means N COMPLETE calendar days ending yesterday — local dates,
@@ -24,6 +25,24 @@ const localDay = d => {
   const t = new Date(d)
   return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
 }
+// Batch / expiry for a transfer, which carries them in its `lots` jsonb column
+// ([{qty, batch, expiry}, …]) rather than in flat columns like an intake row does.
+// A transfer can draw on several lots: the batches are listed, and the EARLIEST
+// expiry is shown since that is the one that governs when the stock must move.
+// Older rows predate the column and legitimately have no lot data.
+function lotFields(lots) {
+  const arr = Array.isArray(lots) ? lots : []
+  if (!arr.length) return { batch: '—', expiry: null }
+  const batches = [...new Set(arr.map(l => l && l.batch).filter(Boolean))]
+  const expiries = arr.map(l => l && l.expiry).filter(Boolean).sort()
+  return {
+    batch: batches.length ? batches.join(', ') : '—',
+    expiry: expiries[0] || null,
+    // More lots than shown → the table marks it rather than silently truncating.
+    extraExpiries: Math.max(0, new Set(expiries).size - 1),
+  }
+}
+
 // [start, end] covering the N complete days before today, inclusive. `end` is the
 // last instant of yesterday because the API's `to` bound is inclusive (<=).
 function periodWindow(days, from = new Date()) {
@@ -49,12 +68,60 @@ export function Monitoring() {
   const [catDetail, setCatDetail]   = useState(null)  // { cat, byFac[] }
   const [metricDrill, setMetricDrill] = useState(null)  // 'units' | 'transactions' | 'commodities'
   const [lgaDrill, setLgaDrill] = useState(null)  // LGA name drilled into within a by-LGA breakdown
+  // The geography breakdown is a secondary question — the scope picker above already
+  // filters the whole page by state/LGA/facility. Closed by default so it costs
+  // nothing when it isn't wanted.
+  const [lgaOpen, setLgaOpen] = useState(false)
+  // Leaf of the geography path: LGA → facility → the commodities that facility
+  // moved. Fetched on click, since it is one small aggregate per facility rather
+  // than something worth loading for every facility up front.
+  const [facDrill, setFacDrill] = useState(null)   // { id, name, lga }
+  const [facComms, setFacComms] = useState(null)   // { id, kind, rows[], raw[] }
+  const [partyDrill, setPartyDrill] = useState(null)  // counterparty name drilled into
+  // Commodity drilled into from the "Consumed today" view → facilities that
+  // consumed it today.
+  const [todayComm, setTodayComm] = useState(null)     // { id, name, unit }
+  const [todayCommFacs, setTodayCommFacs] = useState(null)  // { id, rows[] }
   const [catHover, setCatHover] = useState(null)  // category hovered in the donut (highlight only)
   const [consFilter, setConsFilter] = useState('consuming')  // commodity drill facility filter: 'consuming' | 'none' | 'all'
   const [expUrgency, setExpUrgency] = useState('all')  // expiry urgency filter: 'all'|'expired'|'critical'|'warning'|'monitor'
   const [expPeriod, setExpPeriod] = useState(180)   // expiry look-ahead window (days)
+  // Table page numbers. Held here, not beside the tables: those render inside
+  // conditionals and IIFEs, where a hook would be a conditional hook.
+  const [commPage, setCommPage]     = useState(0)   // Top commodities
+  const [intakeCommPage, setIntakeCommPage] = useState(0)  // Intake: commodity movement
+  const [deliveryPage, setDeliveryPage]     = useState(0)  // Intake: intake rows
+  const [adjCommPage, setAdjCommPage]       = useState(0)  // Adjustments: commodities
+  const [adjRowPage, setAdjRowPage]         = useState(0)  // Adjustments: row detail
   const [catFilter, setCatFilter] = useState('')    // commodity category narrowing (consumption)
   const [expCat, setExpCat]       = useState('')    // commodity category narrowing (expiry)
+  // Expiry, structured like the other tabs: commodities first, then the facilities
+  // holding that commodity's expiring stock. The flat batch list it replaced put
+  // every batch across every facility on one unpaged page.
+  const [expCommDrill, setExpCommDrill] = useState(null)  // { id, name, unit }
+  const [expCommPage, setExpCommPage]   = useState(0)
+  const [expBatchPage, setExpBatchPage] = useState(0)
+  // ── Intake tab ──────────────────────────────────────────────────────────────
+  const [intakeData, setIntakeData]     = useState(null)  // aggregates for the Intake tab
+  const [intakeDrill, setIntakeDrill]   = useState(null)  // { id, name, unit } commodity drilled into
+  const [intakeRcpts, setIntakeRcpts]   = useState(null)  // { id, rows[] } receipt-level detail
+  const [intakeMetric, setIntakeMetric] = useState(null)  // 'intake' | 'transferin' | 'commodities'
+  // When one card stands for both directions, this says which one the geography
+  // panel and chart are currently describing.
+  const [redistDir, setRedistDir] = useState('in')   // 'in' | 'out'
+  const [intakeSource, setIntakeSource] = useState('all') // receipt drill filter: 'all'|'intake'|'transfer'|'out'
+  // ── Adjustments tab ─────────────────────────────────────────────────────────
+  const [adjData, setAdjData]     = useState(null)  // aggregates for the Adjustments tab
+  const [adjDrill, setAdjDrill]   = useState(null)  // { id, name, unit } commodity drilled into
+  const [adjRows, setAdjRows]     = useState(null)  // { id, rows[] } row-level detail
+  const [adjMetric, setAdjMetric] = useState(null)  // 'positive' | 'negative' | 'commodities'
+  const [adjType, setAdjType]     = useState('all')
+  // Reason → facilities → commodities. Each level is one small aggregate fetched
+  // on click; the reason list itself is already loaded with the tab.
+  const [reasonDrill, setReasonDrill] = useState(null)   // { reason, type }
+  const [reasonFacs, setReasonFacs]   = useState(null)   // { key, rows[] }
+  const [reasonFac, setReasonFac]     = useState(null)   // { id, name, lga }
+  const [reasonComms, setReasonComms] = useState(null)   // { key, rows[] } // row filter: 'all'|'Increase'|'Decrease'
 
   // Honour the admin's facility/LGA/state scope (same resolution as stock loads)
   // so Consumption and Expiry stay within the viewer's jurisdiction.
@@ -67,17 +134,42 @@ export function Monitoring() {
   // Facility metadata for LGA / facility drill-downs
   const facMeta = {}
   store.allFacilities.forEach(f => { facMeta[f.id] = { name: f.name, lga: f.lga || '—' } })
+  // Commodity metadata comes from the catalogue already in the store, rather than
+  // being repeated on every aggregate row. Hoisted to component scope because the
+  // breakdown components render from it too, not just the loader.
+  const commMeta = {}
+  store.allCommodities.forEach(c => { commMeta[c.id] = c })
   const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
 
   useEffect(() => { loadConsumption() }, [scopeKey, period, catFilter])
+  useEffect(() => { if (tab==='intake') loadIntake() }, [tab, scopeKey, period, catFilter])
+  useEffect(() => { if (tab==='adjustments') loadAdjustments() }, [tab, scopeKey, period, catFilter])
+  useEffect(() => { if (adjDrill?.id) loadAdjustmentRows(adjDrill.id); else setAdjRows(null) }, [adjDrill?.id])
+  useEffect(() => {
+    if (reasonDrill) loadReasonFacilities(reasonDrill.reason, reasonDrill.type); else setReasonFacs(null)
+  }, [reasonDrill?.reason, reasonDrill?.type])
+  useEffect(() => {
+    if (reasonDrill && reasonFac) loadReasonCommodities(reasonDrill.reason, reasonDrill.type, reasonFac.id)
+    else setReasonComms(null)
+  }, [reasonFac?.id])
   useEffect(() => { if (tab==='expiry') loadExpiry() }, [tab, expPeriod, expCat, scopeKey])
+  // Receipt-level rows load on click; clearing the commodity drill drops them.
+  useEffect(() => { if (intakeDrill?.id) loadIntakeReceipts(intakeDrill.id); else setIntakeRcpts(null) }, [intakeDrill?.id])
   // Drill-ins load their own breakdown; clearing the drill drops it again.
   useEffect(() => { if (commDrill?.id) loadCommodityDrill(commDrill.id); else setCommDetail(null) }, [commDrill?.id])
   useEffect(() => { if (catDrill) loadCategoryDrill(catDrill); else setCatDetail(null) }, [catDrill])
+  useEffect(() => { setPartyDrill(null) }, [facDrill?.id, facDrill?.leaf])
+  useEffect(() => {
+    if (!facDrill?.id) { setFacComms(null); return }
+    if (facDrill.leaf === 'in' || facDrill.leaf === 'out') loadFacilityCounterparties(facDrill.id, facDrill.leaf)
+    else loadFacilityCommodities(facDrill.id, facDrill.leaf || 'dispense')
+  }, [facDrill?.id, facDrill?.leaf])
+  useEffect(() => { if (todayComm?.id) loadTodayCommodityFacilities(todayComm.id); else setTodayCommFacs(null) }, [todayComm?.id])
 
   async function loadConsumption() {
     setLoading(true)
-    setCatDrill(null); setCommDrill(null); setMetricDrill(null); setLgaDrill(null)
+    setCatDrill(null); setCommDrill(null); setMetricDrill(null); setLgaDrill(null); setCommPage(0)
+    setFacDrill(null); setTodayComm(null)
     const { start, end } = periodWindow(period)
     const scopeParams = store.getAdminScopeParams()
 
@@ -106,18 +198,16 @@ export function Monitoring() {
     // the period tomorrow, once the day is complete.
     const todayStart = new Date(); todayStart.setHours(0,0,0,0)
 
-    const [commRows, facRows, dayRows, todayRows] = await Promise.all([
+    const [commRows, facRows, dayRows, todayRows, todayFacRows] = await Promise.all([
       api.dispense.summary({ ...inPeriod, group_by: 'commodity' }).catch(() => []),
       api.dispense.summary({ ...inPeriod, group_by: 'facility' }).catch(() => []),
       api.dispense.summary({ ...inPeriod, group_by: 'day', tz }).catch(() => []),
       api.dispense.summary({ ...base, group_by: 'commodity',
         from: todayStart.toISOString(), to: new Date().toISOString() }).catch(() => []),
+      // Today by facility too, so the "Consumed today" card can drill like the rest.
+      api.dispense.summary({ ...base, group_by: 'facility',
+        from: todayStart.toISOString(), to: new Date().toISOString() }).catch(() => []),
     ])
-
-    // Commodity metadata comes from the catalogue already in the store, rather
-    // than being repeated on every one of thousands of log rows.
-    const commMeta = {}
-    store.allCommodities.forEach(c => { commMeta[c.id] = c })
 
     const byCat={}, daily={}
     // One bucket per day of the SAME window the totals use, keyed by local date.
@@ -134,6 +224,10 @@ export function Monitoring() {
     const todayByComm={}
     ;(todayRows||[]).forEach(r=>{ todayByComm[r.commodity_id]=r.qty })
 
+    // NOTE: intake and transfer-in are deliberately NOT loaded here. They have
+    // their own tab, which owns every "what arrived" figure; duplicating them on
+    // Consumption made this load fetch four extra aggregates for cards that said
+    // the same thing one tab over.
     setCons({
       byComm, byCat, daily,
       byFac: facRows||[],
@@ -141,8 +235,362 @@ export function Monitoring() {
       txnTotal: (commRows||[]).reduce((s,r)=>s+r.txn,0),
       todayTotal: (todayRows||[]).reduce((s,r)=>s+r.qty,0),
       todayByComm,
+      todayByCommRows: todayRows||[],
+      todayByFac: todayFacRows||[],
     })
     setLoading(false)
+  }
+
+  // ── Intake tab ──────────────────────────────────────────────────────────────
+  // Everything that ARRIVED in the window, from both sources: supplier receipts
+  // (intake_log) and accepted inter-facility transfers. Same period, scope and
+  // category narrowing as the Consumption tab, so the two tabs are comparable.
+  async function loadIntake() {
+    setLoading(true)
+    setIntakeDrill(null); setIntakeMetric(null); setLgaDrill(null); setIntakeCommPage(0)
+    const { start, end } = periodWindow(period)
+    const q = {
+      ...store.getAdminScopeParams(),
+      section: commoditySection || undefined,
+      category: catFilter || undefined,
+      from: start.toISOString(), to: end.toISOString(),
+    }
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+
+    const [iComm, iFac, iDay, tComm, tFac, tDay, oComm, oFac, oDay] = await Promise.all([
+      api.intake.summary({ ...q, group_by: 'commodity' }).catch(() => []),
+      api.intake.summary({ ...q, group_by: 'facility' }).catch(() => []),
+      api.intake.summary({ ...q, group_by: 'day', tz }).catch(() => []),
+      api.transfers.summary({ ...q, group_by: 'commodity' }).catch(() => []),
+      api.transfers.summary({ ...q, group_by: 'facility' }).catch(() => []),
+      api.transfers.summary({ ...q, group_by: 'day', tz }).catch(() => []),
+      // Stock LEAVING the scope. Not part of any "received" figure — it sits beside
+      // them so the tab shows movement in both directions.
+      api.transfers.summary({ ...q, group_by: 'commodity', direction: 'out' }).catch(() => []),
+      api.transfers.summary({ ...q, group_by: 'facility', direction: 'out' }).catch(() => []),
+      api.transfers.summary({ ...q, group_by: 'day', direction: 'out', tz }).catch(() => []),
+    ])
+
+    // One bucket per day of the window, keyed by local date — same seeding as the
+    // consumption chart so the two trends line up date-for-date. Two series: the
+    // section-level chart plots INTAKE COUNTS (a units total across commodities
+    // would be adding bottles to tablets), while the commodity drill plots units,
+    // which are homogeneous once a single commodity is selected.
+    const seed = () => { const o={}; for (let i=0;i<period;i++){ const d=new Date(start); d.setDate(d.getDate()+i); o[localDay(d)]=0 } return o }
+    // One series PER MOVEMENT. A single combined line could not answer "how much
+    // came in as intake" — the question the Intake card asks.
+    const daily = seed(), dailyIntake = seed(), dailyIn = seed(), dailyOut = seed()
+    const fill = (rows, target) => (rows||[]).forEach(r=>{ if(target[r.day]!==undefined) target[r.day]+=r.txn })
+    fill(iDay, dailyIntake); fill(tDay, dailyIn); fill(oDay, dailyOut)
+    ;[...(iDay||[]), ...(tDay||[])].forEach(r=>{ if(daily[r.day]!==undefined) daily[r.day]+=r.qty })
+    const dailyCount = seed()
+    Object.keys(dailyCount).forEach(k=>{ dailyCount[k] = dailyIntake[k] + dailyIn[k] })
+
+    // Merge all three movements per commodity, keeping them separately addressable
+    // so the table can show where each commodity's stock came from AND where it
+    // went. `txn` counts INBOUND intake records only — outbound is its own column, and
+    // folding it into an intake count would overstate what arrived.
+    const merged = {}
+    const put = (rows, key, countsAsDelivery) => (rows||[]).forEach(r=>{
+      const m = merged[r.commodity_id] ||= { commodity_id:r.commodity_id, intake:0, transfer:0, out:0,
+                                             txn:0, intakeTxn:0, transferTxn:0, outTxn:0 }
+      m[key] += r.qty
+      if (countsAsDelivery) { m.txn += r.txn; m[key+'Txn'] += r.txn } else m.outTxn += r.txn
+    })
+    put(iComm,'intake',true); put(tComm,'transfer',true); put(oComm,'out',false)
+    const byComm = Object.values(merged)
+      .map(m=>({ ...m, qty:m.intake+m.transfer,
+                 name: commMeta[m.commodity_id]?.name || m.commodity_id,
+                 cat:  commMeta[m.commodity_id]?.category || 'Other',
+                 unit: commMeta[m.commodity_id]?.unit || '' }))
+      .sort((a,b)=>b.qty-a.qty || b.out-a.out)
+
+    setIntakeData({
+      byComm, daily, dailyCount,
+      dailyIntake, dailyIn, dailyOut,
+      intakeByFac: iFac||[], transferByFac: tFac||[],
+      intakeByCommRows: iComm||[], transferByCommRows: tComm||[],
+      outByFac: oFac||[], outByCommRows: oComm||[],
+      outTxn: (oComm||[]).reduce((s,r)=>s+r.txn,0),
+      intakeTxn:     (iComm||[]).reduce((s,r)=>s+r.txn,0),
+      transferTxn:   (tComm||[]).reduce((s,r)=>s+r.txn,0),
+    })
+    setLoading(false)
+  }
+
+  // ── Adjustments tab ─────────────────────────────────────────────────────────
+  // The third movement type: stock changing WITHOUT a physical movement — count
+  // corrections, write-offs, returns. Positive and negative are kept apart at every
+  // level, never netted: a net of zero equally means "nothing happened" and "5,000
+  // added, 5,000 removed", and those are very different facts.
+  async function loadAdjustments() {
+    setLoading(true)
+    setAdjDrill(null); setAdjMetric(null); setLgaDrill(null); setAdjType('all'); setAdjCommPage(0)
+    setReasonDrill(null); setReasonFac(null)
+    const { start, end } = periodWindow(period)
+    const q = {
+      ...store.getAdminScopeParams(),
+      section: commoditySection || undefined,
+      category: catFilter || undefined,
+      from: start.toISOString(), to: end.toISOString(),
+    }
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+
+    // Each aggregate already carries `type`, so one request per shape covers both
+    // directions and they are split client-side — rather than doubling the requests.
+    const [cRows, fRows, dRows, rRows] = await Promise.all([
+      api.adjustments.summary({ ...q, group_by: 'commodity,type' }).catch(() => []),
+      api.adjustments.summary({ ...q, group_by: 'facility,type' }).catch(() => []),
+      api.adjustments.summary({ ...q, group_by: 'day,type', tz }).catch(() => []),
+      api.adjustments.summary({ ...q, group_by: 'reason,type' }).catch(() => []),
+    ])
+
+    const isUp = r => r.type === 'Increase'
+    const seedA = () => { const o={}; for (let i=0;i<period;i++){ const d=new Date(start); d.setDate(d.getDate()+i); o[localDay(d)]=0 } return o }
+    // Split by direction as well as day: a combined line cannot answer "how many
+    // were write-offs", which is what the Negative card asks.
+    const daily = seedA(), dailyUp = seedA(), dailyDown = seedA()
+    ;(dRows||[]).forEach(r=>{
+      if (daily[r.day] === undefined) return
+      daily[r.day] += r.txn
+      ;(isUp(r) ? dailyUp : dailyDown)[r.day] += r.txn
+    })
+
+    // Per commodity, split by direction.
+    const merged = {}
+    ;(cRows||[]).forEach(r=>{
+      const m = merged[r.commodity_id] ||= { commodity_id:r.commodity_id, up:0, down:0, upTxn:0, downTxn:0 }
+      if (isUp(r)) { m.up += r.qty; m.upTxn += r.txn } else { m.down += r.qty; m.downTxn += r.txn }
+    })
+    const byComm = Object.values(merged)
+      .map(m=>({ ...m, txn:m.upTxn+m.downTxn,
+                 name: commMeta[m.commodity_id]?.name || m.commodity_id,
+                 cat:  commMeta[m.commodity_id]?.category || 'Other',
+                 unit: commMeta[m.commodity_id]?.unit || '' }))
+      .sort((a,b)=>b.txn-a.txn)
+
+    // Reasons, kept separate per direction — the same wording means different things
+    // in each ('Physical count correction' splits both ways), so pooling them would
+    // merge two distinct events under one label.
+    const byReason = { Increase: [], Decrease: [] }
+    ;(rRows||[]).forEach(r=>{ (byReason[r.type] ||= []).push({ reason:r.reason, qty:r.qty, txn:r.txn }) })
+    Object.values(byReason).forEach(list => list.sort((a,b)=>b.txn-a.txn))
+
+    setAdjData({
+      byComm, byReason, daily, dailyUp, dailyDown,
+      byFacUp:   (fRows||[]).filter(isUp),
+      byFacDown: (fRows||[]).filter(r=>!isUp(r)),
+      byCommUp:  (cRows||[]).filter(isUp),
+      byCommDown:(cRows||[]).filter(r=>!isUp(r)),
+      upTxn:   (cRows||[]).filter(isUp).reduce((s,r)=>s+r.txn,0),
+      downTxn: (cRows||[]).filter(r=>!isUp(r)).reduce((s,r)=>s+r.txn,0),
+    })
+    setLoading(false)
+  }
+
+  // Which facilities recorded a given reason, and then what they adjusted. Both
+  // narrow on the SAME reason and direction the bar was showing, so each level
+  // totals to the one above it.
+  async function loadReasonFacilities(reason, type) {
+    const { start, end } = periodWindow(period)
+    const win = { from: start.toISOString(), to: end.toISOString(), category: catFilter || undefined }
+    setReasonFacs(null)
+    const rows = await api.adjustments.summary({
+      ...store.getAdminScopeParams(), section: commoditySection || undefined, ...win,
+      group_by: 'facility', adjustment_type: type, reason,
+    }).catch(() => [])
+    setReasonFacs({ key: `${type}|${reason}`, rows: (rows||[]).slice().sort((a,b)=>b.txn-a.txn) })
+  }
+
+  async function loadReasonCommodities(reason, type, facilityId) {
+    const { start, end } = periodWindow(period)
+    const win = { from: start.toISOString(), to: end.toISOString(), category: catFilter || undefined }
+    setReasonComms(null)
+    const rows = await api.adjustments.summary({
+      facility_id: facilityId, section: commoditySection || undefined, ...win,
+      group_by: 'commodity', adjustment_type: type, reason,
+    }).catch(() => [])
+    setReasonComms({ key: `${type}|${reason}|${facilityId}`, rows: (rows||[]).slice().sort((a,b)=>b.txn-a.txn) })
+  }
+
+  // Row-level adjustments for ONE commodity: date, direction, quantity and the
+  // stated reason for each. Fetched on click — row data, not a sum.
+  async function loadAdjustmentRows(commodityId) {
+    setAdjRows(null)
+    const { start, end } = periodWindow(period)
+    const rows = await api.adjustments.history({
+      ...store.getAdminScopeParams(), section: commoditySection || undefined,
+      from: start.toISOString(), to: end.toISOString(),
+      commodity_ids: commodityId, limit: 1000,
+    }).catch(() => [])
+    setAdjRows({ id: commodityId, rows: (rows||[]).slice().sort((a,b)=> new Date(b.adjusted_at||0) - new Date(a.adjusted_at||0)) })
+  }
+
+  // Receipt-level detail for ONE commodity: every individual intake with its
+  // date and quantity (plus batch / expiry / source), which the aggregates
+  // deliberately collapse. Fetched on click — this is row data, not a sum, so it
+  // is the one thing on the page that must not be loaded up front.
+  //
+  // Both sources are pulled and normalised onto a common shape, so a transfer
+  // received from another facility sits in the same list as a supplier intake.
+  async function loadIntakeReceipts(commodityId) {
+    setIntakeRcpts(null)
+    const { start, end } = periodWindow(period)
+    const scope = store.getAdminScopeParams()
+    const common = { ...scope, section: commoditySection || undefined,
+                     from: start.toISOString(), to: end.toISOString() }
+
+    const [receipts, transfers, outbound] = await Promise.all([
+      api.intake.history({ ...common, commodity_ids: commodityId, limit: 1000 }).catch(() => []),
+      // One row per transfer, not per day. `direction: 'incoming'` matters for an
+      // admin whose scope contains both endpoints — without it the same internal
+      // movement would come back as both an in and an out.
+      //
+      // This endpoint bounds dates by DAY (it appends its own T00:00:00/T23:59:59),
+      // so the window is widened to whole days here and trimmed to the exact
+      // instants below — otherwise the itemised list could disagree with the
+      // aggregate card above it.
+      api.transfers.list({ ...scope, section: commoditySection || undefined,
+                           commodity_ids: commodityId, direction: 'incoming',
+                           status: 'accepted', date_field: 'resolved_at',
+                           from: localDay(start), to: localDay(end), limit: 1000 }).catch(() => []),
+      // Outbound, so the commodity drill covers movement in BOTH directions —
+      // otherwise Transferred-Out is a headline figure with nothing behind it.
+      api.transfers.list({ ...scope, section: commoditySection || undefined,
+                           commodity_ids: commodityId, direction: 'outgoing',
+                           status: 'accepted', date_field: 'resolved_at',
+                           from: localDay(start), to: localDay(end), limit: 1000 }).catch(() => []),
+    ])
+
+    const lo = start.getTime(), hi = end.getTime()
+    const rows = [
+      ...(receipts||[]).map(r=>({
+        id: r.id, kind: 'Intake', at: r.received_at,
+        qty: r.quantity, batch: r.batch_number || '—', expiry: r.expiry_date || null,
+        source: r.supplier_source || '—', by: r.received_by || '—',
+        facility: r.facilities?.name || facMeta[r.facility_id]?.name || '—',
+      })),
+      ...(transfers||[])
+        .filter(t => { const ts = new Date(t.resolved_at).getTime(); return ts >= lo && ts <= hi })
+        // Mirrors the service: count only movements between two REAL, DIFFERENT
+        // facilities. Excludes '[Internal: Store→Dispensary]' (sender = receiver) and
+        // '[SDP: Main Lab]' (no receiving_facility_id — a sub-unit of the sender).
+        // In both the stock stayed inside the facility, so nothing was received.
+        .filter(t => t.sending_facility_id && t.receiving_facility_id
+                     && t.sending_facility_id !== t.receiving_facility_id)
+        .map(t=>({
+          id: t.id, kind: 'Transfer', at: t.resolved_at,
+          // A partial acceptance credits only what was accepted; qty_accepted is
+          // null on rows predating the column, which accepted in full.
+          qty: t.qty_accepted ?? t.quantity,
+          ...lotFields(t.lots),
+          source: t.sending_facility_name || facMeta[t.sending_facility_id]?.name || '—',
+          by: t.resolved_by || '—',
+          facility: t.receiving_facility_name || facMeta[t.receiving_facility_id]?.name || '—',
+        })),
+      ...(outbound||[])
+        .filter(t => { const ts = new Date(t.resolved_at).getTime(); return ts >= lo && ts <= hi })
+        .filter(t => t.sending_facility_id && t.receiving_facility_id
+                     && t.sending_facility_id !== t.receiving_facility_id)
+        .map(t=>({
+          id: t.id, kind: 'Transfer out', at: t.resolved_at,
+          qty: t.qty_accepted ?? t.quantity,
+          ...lotFields(t.lots),
+          // For an outbound row "From" is where it WENT, so the column reads as the
+          // counterparty either way; `facility` stays the one that held the stock.
+          source: t.receiving_facility_name || facMeta[t.receiving_facility_id]?.name || '—',
+          by: t.resolved_by || '—',
+          facility: t.sending_facility_name || facMeta[t.sending_facility_id]?.name || '—',
+        })),
+    ].sort((a,b)=> new Date(b.at||0) - new Date(a.at||0))
+
+    setIntakeRcpts({ id: commodityId, rows })
+  }
+
+  // The commodities one FACILITY moved, for the metric currently drilled into.
+  // 'today' uses today's window; everything else uses the settled period, so the
+  // leaf always totals to the figure on the card that opened it.
+  async function loadFacilityCommodities(facilityId, kind = 'dispense') {
+    setFacComms(null)
+    const today = kind === 'dispense' && metricDrill === 'today'
+    const { start, end } = periodWindow(period)
+    const from = today ? (() => { const d = new Date(); d.setHours(0,0,0,0); return d })() : start
+    const to = today ? new Date() : end
+    const summaryFn = kind === 'intake' ? api.intake.summary
+      : kind === 'adjustment' ? api.adjustments.summary
+      : api.dispense.summary
+    const rows = await summaryFn({
+      facility_id: facilityId, section: commoditySection || undefined,
+      category: catFilter || undefined,
+      from: from.toISOString(), to: to.toISOString(),
+      // adjustments group by direction as well, so its rows carry `type`
+      group_by: kind === 'adjustment' ? 'commodity,type' : 'commodity',
+    }).catch(() => [])
+    let out = rows || []
+    if (kind === 'adjustment') {
+      const m = {}
+      out.forEach(r => {
+        const e = m[r.commodity_id] ||= { commodity_id: r.commodity_id, qty: 0, txn: 0 }
+        e.qty += r.qty; e.txn += r.txn
+      })
+      out = Object.values(m)
+    }
+    setFacComms({ id: facilityId, kind, rows: out.slice().sort((a,b)=>b.qty-a.qty) })
+  }
+
+  // The facilities that consumed ONE commodity today.
+  async function loadTodayCommodityFacilities(commodityId) {
+    setTodayCommFacs(null)
+    const start = new Date(); start.setHours(0,0,0,0)
+    const rows = await api.dispense.summary({
+      ...store.getAdminScopeParams(), section: commoditySection || undefined,
+      category: catFilter || undefined, commodity_id: commodityId,
+      from: start.toISOString(), to: new Date().toISOString(),
+      group_by: 'commodity,facility',
+    }).catch(() => [])
+    setTodayCommFacs({ id: commodityId, rows: (rows||[]).slice().sort((a,b)=>b.qty-a.qty) })
+  }
+
+  // Where a facility's transfers came FROM (dir 'in') or went TO (dir 'out').
+  //
+  // This one needs the transfer LIST, not an aggregate: the counterparty facility
+  // is a column on the transfer row and is summed away by every group_by the
+  // summary endpoint offers. Two consequences handled here — the list bounds dates
+  // by whole days, so the window is trimmed to the exact instants afterwards; and
+  // it takes no category filter, so the tab's category narrowing is applied client
+  // side, or this leaf would disagree with the card that opened it.
+  const catFilterActive = !!catFilter, catFilterValue = catFilter
+  async function loadFacilityCounterparties(facilityId, dir) {
+    const { start, end } = periodWindow(period)
+    const fromDay = localDay(start), toDay = localDay(end)
+    const lo = start.getTime(), hi = end.getTime()
+    const rows = await api.transfers.list({
+      facility_id: facilityId, section: commoditySection || undefined,
+      direction: dir === 'out' ? 'outgoing' : 'incoming',
+      status: 'accepted', date_field: 'resolved_at',
+      from: fromDay, to: toDay, limit: 1000,
+    }).catch(() => [])
+
+    const agg = {}
+    const keep = (rows || [])
+      .filter(t => { const ts = new Date(t.resolved_at).getTime(); return ts >= lo && ts <= hi })
+      // Real facility-to-facility movements only, the same rule the cards use:
+      // internal store→dispensary and SDP sub-unit rows are not arrivals or exits.
+      .filter(t => t.sending_facility_id && t.receiving_facility_id
+                   && t.sending_facility_id !== t.receiving_facility_id)
+      .filter(t => !catFilterActive || (commMeta[t.commodity_id]?.category === catFilterValue))
+    keep.forEach(t => {
+        const other = dir === 'out'
+          ? (t.receiving_facility_name || facMeta[t.receiving_facility_id]?.name || '—')
+          : (t.sending_facility_name   || facMeta[t.sending_facility_id]?.name   || '—')
+        const a = agg[other] ||= { name: other, qty: 0, txn: 0 }
+        a.qty += (t.qty_accepted ?? t.quantity ?? 0)
+        a.txn += 1
+    })
+    // `raw` is kept so drilling ONE counterparty can split it by commodity without
+    // going back to the server — the rows are already here, just grouped differently.
+    setFacComms({ id: facilityId, kind: dir, raw: keep,
+                  rows: Object.values(agg).sort((a,b)=>b.txn-a.txn) })
   }
 
   // Drill-in detail is fetched ON CLICK rather than sliced out of a full download.
@@ -178,6 +626,7 @@ export function Monitoring() {
   async function loadExpiry() {
     setLoading(true)
     setExpUrgency('all')
+    setExpCommDrill(null); setExpCommPage(0); setExpBatchPage(0)
     const now=new Date()
     const cutoff=new Date(now.getTime()+expPeriod*86400000).toISOString().split('T')[0]
     const scopeParams = store.getAdminScopeParams()
@@ -202,6 +651,7 @@ export function Monitoring() {
   function switchTab(t) {
     setTab(t)
     if(t==='consumption') loadConsumption()
+    // 'intake' and 'expiry' load from their own effects, which fire on the tab change.
   }
 
   const today=new Date()
@@ -218,19 +668,176 @@ export function Monitoring() {
     return Object.entries(m).sort((a,b)=>b[1]-a[1])
   }
 
+  // Breakdown by COMMODITY over a per-commodity aggregate — the drill a facility
+  // user gets where an admin gets FacilityLgaBreakdown. A facility has exactly one
+  // facility in scope, so "by LGA and facility" would be a one-row table telling
+  // them what they already know; "which commodities did this cover" is the
+  // question they can actually act on.
+  const CommodityBreakdown = ({ rows, mode, unitsLabel, onRow }) => {
+    const field = mode==='count' ? 'txn' : 'qty'
+    const list = aggRows(rows, r=>r.commodity_id, field)
+      .map(([id,v])=>({ id, v, name: commMeta[id]?.name || '—', cat: commMeta[id]?.category || 'Other', unit: commMeta[id]?.unit || '' }))
+    const total = list.reduce((s,r)=>s+r.v,0) || 1
+    if (!list.length) return <EmptyState message="Nothing recorded in this period."/>
+    return (
+      <div className="table-wrap"><table className="w-full text-sm">
+        <thead><tr className="border-b border-white/8 bg-white/2">
+          {['#','Commodity','Category',unitsLabel,'Share'].map(h=>(
+            <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+          ))}
+        </tr></thead>
+        <tbody>{list.map((c,i)=>{
+          const pct=Math.round((c.v/total)*100)||0
+          return (
+            <tr key={c.id} onClick={onRow ? () => onRow(c.id, commMeta[c.id]) : undefined}
+                className={`border-b border-white/5 ${onRow ? 'cursor-pointer hover:bg-white/5' : 'hover:bg-white/2'}`}>
+              <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+              <td className="px-4 py-3 font-medium text-gray-100">{c.name}{onRow && <span className="text-gray-600 ml-1">›</span>}</td>
+              <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
+              <td className="px-4 py-3 font-mono text-sm text-green-400">{c.v.toLocaleString()} {mode==='count'?'':c.unit}</td>
+              <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
+            </tr>
+          )
+        })}</tbody>
+      </table></div>
+    )
+  }
+
   // Breakdown by LGA + facility over the server's per-facility aggregate, either
   // summing units (mode='units') or consumption records (mode='count'). `txn` is
   // the server's count(*), which is exactly what rows.length used to be.
-  const FacilityLgaBreakdown = ({ rows, mode, unitsLabel }) => {
+  const FacilityLgaBreakdown = ({ rows, mode, unitsLabel, leaf = 'dispense' }) => {
+    if (!lgaOpen) return (
+      <button type="button" onClick={()=>setLgaOpen(true)}
+        className="w-full text-left px-5 py-3 border-t border-white/8 text-xs text-gray-500 uppercase tracking-widest hover:text-gray-300">
+        By LGA &amp; facility <span className="text-gray-600 normal-case tracking-normal">— show breakdown ›</span>
+      </button>
+    )
     const field = mode==='count' ? 'txn' : 'qty'
     const aggBy = keyFn => aggRows(rows, keyFn, field)
     const total = (rows||[]).reduce((s,r)=>s+(r[field]||0),0) || 1
     const byLga = aggBy(r=>facMeta[r.facility_id]?.lga || '—')
     const byFac = aggBy(r=>r.facility_id).map(([id,v])=>({id,v,name:facMeta[id]?.name||'—',lga:facMeta[id]?.lga||'—'}))
-    return (
+    // THREE views, never stacked: the LGA list, then one LGA's facilities, then one
+    // facility's commodities. Each replaces the last, so the answer you asked for is
+    // at the top rather than below everything you scrolled past to get it.
+    if (facDrill) {
+      const ready = facComms?.id === facDrill.id && facComms?.kind === (facDrill.leaf || 'dispense')
+      const rows = ready ? facComms.rows : null
+      const party = facDrill.leaf === 'in' || facDrill.leaf === 'out'
+
+      // One facility PAIR, split by commodity — what actually moved between them.
+      // Built from the transfer rows already fetched for the counterparty list, so
+      // this level costs nothing.
+      if (party && partyDrill && ready) {
+        const out = facDrill.leaf === 'out'
+        const mine = (facComms.raw || []).filter(t => (out
+          ? (t.receiving_facility_name || facMeta[t.receiving_facility_id]?.name || '—')
+          : (t.sending_facility_name   || facMeta[t.sending_facility_id]?.name   || '—')) === partyDrill)
+        const byC = {}
+        mine.forEach(t => {
+          const e = byC[t.commodity_id] ||= { commodity_id: t.commodity_id, qty: 0, txn: 0 }
+          e.qty += (t.qty_accepted ?? t.quantity ?? 0); e.txn += 1
+        })
+        const list = Object.values(byC).sort((a,b)=>b.qty-a.qty)
+        return (
+          <>
+            <div className="px-5 pt-3 pb-2 flex items-center justify-between gap-3 flex-wrap">
+              <span className="text-xs text-gray-500 uppercase tracking-widest">
+                {facDrill.name} <span className="normal-case tracking-normal text-gray-600">
+                  {out ? '→' : '←'} {partyDrill} — commodities</span>
+              </span>
+              <button onClick={()=>setPartyDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">← {facDrill.name}</button>
+            </div>
+            {!list.length ? <EmptyState message="No commodities recorded for this pair."/> : (
+              <div className="table-wrap"><table className="w-full text-sm">
+                <thead><tr className="border-b border-white/8 bg-white/2">
+                  {['#','Commodity','Category','Transfers','Quantity'].map(h=>(
+                    <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>{list.map((r,i)=>{
+                  const c = commMeta[r.commodity_id]
+                  return (
+                    <tr key={r.commodity_id} className="border-b border-white/5 hover:bg-white/2">
+                      <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                      <td className="px-4 py-3 font-medium text-gray-100">{c?.name || r.commodity_id}</td>
+                      <td className="px-4 py-3"><CatBadge>{c?.category || 'Other'}</CatBadge></td>
+                      <td className="px-4 py-3 text-gray-300">{r.txn.toLocaleString()}</td>
+                      <td className="px-4 py-3 font-mono text-sm text-green-400">{r.qty.toLocaleString()} {c?.unit || ''}</td>
+                    </tr>
+                  )
+                })}</tbody>
+              </table></div>
+            )}
+          </>
+        )
+      }
+      const tot = (rows||[]).reduce((s2,r)=>s2+(mode==='count'?r.txn:r.qty),0) || 1
+      return (
+        <>
+          <div className="px-5 pt-3 pb-2 flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs text-gray-500 uppercase tracking-widest">
+              {facDrill.name} <span className="normal-case tracking-normal text-gray-600">— {
+                facDrill.leaf === 'in'  ? 'received from' :
+                facDrill.leaf === 'out' ? 'sent to' : 'commodities'
+              }</span>
+            </span>
+            <button onClick={()=>setFacDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">← {facDrill.lga && facDrill.lga !== '—' ? facDrill.lga : 'Back'}</button>
+          </div>
+          {!rows ? <LoadingState/> : !rows.length ? (
+            <EmptyState message={party
+              ? `No transfers ${facDrill.leaf === 'out' ? 'sent by' : 'received by'} this facility in this period.`
+              : 'Nothing recorded for this facility in this period.'}/>
+          ) : (
+            <div className="table-wrap"><table className="w-full text-sm">
+              <thead><tr className="border-b border-white/8 bg-white/2">
+                {(party
+                  ? ['#', facDrill.leaf === 'out' ? 'Sent to' : 'Received from', 'Transfers', 'Quantity', 'Share']
+                  : ['#','Commodity','Category',unitsLabel,'Quantity','Share']
+                ).map(h=>(
+                  <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>{rows.map((r,i)=>{
+                const v = mode==='count' ? r.txn : r.qty
+                if (party) return (
+                  <tr key={r.name} onClick={()=>setPartyDrill(r.name)}
+                      className="border-b border-white/5 hover:bg-white/5 cursor-pointer">
+                    <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                    <td className="px-4 py-3 font-medium text-gray-100">{r.name}<span className="text-gray-600 ml-1">›</span></td>
+                    <td className="px-4 py-3 text-gray-300">{r.txn.toLocaleString()}</td>
+                    {/* Quantity is safe to total here only because it is one facility
+                        pair at a time; across commodities it would mix units, so it is
+                        shown beside the transfer count rather than instead of it. */}
+                    <td className="px-4 py-3 font-mono text-sm text-gray-400">{r.qty.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{Math.round((r.txn/((rows||[]).reduce((s2,x)=>s2+x.txn,0)||1))*100)||0}%</td>
+                  </tr>
+                )
+                const c = commMeta[r.commodity_id]
+                return (
+                  <tr key={r.commodity_id} className="border-b border-white/5 hover:bg-white/2">
+                    <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                    <td className="px-4 py-3 font-medium text-gray-100">{c?.name || r.commodity_id}</td>
+                    <td className="px-4 py-3"><CatBadge>{c?.category || 'Other'}</CatBadge></td>
+                    <td className="px-4 py-3 font-mono text-sm text-gray-300">{v.toLocaleString()}</td>
+                    <td className="px-4 py-3 font-mono text-sm text-green-400">{(r.qty ?? 0).toLocaleString()} {c?.unit || ''}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{Math.round((v/tot)*100)||0}%</td>
+                  </tr>
+                )
+              })}</tbody>
+            </table></div>
+          )}
+        </>
+      )
+    }
+    if (!lgaDrill) return (
       <>
         <CardBody>
-          <div className="text-xs text-gray-500 uppercase tracking-widest mb-2">By LGA <span className="normal-case tracking-normal text-gray-600">— click an LGA to see its facilities</span></div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-gray-500 uppercase tracking-widest">By LGA <span className="normal-case tracking-normal text-gray-600">— click an LGA to see its facilities</span></span>
+            <button type="button" onClick={()=>{setLgaOpen(false);setLgaDrill(null)}} className="text-xs text-gray-500 hover:text-gray-300">Hide</button>
+          </div>
           <div className="space-y-2">
             {byLga.map(([lga,v])=>{
               const pct=Math.round((v/total)*100)||0
@@ -247,13 +854,15 @@ export function Monitoring() {
             })}
           </div>
         </CardBody>
+      </>
+    )
+    return (
+      <>
         <div className="px-5 pt-1 pb-2 text-xs text-gray-500 uppercase tracking-widest flex items-center justify-between">
-          <span>{lgaDrill ? `Facilities in ${lgaDrill}` : 'By facility'}</span>
-          {lgaDrill && <button onClick={()=>setLgaDrill(null)} className="normal-case tracking-normal text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">← All LGAs</button>}
+          <span>Facilities in {lgaDrill}</span>
+          <button onClick={()=>{setLgaDrill(null);setFacDrill(null)}} className="normal-case tracking-normal text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">← All LGAs</button>
         </div>
-        {!lgaDrill ? (
-          <div className="px-5 pb-5 text-sm text-gray-500">Select an LGA above to see its facilities.</div>
-        ) : (
+        {(
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
               {['#','Facility','LGA',unitsLabel,'Share'].map(h=>(
@@ -263,9 +872,10 @@ export function Monitoring() {
             <tbody>{byFac.filter(f=>f.lga===lgaDrill).map((f,i)=>{
               const pct=Math.round((f.v/total)*100)||0
               return (
-                <tr key={f.id} className="border-b border-white/5 hover:bg-white/2">
+                <tr key={f.id} onClick={()=>setFacDrill({id:f.id,name:f.name,lga:f.lga,leaf})}
+                    className="border-b border-white/5 hover:bg-white/5 cursor-pointer">
                   <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
-                  <td className="px-4 py-3 font-medium text-gray-100">{f.name}</td>
+                  <td className="px-4 py-3 font-medium text-gray-100">{f.name}<span className="text-gray-600 ml-1">›</span></td>
                   <td className="px-4 py-3 text-xs text-gray-500">{f.lga}</td>
                   <td className="px-4 py-3 font-mono text-sm text-green-400">{f.v.toLocaleString()}</td>
                   <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
@@ -305,14 +915,17 @@ export function Monitoring() {
 
       <div style={{display:'flex',gap:0,marginBottom:'1.25rem',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'8px',overflow:'hidden',background:'rgba(255,255,255,0.03)'}}>
         <TabBtn id="consumption" label="Consumption"/>
+        <TabBtn id="intake"      label="Intake"/>
+        <TabBtn id="adjustments" label="Adjustments"/>
         <TabBtn id="expiry"      label="Expiry"/>
       </div>
 
       {/* Admin location filter — State → LGA → Facility (self-hides for facility users) */}
       <FacilityPicker />
 
-      {/* Period selector — always shown for consumption */}
-      {tab==='consumption' && (
+      {/* Period selector — shared by Consumption and Intake, which use the same
+          window and category narrowing (Expiry has its own controls below). */}
+      {tab!=='expiry' && (
         <Card>
           <div className="px-4 py-3 flex gap-3 items-center flex-wrap">
             <span className="text-xs text-gray-500 uppercase tracking-widest">Period</span>
@@ -336,7 +949,7 @@ export function Monitoring() {
               <option value="">All categories</option>
               {categories.map(c=><option key={c} value={c}>{c}</option>)}
             </select>
-            <button onClick={loadConsumption} disabled={loading} className="ml-auto text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
+            <button onClick={tab==='intake'?loadIntake:tab==='adjustments'?loadAdjustments:loadConsumption} disabled={loading} className="ml-auto text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
               {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
@@ -376,6 +989,16 @@ export function Monitoring() {
               {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
+          {/* Says plainly what this tab is NOT, because the obvious reading — that an
+              expiry write-off is counted twice across the two tabs — is wrong, and
+              only the ledger behaviour explains why. A Decrease adjustment debits the
+              lot, so written-off stock leaves this tab the moment it is recorded. */}
+          <div className="px-4 pb-3 -mt-1 text-xs text-gray-500">
+            Stock <span className="text-gray-400">still on hand</span>, as of now — not a total for the period.
+            Stock already written off has left this tab; find it under
+            <span className="text-gray-400"> Adjustments → Expired</span>. The two never
+            count the same units.
+          </div>
         </Card>
       )}
 
@@ -400,50 +1023,27 @@ export function Monitoring() {
             )
           })() : (
           <MetricGrid>
-            <Metric label={`Units consumed (${period}d)`} value={consData.total.toLocaleString()} color="green"/>
+            {/* Intake and transfer-in live on the Intake tab — this tab is what went OUT. */}
+            {/* These three drill to WHERE it happened (LGA → facility) — the one
+                question the tables below cannot answer. A facility user has a single
+                facility, so there is nothing to drill; their commodity view is
+                "Top commodities" further down. */}
+            <Metric label={`Units consumed (${period}d)`} value={consData.total.toLocaleString()} color="green"
+              onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='units'?null:'units')}:undefined} active={metricDrill==='units'}/>
             <Metric label="Commodities consumed" value={consData.byComm.length} color="blue"
-              onClick={isAdm?()=>setMetricDrill(metricDrill==='commodities'?null:'commodities'):undefined} active={metricDrill==='commodities'}/>
+              onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='commodities'?null:'commodities')}:undefined} active={metricDrill==='commodities'}/>
             <Metric label="Consumption records" value={consData.txnTotal.toLocaleString()}
               onClick={isAdm?()=>{setLgaDrill(null);setMetricDrill(metricDrill==='transactions'?null:'transactions')}:undefined} active={metricDrill==='transactions'}/>
-            <Metric label="Consumed today" value={consData.todayTotal.toLocaleString()}/>
+            <Metric label="Consumed today" value={consData.todayTotal.toLocaleString()}
+              onClick={()=>{setLgaDrill(null);setMetricDrill(metricDrill==='today'?null:'today')}} active={metricDrill==='today'}/>
           </MetricGrid>
           )}
 
-          {isAdm && metricDrill && (
-            <Card>
-              <CardHeader>
-                <CardTitle>{metricDrill==='transactions' ? 'Consumption records — by LGA & facility' : 'Commodities consumed — full list'}</CardTitle>
-                <button onClick={()=>{setMetricDrill(null);setLgaDrill(null)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
-              </CardHeader>
-              {metricDrill==='commodities' ? (
-                consData.byComm.length===0 ? <EmptyState message="No commodities consumed in this period."/> : (
-                  <div className="table-wrap"><table className="w-full text-sm">
-                    <thead><tr className="border-b border-white/8 bg-white/2">
-                      {['#','Commodity','Category','Units Consumed','Consumption records','Share'].map(h=>(
-                        <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-                      ))}
-                    </tr></thead>
-                    <tbody>{consData.byComm.map((c,i)=>{
-                      const pct=Math.round((c.qty/consData.total)*100)||0
-                      return (
-                        <tr key={i} className="border-b border-white/5 hover:bg-white/2">
-                          <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
-                          <td className="px-4 py-3 font-medium text-gray-100">{c.name}</td>
-                          <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
-                          <td className="px-4 py-3 font-mono text-sm text-green-400">{c.qty.toLocaleString()} {c.unit}</td>
-                          <td className="px-4 py-3 text-gray-400">{c.txn}</td>
-                          <td className="px-4 py-3 text-xs text-gray-500">{pct}%</td>
-                        </tr>
-                      )
-                    })}</tbody>
-                  </table></div>
-                )
-              ) : (
-                <FacilityLgaBreakdown rows={consData.byFac} mode={metricDrill==='transactions'?'count':'units'} unitsLabel={metricDrill==='transactions'?'Consumption records':'Units Consumed'}/>
-              )}
-            </Card>
-          )}
 
+          {/* 'Consumed today' takes over the tab: it is a live figure people open
+              to act on, and the settled-period charts underneath it invite reading
+              one as the other. Every other card leaves the page intact. */}
+          {metricDrill !== 'today' && (<>
           <div className={`grid grid-cols-1 ${isAdm ? 'lg:grid-cols-2' : ''} gap-4 mb-4`}>
             <Card>
               <CardHeader><CardTitle>{commDrill ? `Daily consumption — ${commDrill.name}` : 'Daily consumption'}</CardTitle></CardHeader>
@@ -603,7 +1203,7 @@ export function Monitoring() {
               )
             })() : (
               <>
-                <CardHeader><CardTitle>Top commodities</CardTitle>
+                <CardHeader><CardTitle>Commodities consumed</CardTitle>
                   <div className="flex items-center gap-3">
                     {isAdm && consData.byComm.length>0 && <span className="text-xs text-gray-500">click a commodity for facilities</span>}
                     <button onClick={()=>{
@@ -620,13 +1220,15 @@ export function Monitoring() {
                         <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                       ))}
                     </tr></thead>
-                    <tbody>{consData.byComm.slice(0,15).map((c,i)=>{
+                    <tbody>{pageSlice(consData.byComm, commPage).slice.map((c,i)=>{
                       const pct=Math.round((c.qty/consData.total)*100)||0
                       const color=catColor(c.cat,i)
+                      // Rank continues across pages — row 1 of page 2 is #16, not #1.
+                      const rank=pageSlice(consData.byComm, commPage).offset + i + 1
                       return (
-                        <tr key={i} onClick={()=>isAdm && setCommDrill({id:c.commodity_id,name:c.name,unit:c.unit})}
+                        <tr key={c.commodity_id||i} onClick={()=>isAdm && setCommDrill({id:c.commodity_id,name:c.name,unit:c.unit})}
                           className={`border-b border-white/5 ${isAdm?'cursor-pointer':''} hover:bg-white/2`}>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-600">{rank}</td>
                           <td className="px-4 py-3 font-medium text-gray-100">{c.name}{isAdm && <span className="text-gray-600 ml-1">›</span>}</td>
                           <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
                           <td className="px-4 py-3 font-mono text-sm text-green-400">{c.qty.toLocaleString()} {c.unit}</td>
@@ -642,7 +1244,9 @@ export function Monitoring() {
                         </tr>
                       )
                     })}</tbody>
-                  </table></div>
+                  </table>
+                  <Pagination pager={pageSlice(consData.byComm, commPage)} onPage={setCommPage} unit="commodities"/>
+                  </div>
                 )}
               </>
             )}
@@ -695,9 +1299,737 @@ export function Monitoring() {
               </Card>
             )
           })()}
+          </>)}
+
+          <div id="metric-breakdown"/>
+          {metricDrill && (isAdm || metricDrill === 'today') && (() => {
+            // ONE panel shape for every card: what was it, by commodity — then where,
+            // by LGA and facility. Each card previously drilled to a different single
+            // view, so "which commodities" and "which facilities" were never both
+            // answerable for the same figure.
+            const cfg = {
+              units:        { title: 'Units consumed',      mode: 'units', label: 'Units Consumed',
+                              comm: consData.byComm,           fac: consData.byFac },
+              commodities:  { title: 'Commodities consumed', mode: 'units', label: 'Units Consumed',
+                              comm: consData.byComm,           fac: consData.byFac, countsCommodities: true },
+              transactions: { title: 'Consumption records',  mode: 'count', label: 'Consumption records',
+                              comm: consData.byComm,           fac: consData.byFac },
+              today:        { title: 'Consumed today',       mode: 'units', label: 'Units Consumed Today',
+                              comm: consData.todayByCommRows,  fac: consData.todayByFac },
+            }[metricDrill]
+            if (!cfg) return null
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle>{cfg.title} — breakdown</CardTitle>
+                  <button onClick={()=>{setMetricDrill(null);setLgaDrill(null);setFacDrill(null);setTodayComm(null)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
+                </CardHeader>
+
+                {/* No by-commodity table here for the period cards: "Top commodities"
+                    below already IS that table, with the same figures plus CSV and a
+                    per-commodity facility drill. Repeating it made this panel long
+                    without answering anything new.
+                    'today' is the exception — Top commodities covers the whole period,
+                    so today's commodity split appears nowhere else. */}
+                {metricDrill === 'today' && (todayComm ? (() => {
+                  // One commodity consumed today → which facilities consumed it.
+                  const rows = todayCommFacs?.id === todayComm.id ? todayCommFacs.rows : null
+                  const tot = (rows||[]).reduce((s2,r)=>s2+r.qty,0) || 1
+                  return (
+                    <>
+                      <div className="px-5 pt-1 pb-2 flex items-center justify-between gap-3 flex-wrap">
+                        <span className="text-xs text-gray-500 uppercase tracking-widest">
+                          {todayComm.name} <span className="normal-case tracking-normal text-gray-600">— facilities that consumed it today</span>
+                        </span>
+                        <button onClick={()=>setTodayComm(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">← All commodities</button>
+                      </div>
+                      {!rows ? <LoadingState/> : !rows.length ? <EmptyState message="No facility recorded this commodity today."/> : (
+                        <div className="table-wrap"><table className="w-full text-sm">
+                          <thead><tr className="border-b border-white/8 bg-white/2">
+                            {['#','Facility','LGA','Units Consumed Today','Share'].map(h=>(
+                              <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                            ))}
+                          </tr></thead>
+                          <tbody>{rows.map((r,i)=>(
+                            <tr key={r.facility_id} className="border-b border-white/5 hover:bg-white/2">
+                              <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                              <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name || '—'}</td>
+                              <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga || '—'}</td>
+                              <td className="px-4 py-3 font-mono text-sm text-green-400">{r.qty.toLocaleString()} {todayComm.unit||''}</td>
+                              <td className="px-4 py-3 text-xs text-gray-500">{Math.round((r.qty/tot)*100)||0}%</td>
+                            </tr>
+                          ))}</tbody>
+                        </table></div>
+                      )}
+                    </>
+                  )
+                })() : (
+                  <>
+                    <div className="px-5 pt-1 pb-2 text-xs text-gray-500 uppercase tracking-widest">
+                      By commodity — today
+                      {isAdm && <span className="normal-case tracking-normal text-gray-600"> — click a commodity for its facilities</span>}
+                    </div>
+                    <CommodityBreakdown rows={cfg.comm} mode={cfg.mode} unitsLabel={cfg.label}
+                      onRow={isAdm ? (id, meta) => setTodayComm({ id, name: meta?.name || id, unit: meta?.unit || '' }) : undefined}/>
+                  </>
+                ))}
+
+                {/* Facility users have exactly one facility, so the geography half
+                    would be a single row telling them what they already know. */}
+                {isAdm && (
+                  <>
+                    {metricDrill === 'today' && <div className="border-t border-white/8 mt-2"/>}
+                    {cfg.countsCommodities && lgaOpen && (
+                      <div className="px-5 pt-3 -mb-1 text-xs text-gray-500">
+                        Facilities are ranked by units consumed — a count of distinct commodities per facility is not in this aggregate.
+                      </div>
+                    )}
+                    <FacilityLgaBreakdown rows={cfg.fac} mode={cfg.mode} unitsLabel={cfg.label}/>
+                  </>
+                )}
+              </Card>
+            )
+          })()}
 
         </>
       )}
+
+      {!loading && tab==='intake' && intakeData && (() => {
+      // The movement rows the table shows, narrowed by whichever card is active.
+      // Filtering to rows that actually have that movement — a commodity with no
+      // transfers out should not sit in a transferred-out list showing a dash.
+      // Filter AND re-sort by the measure asked for. Sorting by total received
+      // regardless made a filter look inert: the biggest commodity overall led
+      // every list, including "transferred-in only" where its 500 units are
+      // nothing beside its 123,311 of intake.
+      // A redistribution is ONE event: it leaves A and arrives at B. When the
+      // viewer's scope contains both ends, every transfer is counted once each way
+      // and the two cards are guaranteed identical — two cards implying two
+      // quantities. Detected from the data rather than from the role, so a state
+      // whose transfers all stay inside it collapses correctly too.
+      const balanced = intakeData.transferTxn === intakeData.outTxn
+      const movementKey = { intake:'intake', transferin:'transfer', transferout:'out', received:'qty' }[intakeMetric]
+      const movementRows = intakeMetric === 'redistribution'
+        ? intakeData.byComm.filter(c => c.transfer > 0 || c.out > 0).slice()
+            .sort((a,b) => (b.transfer + b.out) - (a.transfer + a.out))
+        : (movementKey
+            ? intakeData.byComm.filter(c => c[movementKey] > 0).slice().sort((a,b) => b[movementKey] - a[movementKey])
+            : intakeData.byComm)
+      return (
+        <>
+          {intakeDrill ? (() => {
+            // Drilled into one commodity → the cards scope to it, and the table
+            // below becomes the receipt-level list (date + quantity per intake).
+            const m = intakeData.byComm.find(c=>c.commodity_id===intakeDrill.id) || { intake:0, transfer:0, qty:0, txn:0 }
+            // Quantity IS meaningful here: one commodity means one unit, so it is
+            // shown alongside the counts, spelled with its unit.
+            const nRcpts = intakeRcpts?.id===intakeDrill.id ? intakeRcpts.rows : null
+            return (
+              <MetricGrid cols={5}>
+                <Metric label={`${intakeDrill.name} — total intake (${period}d)`} color="green"
+                  value={(nRcpts?.length ?? 0).toLocaleString()} loading={!nRcpts}/>
+                <Metric label="Intake" value={(nRcpts?.filter(r=>r.kind==='Intake').length ?? 0).toLocaleString()}
+                  color="blue" loading={!nRcpts}/>
+                <Metric label="Transferred-In" value={(nRcpts?.filter(r=>r.kind==='Transfer').length ?? 0).toLocaleString()}
+                  color="blue" loading={!nRcpts}/>
+                <Metric label={`Quantity received (${intakeDrill.unit||'units'})`} value={m.qty.toLocaleString()}/>
+                <Metric label="Transferred-Out" color="amber"
+                  value={(nRcpts?.filter(r=>r.kind==='Transfer out').length ?? 0).toLocaleString()} loading={!nRcpts}/>
+              </MetricGrid>
+            )
+          })() : (
+          // COUNTS, not quantities. Summing quantity across commodities would add
+          // bottles to tablets to test kits — 11 different units in this dataset —
+          // producing a number that looks precise but measures nothing. Counts are
+          // checkable. Per-commodity quantities live in the table below, where one
+          // row is one commodity in one unit and the sum is genuinely meaningful.
+          <MetricGrid cols={balanced ? 3 : 4}>
+            <Metric label={`Intake (${period}d)`} value={intakeData.intakeTxn.toLocaleString()} color="green"
+              onClick={()=>{setLgaDrill(null);setFacDrill(null);setIntakeCommPage(0);setIntakeMetric(intakeMetric==='intake'?null:'intake')}} active={intakeMetric==='intake'}/>
+            {balanced ? (
+              // One card, because in and out describe the SAME movements here.
+              <Metric label="Redistributions" value={intakeData.transferTxn.toLocaleString()} color="blue"
+                onClick={()=>{setLgaDrill(null);setFacDrill(null);setIntakeCommPage(0);setRedistDir('in');setIntakeMetric(intakeMetric==='redistribution'?null:'redistribution')}}
+                active={intakeMetric==='redistribution'}/>
+            ) : (<>
+              <Metric label="Transferred-In" value={intakeData.transferTxn.toLocaleString()} color="blue"
+                onClick={()=>{setLgaDrill(null);setFacDrill(null);setIntakeCommPage(0);setIntakeMetric(intakeMetric==='transferin'?null:'transferin')}} active={intakeMetric==='transferin'}/>
+              {/* Deliberately amber, not blue: this is stock going OUT, and must not be
+                  read as another arrival alongside the two inbound cards. */}
+              <Metric label="Transferred-Out" value={intakeData.outTxn.toLocaleString()} color="amber"
+                onClick={()=>{setLgaDrill(null);setFacDrill(null);setIntakeCommPage(0);setIntakeMetric(intakeMetric==='transferout'?null:'transferout')}} active={intakeMetric==='transferout'}/>
+            </>)}
+            {/* A different measure from the three above — how many DISTINCT commodities
+                arrived, not how many movements. Clicking it clears the filter. */}
+            <Metric label="Commodities received" value={intakeData.byComm.filter(c=>c.qty>0).length} color="blue"
+              onClick={()=>{setLgaDrill(null);setFacDrill(null);setIntakeCommPage(0);setIntakeMetric(intakeMetric==='received'?null:'received')}} active={intakeMetric==='received'}/>
+          </MetricGrid>
+          )}
+
+
+          <Card>
+            <CardHeader><CardTitle>{intakeDrill ? `Daily quantity received — ${intakeDrill.name}` : (
+              intakeMetric==='intake'      ? 'Daily stock intake' :
+              intakeMetric==='transferin'  ? 'Daily transferred-in' :
+              intakeMetric==='transferout' ? 'Daily transferred-out' :
+              intakeMetric==='redistribution' ? (redistDir==='out' ? 'Daily redistributions sent' : 'Daily redistributions received') :
+                                             'Daily stock received'
+            )}</CardTitle></CardHeader>
+            <CardBody>
+              {(() => {
+                // Drilled in → rebuild the series from this commodity's receipts,
+                // reusing the tab's ordered date buckets so the axis doesn't move.
+                // One commodity means one unit, so quantity is plotted there; the
+                // section-level chart plots intake counts instead (mixed units).
+                const daily = intakeDrill
+                  ? (intakeRcpts?.id===intakeDrill.id ? intakeRcpts.rows : []).reduce((m,r)=>{
+                      const k = r.at ? localDay(r.at) : null
+                      if (k && m[k]!==undefined) m[k] += r.qty
+                      return m
+                    }, Object.fromEntries(Object.keys(intakeData.daily).map(k=>[k,0])))
+                  : intakeMetric==='intake'      ? intakeData.dailyIntake
+                  : intakeMetric==='transferin'  ? intakeData.dailyIn
+                  : intakeMetric==='transferout' ? intakeData.dailyOut
+                  : intakeMetric==='redistribution' ? (redistDir==='out' ? intakeData.dailyOut : intakeData.dailyIn)
+                  : intakeData.dailyCount
+                return <DailyTrendChart daily={daily} unit={intakeDrill ? (intakeDrill.unit||'units')
+                  : intakeMetric==='intake' ? 'intakes'
+                  : intakeMetric==='transferin' ? 'transfers in'
+                  : intakeMetric==='transferout' ? 'transfers out'
+                  : intakeMetric==='redistribution' ? (redistDir==='out' ? 'sent' : 'received') : 'intakes'}/>
+              })()}
+            </CardBody>
+          </Card>
+
+          <Card>
+            {intakeDrill ? (() => {
+              // ── Receipt-level detail: the date and quantity of every intake ──
+              const all = intakeRcpts?.id===intakeDrill.id ? intakeRcpts.rows : []
+              // 'all' means all INBOUND. Outbound is opt-in, never mixed into a
+              // received total — the two directions must not be summed.
+              const inbound = all.filter(r => r.kind!=='Transfer out')
+              const rows = intakeSource==='all'      ? inbound
+                         : intakeSource==='intake'   ? all.filter(r=>r.kind==='Intake')
+                         : intakeSource==='transfer' ? all.filter(r=>r.kind==='Transfer')
+                                                     : all.filter(r=>r.kind==='Transfer out')
+              const total = rows.reduce((s,r)=>s+r.qty,0)
+              const outward = intakeSource==='out'
+              const base = (intakeDrill.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
+              const headers = ['Date','Source',outward?'To':'From','Facility','Quantity','Batch','Expiry',outward?'Actioned by':'Received by']
+              const expRows = () => rows.map(r=>[fmtDate(r.at), r.kind, r.source, r.facility, r.qty, r.batch, r.expiry?fmtDate(r.expiry):'—', r.by])
+              const btnCls = "text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50"
+              return (
+                <>
+                  <CardHeader>
+                    <CardTitle>{intakeDrill.name} — {outward?'transferred out':'intake'} ({rows.length}, {total.toLocaleString()} {intakeDrill.unit||'units'})</CardTitle>
+                    <div className="flex gap-2 flex-wrap">
+                      <button onClick={()=>exportCsv(`${base}_intake.csv`, headers, expRows())} disabled={!rows.length} className={btnCls}>Download CSV</button>
+                      <button onClick={()=>exportPdf(`${intakeDrill.name} — intake`, null, headers, expRows(), new Set([4]))} disabled={!rows.length} className={btnCls}>Print / Save as PDF</button>
+                      <select value={intakeSource} onChange={e=>{setIntakeSource(e.target.value);setDeliveryPage(0)}} className={btnCls} title="Filter by where the stock came from">
+                        <option value="all">All received ({inbound.length})</option>
+                        <option value="intake">Intake ({all.filter(r=>r.kind==='Intake').length})</option>
+                        <option value="transfer">Transferred-In ({all.filter(r=>r.kind==='Transfer').length})</option>
+                        <option value="out">Transferred-Out ({all.filter(r=>r.kind==='Transfer out').length})</option>
+                      </select>
+                      <button onClick={()=>{setIntakeDrill(null);setIntakeSource('all')}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← All commodities</button>
+                    </div>
+                  </CardHeader>
+                  {intakeRcpts?.id!==intakeDrill.id ? <LoadingState/> : !rows.length ? (
+                    <EmptyState message={outward?'This commodity was not transferred out in this period.':'No intake of this commodity in this period.'}/>
+                  ) : (
+                    <div className="table-wrap"><table className="w-full text-sm">
+                      <thead><tr className="border-b border-white/8 bg-white/2">
+                        {headers.map(h=>(
+                          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>{pageSlice(rows, deliveryPage).slice.map(r=>(
+                        <tr key={`${r.kind}-${r.id}`} className="border-b border-white/5 hover:bg-white/2">
+                          <td className="px-4 py-3 text-gray-300 whitespace-nowrap">{fmtDate(r.at)}</td>
+                          <td className="px-4 py-3"><CatBadge>{r.kind}</CatBadge></td>
+                          <td className="px-4 py-3 text-xs text-gray-400">{r.source}</td>
+                          <td className="px-4 py-3 text-xs text-gray-500">{r.facility}</td>
+                          <td className="px-4 py-3 font-mono text-sm text-green-400">{r.qty.toLocaleString()} {intakeDrill.unit||''}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch}</td>
+                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                            {r.expiry?fmtDate(r.expiry):'—'}
+                            {r.extraExpiries>0 && <span className="text-gray-600" title="This intake drew on several lots; the earliest expiry is shown"> +{r.extraExpiries}</span>}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-500">{r.by}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                    <Pagination pager={pageSlice(rows, deliveryPage)} onPage={setDeliveryPage} unit="intake records"/>
+                    </div>
+                  )}
+                  {/* Which facilities this commodity reached. Sits BELOW the intake list:
+                      the per-intake rows are what the drill was opened for, and a
+                      29-row summary above them pushed the actual table off screen. Derived from the rows already fetched — the
+                      facility is on every one of them — so it costs no request. */}
+                  {intakeRcpts?.id===intakeDrill.id && rows.length > 0 && isAdm && (() => {
+                    const byFac = {}
+                    rows.forEach(r => { byFac[r.facility] = (byFac[r.facility] || 0) + r.qty })
+                    const list = Object.entries(byFac).sort((a,b)=>b[1]-a[1])
+                    const tot = list.reduce((s2,[,v])=>s2+v,0) || 1
+                    if (list.length < 2) return null   // one facility says nothing a list wouldn't
+                    return (
+                      <div className="px-5 pb-3">
+                        <div className="text-xs text-gray-500 uppercase tracking-widest mb-2">
+                          By facility <span className="normal-case tracking-normal text-gray-600">— {list.length} facilities</span>
+                        </div>
+                        <div className="space-y-2">
+                          {list.map(([name,v])=>{
+                            const pct=Math.round((v/tot)*100)||0
+                            return (
+                              <div key={name}>
+                                <div className="flex justify-between mb-1">
+                                  <span className="text-sm text-gray-300">{name}</span>
+                                  <span className="text-xs font-mono text-gray-500">{pct}% · {v.toLocaleString()} {intakeDrill.unit||''}</span>
+                                </div>
+                                <div className="h-1.5 bg-white/5 rounded-full">
+                                  <div style={{width:`${pct}%`,height:'100%',background:'#3fb950',borderRadius:'9999px'}}/>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })()}
+                </>
+              )
+            })() : (
+              <>
+                <CardHeader>
+                  <CardTitle>{
+                    intakeMetric==='intake'      ? 'Commodity movement — intake only' :
+                    intakeMetric==='transferin'  ? 'Commodity movement — transferred-in only' :
+                    intakeMetric==='transferout' ? 'Commodity movement — transferred-out only' :
+                    intakeMetric==='received'    ? 'Commodity movement — received only' :
+                    intakeMetric==='redistribution' ? 'Commodity movement — redistributed only' :
+                                                   'Commodity movement'
+                  }</CardTitle>
+                  <div className="flex items-center gap-3">
+                    {intakeMetric && <button onClick={()=>{setIntakeMetric(null);setIntakeCommPage(0)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">Clear filter</button>}
+                    <span className="text-xs text-gray-500">click a commodity for its dates &amp; quantities</span>
+                  </div>
+                </CardHeader>
+                {!movementRows.length ? <EmptyState message="Nothing matching this filter in the period."/> : (
+                  <div className="table-wrap"><table className="w-full text-sm">
+                    <thead><tr className="border-b border-white/8 bg-white/2">
+                      {/* No "share of total" column: the total would be a sum across
+                          different units, so a percentage of it means nothing. The
+                          quantities below are per-commodity, hence per-unit, and are
+                          spelled with their unit. */}
+                      {/* When the scope holds both ends of every transfer, Transferred-In
+                          and Transferred-Out are the SAME movements per commodity and the
+                          two columns print identical numbers. One "Redistributed" column
+                          says it once. Split back apart when they genuinely differ. */}
+                      {['#','Commodity','Category',
+                        intakeMetric==='intake' ? 'Intake records' :
+                        intakeMetric==='transferin' ? 'Transfers in' :
+                        intakeMetric==='transferout' ? 'Transfers out' :
+                        intakeMetric==='redistribution' ? 'Redistributions' : 'Records',
+                        'Intake',
+                        ...(balanced ? ['Redistributed','Total Received']
+                                     : ['Transferred-In','Total Received','Transferred-Out'])].map(h=>(
+                        <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{(() => {
+                      const pg = pageSlice(movementRows, intakeCommPage)
+                      return pg.slice.map((c,i)=>(
+                        <tr key={c.commodity_id}
+                            onClick={()=>{setIntakeSource('all');setDeliveryPage(0);setIntakeDrill({id:c.commodity_id,name:c.name,unit:c.unit})}}
+                            className="border-b border-white/5 hover:bg-white/5 cursor-pointer">
+                          <td className="px-4 py-3 font-mono text-xs text-gray-600">{pg.offset + i + 1}</td>
+                          <td className="px-4 py-3 font-medium text-gray-100">{c.name} ›</td>
+                          <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
+                          <td className="px-4 py-3 text-gray-400">{(
+                            intakeMetric==='intake' ? c.intakeTxn :
+                            intakeMetric==='transferin' ? c.transferTxn :
+                            intakeMetric==='transferout' ? c.outTxn :
+                            intakeMetric==='redistribution' ? (redistDir==='out' ? c.outTxn : c.transferTxn) : c.txn
+                          ).toLocaleString()}</td>
+                          <td className="px-4 py-3 font-mono text-sm text-gray-400">{c.intake.toLocaleString()}</td>
+                          {balanced ? (<>
+                            {/* One movement, one column: it left a facility and arrived at
+                                another, both inside this view. */}
+                            <td className="px-4 py-3 font-mono text-sm text-amber-400">{c.transfer ? `${c.transfer.toLocaleString()} ${c.unit}` : '—'}</td>
+                            <td className="px-4 py-3 font-mono text-sm text-green-400">{c.qty.toLocaleString()} {c.unit}</td>
+                          </>) : (<>
+                            <td className="px-4 py-3 font-mono text-sm text-gray-400">{c.transfer.toLocaleString()}</td>
+                            <td className="px-4 py-3 font-mono text-sm text-green-400">{c.qty.toLocaleString()} {c.unit}</td>
+                            {/* Amber and last: stock leaving, never part of the received total. */}
+                            <td className="px-4 py-3 font-mono text-sm text-amber-400">{c.out ? `${c.out.toLocaleString()} ${c.unit}` : '—'}</td>
+                          </>)}
+                        </tr>
+                      ))
+                    })()}</tbody>
+                  </table>
+                  <Pagination pager={pageSlice(movementRows, intakeCommPage)} onPage={setIntakeCommPage} unit="commodities"/>
+                  </div>
+                )}
+              </>
+            )}
+          </Card>
+
+          {intakeMetric && intakeMetric!=='received' && !intakeDrill && isAdm && (() => {
+            // The totals are identical when the scope holds both ends, but the
+            // FACILITIES are not: a hub ships out far more than it takes in. That is
+            // the whole reason the collapsed card still needs a direction toggle.
+            const redist = intakeMetric === 'redistribution'
+            const dir = redist ? redistDir : intakeMetric==='transferout' ? 'out' : intakeMetric==='transferin' ? 'in' : null
+            const cfg = redist
+              ? { title: 'Redistributions',
+                  fac: redistDir==='out' ? intakeData.outByFac : intakeData.transferByFac,
+                  label: redistDir==='out' ? 'Transferred-Out' : 'Transferred-In' }
+              : {
+                  intake:      { title: 'Intake',          fac: intakeData.intakeByFac,   label: 'Intake records' },
+                  transferin:  { title: 'Transferred-In',  fac: intakeData.transferByFac, label: 'Transferred-In' },
+                  transferout: { title: 'Transferred-Out', fac: intakeData.outByFac,      label: 'Transferred-Out' },
+                }[intakeMetric]
+            if (!cfg) return null
+            const tab = (v,l) => (
+              <button key={v} onClick={()=>{setRedistDir(v);setLgaDrill(null);setFacDrill(null)}}
+                className={`text-xs px-2.5 py-1 rounded border ${redistDir===v
+                  ? 'border-blue-500/60 text-gray-100 bg-white/5' : 'border-white/10 text-gray-500 hover:text-gray-300'}`}>{l}</button>
+            )
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle>{cfg.title} — by {dir==='out' ? 'sending ' : ''}LGA &amp; facility</CardTitle>
+                  <div className="flex items-center gap-2">
+                    {redist && <>{tab('in','Transferred-In')}{tab('out','Transferred-Out')}</>}
+                    <button onClick={()=>{setIntakeMetric(null);setLgaDrill(null);setFacDrill(null)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
+                  </div>
+                </CardHeader>
+                {redist && (
+                  <div className="px-5 pt-1 -mb-1 text-xs text-gray-500">
+                    Every redistribution leaves one facility and arrives at another, so both directions
+                    count the same {intakeData.transferTxn.toLocaleString()} movements — the facilities differ, the total cannot.
+                  </div>
+                )}
+                <FacilityLgaBreakdown rows={cfg.fac} mode="count" unitsLabel={cfg.label}
+                  leaf={dir === 'in' ? 'in' : dir === 'out' ? 'out' : 'intake'}/>
+              </Card>
+            )
+          })()}
+
+        </>
+      )})()}
+
+      {!loading && tab==='adjustments' && adjData && (() => {
+      // Filter AND re-sort by the direction asked for, so the top of the list is
+      // what the card counted rather than always the biggest overall.
+      const adjRowsFiltered = adjMetric==='positive' ? adjData.byComm.filter(c=>c.upTxn>0).slice().sort((a,b)=>b.upTxn-a.upTxn)
+        : adjMetric==='negative' ? adjData.byComm.filter(c=>c.downTxn>0).slice().sort((a,b)=>b.downTxn-a.downTxn)
+        : adjData.byComm
+      return (
+        <>
+          {adjDrill ? (() => {
+            const m = adjData.byComm.find(c=>c.commodity_id===adjDrill.id) || { up:0, down:0, upTxn:0, downTxn:0, txn:0 }
+            return (
+              <MetricGrid>
+                <Metric label={`${adjDrill.name} — adjustments (${period}d)`} value={m.txn.toLocaleString()} color="green"/>
+                <Metric label="Positive adjustments" value={m.upTxn.toLocaleString()} color="blue"/>
+                <Metric label="Negative adjustments" value={m.downTxn.toLocaleString()} color="amber"/>
+                {/* Quantities are safe here: one commodity, one unit. Shown as two
+                    figures, never a net — +5,000/−5,000 must not read as zero. */}
+                <Metric label={`Quantity +/− (${adjDrill.unit||'units'})`}
+                  value={`+${m.up.toLocaleString()} / −${m.down.toLocaleString()}`}/>
+              </MetricGrid>
+            )
+          })() : (
+          // Counts, for the same reason as the Intake tab: a quantity total across
+          // commodities would be adding different units together.
+          <MetricGrid>
+            {/* Same shape as Intake: each card FILTERS the table below rather than
+                opening a panel of its own, and the total clears the filter. */}
+            <Metric label={`Adjustments (${period}d)`} value={(adjData.upTxn+adjData.downTxn).toLocaleString()} color="green"
+              onClick={()=>{setLgaDrill(null);setFacDrill(null);setAdjCommPage(0);setAdjMetric(null)}} active={!adjMetric}/>
+            <Metric label="Positive adjustments" value={adjData.upTxn.toLocaleString()} color="blue"
+              onClick={()=>{setLgaDrill(null);setFacDrill(null);setAdjCommPage(0);setAdjMetric(adjMetric==='positive'?null:'positive')}} active={adjMetric==='positive'}/>
+            <Metric label="Negative adjustments" value={adjData.downTxn.toLocaleString()} color="amber"
+              onClick={()=>{setLgaDrill(null);setFacDrill(null);setAdjCommPage(0);setAdjMetric(adjMetric==='negative'?null:'negative')}} active={adjMetric==='negative'}/>
+            {/* Plain figure: every commodity in the table has been adjusted, so a
+                filter here would select the whole list and do nothing. */}
+            <Metric label="Commodities adjusted" value={adjData.byComm.length} color="blue"/>
+          </MetricGrid>
+          )}
+
+
+
+          <Card>
+            <CardHeader><CardTitle>{adjDrill ? `Daily adjustments — ${adjDrill.name}` : (
+              adjMetric==='positive' ? 'Daily positive adjustments' :
+              adjMetric==='negative' ? 'Daily negative adjustments' : 'Daily adjustments'
+            )}</CardTitle></CardHeader>
+            <CardBody>
+              {(() => {
+                const daily = adjDrill
+                  ? (adjRows?.id===adjDrill.id ? adjRows.rows : []).reduce((mm,r)=>{
+                      const k = r.adjusted_at ? localDay(r.adjusted_at) : null
+                      if (k && mm[k]!==undefined) mm[k] += 1
+                      return mm
+                    }, Object.fromEntries(Object.keys(adjData.daily).map(k=>[k,0])))
+                  : adjMetric==='positive' ? adjData.dailyUp
+                  : adjMetric==='negative' ? adjData.dailyDown
+                  : adjData.daily
+                return <DailyTrendChart daily={daily} unit="adjustments"/>
+              })()}
+            </CardBody>
+          </Card>
+
+          {!adjDrill && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+            {/* Reasons, side by side rather than pooled. The SAME wording carries a
+                different meaning in each column — "Physical count correction" appears
+                as both a positive and a negative — so one merged list would collapse
+                two distinct events into a single row. */}
+            {[['Increase','Positive adjustments','#3fb950'],['Decrease','Negative adjustments','#d29922']]
+              // The card filters with its metric: asking for positive adjustments and
+              // being shown the negative reasons beside them is the same mixing the
+              // rest of this tab now avoids.
+              .filter(([type]) => !adjMetric
+                || (adjMetric==='positive' && type==='Increase')
+                || (adjMetric==='negative' && type==='Decrease'))
+              .map(([type,title,colour])=>{
+              const list = adjData.byReason[type] || []
+              const tot = list.reduce((s,r)=>s+r.txn,0) || 1
+              return (
+                <Card key={type}>
+                  <CardHeader><CardTitle>{title} — by reason</CardTitle>
+                    <span className="text-xs text-gray-500">{list.reduce((s,r)=>s+r.txn,0).toLocaleString()} total</span>
+                  </CardHeader>
+                  {/* 'Expired' here is stock ALREADY removed; the Expiry tab shows what
+                      is still on the shelf. Debiting the lot is what keeps them apart. */}
+                  {type==='Decrease' && list.some(r=>r.reason==='Expired') && (
+                    <div className="px-5 -mb-2 text-xs text-gray-500">
+                      “Expired” is stock already written off — the Expiry tab shows only what is
+                      <span className="text-gray-400"> still on hand</span>.
+                    </div>
+                  )}
+                  <CardBody>
+                    {!list.length ? <div className="text-sm text-gray-500">None in this period.</div> : (
+                      <div className="space-y-2">
+                        {list.map(r=>{
+                          const pct = Math.round((r.txn/tot)*100)||0
+                          const on = reasonDrill?.reason===r.reason && reasonDrill?.type===type
+                          return (
+                            <button key={r.reason} type="button" disabled={!isAdm}
+                              onClick={()=>{setReasonFac(null);setReasonDrill(on ? null : { reason:r.reason, type })}}
+                              className={`w-full text-left group ${isAdm ? 'cursor-pointer' : 'cursor-default'}`}>
+                              <div className="flex justify-between mb-1">
+                                <span className={`text-sm ${on ? 'text-gray-100' : 'text-gray-300 group-hover:text-gray-100'}`}>{r.reason}{isAdm && ' ›'}</span>
+                                <span className="text-xs font-mono text-gray-500">{pct}% · {r.txn.toLocaleString()}</span>
+                              </div>
+                              <div className="h-1.5 bg-white/5 rounded-full">
+                                <div style={{width:`${pct}%`,height:'100%',background:colour,borderRadius:'9999px',opacity:on?1:0.75}}/>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </CardBody>
+                </Card>
+              )
+            })}
+          </div>
+          )}
+
+          {isAdm && reasonDrill && !adjDrill && (() => {
+            const dirLabel = reasonDrill.type==='Increase' ? 'positive' : 'negative'
+            const key = `${reasonDrill.type}|${reasonDrill.reason}`
+            // Second level: one facility's commodities for that same reason.
+            if (reasonFac) {
+              const ready = reasonComms?.key === `${key}|${reasonFac.id}`
+              const rows = ready ? reasonComms.rows : null
+              const tot = (rows||[]).reduce((s2,r)=>s2+r.txn,0) || 1
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>{reasonFac.name} — “{reasonDrill.reason}” ({dirLabel})</CardTitle>
+                    <button onClick={()=>setReasonFac(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← All facilities</button>
+                  </CardHeader>
+                  {!rows ? <LoadingState/> : !rows.length ? <EmptyState message="Nothing recorded for this facility and reason."/> : (
+                    <div className="table-wrap"><table className="w-full text-sm">
+                      <thead><tr className="border-b border-white/8 bg-white/2">
+                        {['#','Commodity','Category','Adjustments','Quantity','Share'].map(h=>(
+                          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>{rows.map((r,i)=>{
+                        const c = commMeta[r.commodity_id]
+                        return (
+                          <tr key={r.commodity_id} className="border-b border-white/5 hover:bg-white/2">
+                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                            <td className="px-4 py-3 font-medium text-gray-100">{c?.name || r.commodity_id}</td>
+                            <td className="px-4 py-3"><CatBadge>{c?.category || 'Other'}</CatBadge></td>
+                            <td className="px-4 py-3 text-gray-300">{r.txn.toLocaleString()}</td>
+                            <td className={`px-4 py-3 font-mono text-sm ${reasonDrill.type==='Increase'?'text-green-400':'text-amber-400'}`}>
+                              {reasonDrill.type==='Increase'?'+':'−'}{r.qty.toLocaleString()} {c?.unit || ''}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-500">{Math.round((r.txn/tot)*100)||0}%</td>
+                          </tr>
+                        )
+                      })}</tbody>
+                    </table></div>
+                  )}
+                </Card>
+              )
+            }
+            // First level: which facilities gave that reason.
+            const ready = reasonFacs?.key === key
+            const rows = ready ? reasonFacs.rows : null
+            const tot = (rows||[]).reduce((s2,r)=>s2+r.txn,0) || 1
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle>“{reasonDrill.reason}” ({dirLabel}) — by facility</CardTitle>
+                  <button onClick={()=>setReasonDrill(null)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
+                </CardHeader>
+                {!rows ? <LoadingState/> : !rows.length ? <EmptyState message="No facility recorded this reason in the period."/> : (
+                  <div className="table-wrap"><table className="w-full text-sm">
+                    <thead><tr className="border-b border-white/8 bg-white/2">
+                      {['#','Facility','LGA','Adjustments','Share'].map(h=>(
+                        <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{rows.map((r,i)=>(
+                      <tr key={r.facility_id}
+                          onClick={()=>setReasonFac({id:r.facility_id,name:facMeta[r.facility_id]?.name||'—',lga:facMeta[r.facility_id]?.lga||'—'})}
+                          className="border-b border-white/5 hover:bg-white/5 cursor-pointer">
+                        <td className="px-4 py-3 font-mono text-xs text-gray-600">{i+1}</td>
+                        <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}<span className="text-gray-600 ml-1">›</span></td>
+                        <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
+                        <td className="px-4 py-3 text-gray-300">{r.txn.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-xs text-gray-500">{Math.round((r.txn/tot)*100)||0}%</td>
+                      </tr>
+                    ))}</tbody>
+                  </table></div>
+                )}
+              </Card>
+            )
+          })()}
+
+          <Card>
+            {adjDrill ? (() => {
+              const all = adjRows?.id===adjDrill.id ? adjRows.rows : []
+              const rows = adjType==='all' ? all : all.filter(r=>r.adjustment_type===adjType)
+              const base = (adjDrill.name||'commodity').replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'')
+              const headers = ['Date','Type','Quantity','Reason','Batch','Expiry','Facility','Adjusted by']
+              const expRows = () => rows.map(r=>[fmtDate(r.adjusted_at), r.adjustment_type, r.quantity,
+                r.reason||'(not stated)', r.batch_number||'—', r.expiry_date?fmtDate(r.expiry_date):'—',
+                r.facilities?.name||facMeta[r.facility_id]?.name||'—', r.adjusted_by||'—'])
+              const btnCls = "text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50"
+              return (
+                <>
+                  <CardHeader>
+                    <CardTitle>{adjDrill.name} — adjustments ({rows.length})</CardTitle>
+                    <div className="flex gap-2 flex-wrap">
+                      <button onClick={()=>exportCsv(`${base}_adjustments.csv`, headers, expRows())} disabled={!rows.length} className={btnCls}>Download CSV</button>
+                      <button onClick={()=>exportPdf(`${adjDrill.name} — adjustments`, null, headers, expRows(), new Set([2]))} disabled={!rows.length} className={btnCls}>Print / Save as PDF</button>
+                      <select value={adjType} onChange={e=>{setAdjType(e.target.value);setAdjRowPage(0)}} className={btnCls} title="Filter by direction">
+                        <option value="all">Both directions ({all.length})</option>
+                        <option value="Increase">Positive ({all.filter(r=>r.adjustment_type==='Increase').length})</option>
+                        <option value="Decrease">Negative ({all.filter(r=>r.adjustment_type==='Decrease').length})</option>
+                      </select>
+                      <button onClick={()=>{setAdjDrill(null);setAdjType('all')}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← All commodities</button>
+                    </div>
+                  </CardHeader>
+                  {adjRows?.id!==adjDrill.id ? <LoadingState/> : !rows.length ? (
+                    <EmptyState message="No adjustments of this commodity in this period."/>
+                  ) : (
+                    <div className="table-wrap"><table className="w-full text-sm">
+                      <thead><tr className="border-b border-white/8 bg-white/2">
+                        {headers.map(h=>(
+                          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>{pageSlice(rows, adjRowPage).slice.map(r=>{
+                        const up = r.adjustment_type==='Increase'
+                        return (
+                          <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                            <td className="px-4 py-3 text-gray-300 whitespace-nowrap">{fmtDate(r.adjusted_at)}</td>
+                            <td className={`px-4 py-3 text-xs font-medium ${up?'text-green-400':'text-amber-400'}`}>{up?'Positive':'Negative'}</td>
+                            <td className={`px-4 py-3 font-mono text-sm ${up?'text-green-400':'text-amber-400'}`}>
+                              {up?'+':'−'}{Number(r.quantity||0).toLocaleString()} {adjDrill.unit||''}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-400">{r.reason||'(not stated)'}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{r.expiry_date?fmtDate(r.expiry_date):'—'}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500">{r.facilities?.name||facMeta[r.facility_id]?.name||'—'}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500">{r.adjusted_by||'—'}</td>
+                          </tr>
+                        )
+                      })}</tbody>
+                    </table>
+                    <Pagination pager={pageSlice(rows, adjRowPage)} onPage={setAdjRowPage} unit="adjustments"/>
+                    </div>
+                  )}
+                </>
+              )
+            })() : (
+              <>
+                <CardHeader>
+                  <CardTitle>{
+                    adjMetric==='positive' ? 'Commodities adjusted — positive only' :
+                    adjMetric==='negative' ? 'Commodities adjusted — negative only' :
+                                             'Commodities adjusted'
+                  }</CardTitle>
+                  <div className="flex items-center gap-3">
+                    {adjMetric && <button onClick={()=>{setAdjMetric(null);setAdjCommPage(0)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-2 py-1">Clear filter</button>}
+                    <span className="text-xs text-gray-500">click a commodity for its adjustments &amp; reasons</span>
+                  </div>
+                </CardHeader>
+                {!adjRowsFiltered.length ? <EmptyState message="Nothing matching this filter in the period."/> : (
+                  <div className="table-wrap"><table className="w-full text-sm">
+                    <thead><tr className="border-b border-white/8 bg-white/2">
+                      {['#','Commodity','Category','Adjustments','Positive','Negative','Quantity +','Quantity −'].map(h=>(
+                        <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{pageSlice(adjRowsFiltered, adjCommPage).slice.map((c,i)=>(
+                      <tr key={c.commodity_id}
+                          onClick={()=>{setAdjType('all');setAdjRowPage(0);setAdjDrill({id:c.commodity_id,name:c.name,unit:c.unit})}}
+                          className="border-b border-white/5 hover:bg-white/5 cursor-pointer">
+                        <td className="px-4 py-3 font-mono text-xs text-gray-600">{pageSlice(adjRowsFiltered, adjCommPage).offset + i + 1}</td>
+                        <td className="px-4 py-3 font-medium text-gray-100">{c.name} ›</td>
+                        <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
+                        <td className="px-4 py-3 text-gray-300">{c.txn.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-gray-400">{c.upTxn.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-gray-400">{c.downTxn.toLocaleString()}</td>
+                        <td className="px-4 py-3 font-mono text-sm text-green-400">{c.up ? `+${c.up.toLocaleString()} ${c.unit}` : '—'}</td>
+                        <td className="px-4 py-3 font-mono text-sm text-amber-400">{c.down ? `−${c.down.toLocaleString()} ${c.unit}` : '—'}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                  <Pagination pager={pageSlice(adjRowsFiltered, adjCommPage)} onPage={setAdjCommPage} unit="commodities"/>
+                  </div>
+                )}
+              </>
+            )}
+          </Card>
+
+          {adjMetric && !adjDrill && isAdm && (() => {
+            const cfg = adjMetric==='positive'
+              ? { title: 'Positive adjustments', fac: adjData.byFacUp,   label: 'Positive adjustments' }
+              : { title: 'Negative adjustments', fac: adjData.byFacDown, label: 'Negative adjustments' }
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle>{cfg.title} — by LGA &amp; facility</CardTitle>
+                  <button onClick={()=>{setAdjMetric(null);setLgaDrill(null);setFacDrill(null)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← Close</button>
+                </CardHeader>
+                <FacilityLgaBreakdown rows={cfg.fac} mode="count" unitsLabel={cfg.label} leaf="adjustment"/>
+              </Card>
+            )
+          })()}
+
+        </>
+      )})()}
 
       {!loading && tab==='expiry' && (
         <>
@@ -727,7 +2059,7 @@ export function Monitoring() {
                           <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                         ))}
                       </tr></thead>
-                      <tbody>{expiryData.map(r=>{
+                      <tbody>{pageSlice(expiryData, expBatchPage).slice.map(r=>{
                         const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
                         const u=dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
                         return (
@@ -741,51 +2073,140 @@ export function Monitoring() {
                           </tr>
                         )
                       })}</tbody>
-                    </table></div>
+                    </table>
+                    <Pagination pager={pageSlice(expiryData, expBatchPage)} onPage={setExpBatchPage} unit="batches"/>
+                    </div>
                   )}
                 </Card>
               ) : (() => {
-                /* Admin view: one flat row per expiring batch — facility & commodity side by
-                   side, filtered by the urgency dropdown / metric cards, with CSV download. */
+                /* Admin view, structured like Consumption/Intake/Adjustments:
+                   COMMODITIES first, then the facilities holding that commodity's
+                   expiring stock, then its batches. The flat batch list this replaced
+                   put every batch across every facility on one unpaged page — with
+                   thousands of lots that is unreadable and slow, and it could not
+                   answer "which commodity is most at risk" without manual scanning. */
                 const urgencyLabel = {all:'All expiring',expired:'Expired',critical:'Critical (≤30d)',warning:'Warning (≤90d)',monitor:'Monitor (>90d)'}[expUrgency]
                 const rows = (expUrgency==='all' ? expiryData : expBucketRows(expUrgency)).slice()
                   .sort((a,b)=>new Date(a.expiry_date)-new Date(b.expiry_date))
-                const download = () => {
+                const daysLeft = r => Math.round((new Date(r.expiry_date)-today)/86400000)
+                const urg = dL => dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+
+                const download = (list, name) => {
                   const headers=['Facility','LGA','Commodity','Category','Batch','Expiry date','Days left','Qty','Unit','Urgency']
-                  const csv=rows.map(r=>{const dL=Math.round((new Date(r.expiry_date)-today)/86400000);const u=dL<0?'Expired':dL<=30?'Critical':dL<=90?'Warning':'Monitor';return [facMeta[r.facility_id]?.name||'—',facMeta[r.facility_id]?.lga||'—',r.commodities?.name||'—',r.commodities?.category||'—',r.batch_number||'',fmtDate(r.expiry_date),dL,r.quantity,r.commodities?.unit||'',u]})
-                  exportCsv(`expiry_${expUrgency}_${expPeriod}d.csv`, headers, csv)
+                  const csv=list.map(r=>[facMeta[r.facility_id]?.name||'—',facMeta[r.facility_id]?.lga||'—',
+                    r.commodities?.name||'—',r.commodities?.category||'—',r.batch_number||'',fmtDate(r.expiry_date),
+                    daysLeft(r),r.quantity,r.commodities?.unit||'',urg(daysLeft(r)).l])
+                  exportCsv(name, headers, csv)
                 }
+                const btnCls = "text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50"
+
+                // ── one commodity: the facilities holding it, and its batches ──
+                if (expCommDrill) {
+                  const mine = rows.filter(r => r.commodity_id === expCommDrill.id)
+                  const byFac = {}
+                  mine.forEach(r => {
+                    const f = byFac[r.facility_id] ||= { facility_id:r.facility_id, batches:0, qty:0, soonest:null }
+                    f.batches += 1; f.qty += (r.quantity||0)
+                    if (!f.soonest || new Date(r.expiry_date) < new Date(f.soonest)) f.soonest = r.expiry_date
+                  })
+                  const facList = Object.values(byFac).sort((a,b)=>new Date(a.soonest)-new Date(b.soonest))
+                  const pg = pageSlice(mine, expBatchPage)
+                  // ONE table, not two. A facility summary above a batch list repeated
+                  // itself line for line whenever a facility held a single batch —
+                  // which is the common case. The batch rows already name the facility;
+                  // they only lacked the LGA, and the facility count is in the heading.
+                  return (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>
+                          {expCommDrill.name} — {urgencyLabel.toLowerCase()} stock
+                          <span className="text-gray-500 font-normal"> · {mine.length} {mine.length===1?'batch':'batches'} across {facList.length} {facList.length===1?'facility':'facilities'}</span>
+                        </CardTitle>
+                        <div className="flex gap-2 flex-wrap">
+                          <button onClick={()=>download(mine, `${(expCommDrill.name||'commodity').replace(/[^a-z0-9]+/gi,'_')}_expiring.csv`)} disabled={!mine.length} className={btnCls}>Download CSV</button>
+                          <button onClick={()=>{setExpCommDrill(null);setExpBatchPage(0)}} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">← All commodities</button>
+                        </div>
+                      </CardHeader>
+                      {!mine.length ? <EmptyState message="No expiring batches for this commodity."/> : (
+                        <div className="table-wrap"><table className="w-full text-sm">
+                          <thead><tr className="border-b border-white/8 bg-white/2">
+                            {['#','Facility','LGA','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
+                              <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+                            ))}
+                          </tr></thead>
+                          <tbody>{pg.slice.map((r,i)=>{
+                            const dL=daysLeft(r), u=urg(dL)
+                            return (
+                              <tr key={`${r.facility_id}|${r.batch_number}|${r.expiry_date}`} className="border-b border-white/5 hover:bg-white/2">
+                                <td className="px-4 py-3 font-mono text-xs text-gray-600">{pg.offset+i+1}</td>
+                                <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}</td>
+                                <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
+                                <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'(no batch)'}</td>
+                                <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
+                                <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
+                                <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
+                                <td className={`px-4 py-3 text-xs font-semibold ${u.c}`}>{u.l}</td>
+                              </tr>
+                            )
+                          })}</tbody>
+                        </table>
+                        <Pagination pager={pg} onPage={setExpBatchPage} unit="batches"/>
+                        </div>
+                      )}
+                    </Card>
+                  )
+                }
+
+                // ── all commodities with expiring stock, worst first ──
+                const byComm = {}
+                rows.forEach(r => {
+                  const c = byComm[r.commodity_id] ||= {
+                    commodity_id: r.commodity_id, name: r.commodities?.name || '—',
+                    cat: r.commodities?.category || 'Other', unit: r.commodities?.unit || '',
+                    batches: 0, qty: 0, facilities: new Set(), soonest: null,
+                  }
+                  c.batches += 1; c.qty += (r.quantity||0); c.facilities.add(r.facility_id)
+                  if (!c.soonest || new Date(r.expiry_date) < new Date(c.soonest)) c.soonest = r.expiry_date
+                })
+                // Soonest expiry first: the ranking that matches what the tab is for.
+                const commList = Object.values(byComm).sort((a,b)=>new Date(a.soonest)-new Date(b.soonest))
+                const pg = pageSlice(commList, expCommPage)
                 return (
                   <Card>
                     <CardHeader>
-                      <CardTitle>{urgencyLabel} batches — by facility <span className="text-gray-500 font-normal">· {rows.length} {rows.length===1?'batch':'batches'}</span></CardTitle>
-                      <button onClick={download} disabled={rows.length===0} className="text-xs text-gray-300 hover:text-white border border-white/10 rounded px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5">↓ Download CSV</button>
+                      <CardTitle>{urgencyLabel} — by commodity <span className="text-gray-500 font-normal">· {rows.length} {rows.length===1?'batch':'batches'}</span></CardTitle>
+                      <div className="flex items-center gap-3">
+                        <button onClick={()=>download(rows, `expiring-batches_${expUrgency}.csv`)} disabled={!rows.length} className={btnCls}>Download CSV</button>
+                        <span className="text-xs text-gray-500">click a commodity for its facilities</span>
+                      </div>
                     </CardHeader>
-                    {rows.length===0 ? <EmptyState message="No batches in this bucket ✓"/> : (
+                    {!commList.length ? <EmptyState message="No expiring batches in this view ✓"/> : (
                       <div className="table-wrap"><table className="w-full text-sm">
                         <thead><tr className="border-b border-white/8 bg-white/2">
-                          {['Facility','LGA','Commodity','Category','Batch','Expiry date','Days left','Qty','Urgency'].map(h=>(
+                          {['#','Commodity','Category','Facilities','Batches','Quantity','Soonest expiry','Urgency'].map(h=>(
                             <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
                           ))}
                         </tr></thead>
-                        <tbody>{rows.map(r=>{
-                          const dL=Math.round((new Date(r.expiry_date)-today)/86400000)
-                          const u=dL<0?{l:'Expired',c:'text-red-500'}:dL<=30?{l:'Critical',c:'text-red-400'}:dL<=90?{l:'Warning',c:'text-amber-400'}:{l:'Monitor',c:'text-blue-400'}
+                        <tbody>{pg.slice.map((c,i)=>{
+                          const dL=Math.round((new Date(c.soonest)-today)/86400000), u=urg(dL)
                           return (
-                            <tr key={`${r.facility_id}|${r.commodity_id}|${r.batch_number}|${r.expiry_date}`} className="border-b border-white/5 hover:bg-white/2">
-                              <td className="px-4 py-3 font-medium text-gray-100">{facMeta[r.facility_id]?.name||'—'}</td>
-                              <td className="px-4 py-3 text-xs text-gray-500">{facMeta[r.facility_id]?.lga||'—'}</td>
-                              <td className="px-4 py-3 text-gray-200">{r.commodities?.name||'—'}</td>
-                              <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
-                              <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.batch_number||'—'}</td>
-                              <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(r.expiry_date)}</td>
-                              <td className={`px-4 py-3 font-mono text-sm font-semibold ${u.c}`}>{dL<0?`${-dL}d ago`:`${dL}d`}</td>
-                              <td className="px-4 py-3 font-mono text-sm text-gray-300">{r.quantity} {r.commodities?.unit||''}</td>
-                              <td className="px-4 py-3"><span className={`text-xs font-semibold ${u.c}`}>{u.l}</span></td>
+                            <tr key={c.commodity_id}
+                                onClick={()=>{setExpBatchPage(0);setExpCommDrill({id:c.commodity_id,name:c.name,unit:c.unit})}}
+                                className="border-b border-white/5 hover:bg-white/5 cursor-pointer">
+                              <td className="px-4 py-3 font-mono text-xs text-gray-600">{pg.offset+i+1}</td>
+                              <td className="px-4 py-3 font-medium text-gray-100">{c.name}<span className="text-gray-600 ml-1">›</span></td>
+                              <td className="px-4 py-3"><CatBadge>{c.cat}</CatBadge></td>
+                              <td className="px-4 py-3 text-gray-300">{c.facilities.size}</td>
+                              <td className="px-4 py-3 text-gray-300">{c.batches}</td>
+                              <td className="px-4 py-3 font-mono text-sm text-gray-300">{c.qty.toLocaleString()} {c.unit}</td>
+                              <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtDate(c.soonest)}</td>
+                              <td className={`px-4 py-3 text-xs font-semibold ${u.c}`}>{u.l}</td>
                             </tr>
                           )
                         })}</tbody>
-                      </table></div>
+                      </table>
+                      <Pagination pager={pg} onPage={setExpCommPage} unit="commodities"/>
+                      </div>
                     )}
                   </Card>
                 )

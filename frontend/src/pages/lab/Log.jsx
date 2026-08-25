@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
+import { Pagination } from '../../components/ui/Pagination'
 import { BinCardModal } from '../../components/BinCardModal'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { Reports } from './Reports'
@@ -21,7 +22,14 @@ export function Log() {
   const [typeFilter, setTypeFilter] = useState('')
   const [transferScope, setTransferScope] = useState('')   // '' | external | internal — only meaningful when typeFilter==='transfer'
   const [period, setPeriod]         = useState(0)   // 0 = all time; otherwise days back
+  const PAGE_SIZE = 50
   const [allRecords, setAllRecords] = useState([])
+  // Server-side paging. The feed is merged in SQL, so a page is an exact slice of
+  // one ordered stream — the old client-side merge (newest N of each log, merged,
+  // cut to N) could not be paged: whatever fell past a single log's cap was
+  // silently dropped, and rows would have gone missing from the middle of page 2.
+  const [logPage, setLogPage] = useState(0)
+  const [logTotal, setLogTotal] = useState(0)
   const [loading, setLoading]       = useState(true)
   const [editRecord, setEditRecord] = useState(null)
   const [binCard, setBinCard]       = useState(null)   // { fid, cid, name } → open bin card
@@ -54,49 +62,52 @@ export function Log() {
     // sections, so don't scope by a single facility or the full commodity list.
     const scopeFid = isAdmin ? adminFid : fid
     const from = period ? new Date(Date.now() - period*86400000).toISOString() : undefined
-    const rowLimit = period ? 500 : 50
-    const logParams = {
+    const res = await api.activity({
       facility_id: scopeFid || undefined,
       facility_ids: scopedFacIds || undefined,
-      commodity_ids: !isAdmin ? commIds : undefined,
+      commodity_ids: !isAdmin && commIds && commIds.length ? commIds : undefined,
       section: commoditySection || undefined,
       from,
-      limit: rowLimit,
-    }
-    const [disp, intake, adj, transfers] = await Promise.all([
-      (!typeFilter||typeFilter==='dispense')    ? api.dispense.history(logParams).catch(()=>[]) : [],
-      (!typeFilter||typeFilter==='intake')      ? api.intake.history(logParams).catch(()=>[]) : [],
-      (!typeFilter||typeFilter==='adjustment')  ? api.adjustments.history(logParams).catch(()=>[]) : [],
-      // section already scopes transfers; facility_id covers both sending/receiving sides.
-      (!typeFilter||typeFilter==='transfer')    ? api.transfers.list({ facility_id: scopeFid || undefined, section: commoditySection || undefined, date_field: from?'initiated_at':undefined, from, limit: rowLimit }).catch(()=>[]) : [],
-    ])
-    // Admins get a cross-facility feed; hide internal movements — store→dispensary
-    // (same facility) and store→SDP/DSD site dispatches (e.g. "Main Lab", no distinct
-    // receiving facility) — so the feed isn't bulky. External redistributions have
-    // two different facilities and are kept.
-    const extTransfers = isAdmin
-      ? transfers.filter(t => t.sending_facility_id && t.receiving_facility_id && t.sending_facility_id !== t.receiving_facility_id)
-      : transfers
-    let merged = [
-      ...disp.map(r=>({...r,_type:'dispense',_time:r.dispensed_at})),
-      ...intake.map(r=>({...r,_type:'intake',_time:r.received_at})),
-      ...adj.map(r=>({...r,_type:'adjustment',_time:r.adjusted_at})),
-      ...extTransfers.map(r=>({...r,_type:'transfer',_time:r.resolved_at||r.initiated_at})),
-    ].sort((a,b)=>new Date(b._time)-new Date(a._time))
-    // Client-side narrow to the selected LGA/state set (covers transfers, whose
-    // route scopes by jurisdiction rather than the facility_ids view-filter).
-    if (scopedFacIds) {
-      const set = new Set(scopedFacIds)
-      merged = merged.filter(r => r._type==='transfer'
-        ? (set.has(r.sending_facility_id) || set.has(r.receiving_facility_id))
-        : set.has(r.facility_id))
-    }
-    merged = merged.slice(0, period ? 500 : 100)
-    setAllRecords(merged)
+      types: typeFilter || undefined,
+      category: (typeof catFilter !== 'undefined' && catFilter) || undefined,
+      // Admins span every facility, so internal store→dispensary and SDP/DSD
+      // moves would crowd the feed without being redistributions.
+      external_only: isAdmin ? 1 : undefined,
+      limit: PAGE_SIZE,
+      offset: logPage * PAGE_SIZE,
+    }).catch(() => null)
+
+    // Mapped back onto the per-log shape the row renderer and EditModal already
+    // read, so the feed swap does not ripple through the rendering code.
+    const rows = ((res && res.data) || []).map(r => ({
+      id: r.id,
+      _type: r.type,
+      _time: r.at,
+      facility_id: r.facility_id,
+      commodity_id: r.commodity_id,
+      quantity: r.quantity,
+      notes: r.notes,
+      status: r.status,
+      reason: r.reason,
+      supplier_source: r.supplier_source,
+      adjustment_type: r.type === 'adjustment' ? r.status : undefined,
+      dispensed_by: r.type === 'dispense' ? r.actor : undefined,
+      received_by: r.type === 'intake' ? r.actor : undefined,
+      adjusted_by: r.type === 'adjustment' ? r.actor : undefined,
+      sending_facility_id: r.sending_facility_id,
+      receiving_facility_id: r.receiving_facility_id,
+      sending_facility_name: r.sending_facility_name,
+      receiving_facility_name: r.receiving_facility_name,
+      commodities: { id: r.commodity_id, name: r.commodity_name, category: r.category, unit: r.unit },
+      facilities: { name: r.facility_name },
+    }))
+    setAllRecords(rows)
+    setLogTotal((res && res.total) || 0)
     setLoading(false)
   }
 
-  useEffect(() => { if(fid || isAdmin) loadAll() }, [typeFilter, period])
+  useEffect(() => { setLogPage(0) }, [typeFilter, period])
+  useEffect(() => { if(fid || isAdmin) loadAll() }, [typeFilter, period, logPage])
 
   // Keep a ref to the latest loader so the realtime subscription always reloads
   // with the current filters/scope without re-subscribing on every change.
@@ -189,6 +200,7 @@ export function Log() {
           </div>
         </CardHeader>
         {loading && allRecords.length===0 ? <LoadingState/> : shownRecords.length===0 ? <EmptyState message="No activity recorded yet."/> : (
+          <>
           <div className="table-wrap"><table className="w-full text-sm">
             <thead><tr className="border-b border-white/8 bg-white/2">
               {['Date','Type','Commodity',...(isAdmin?['Facility']:[]),'Qty','Details',...(canManage?['']:[''])].map((h,i)=>(
@@ -252,6 +264,19 @@ export function Log() {
               )
             })}</tbody>
           </table></div>
+            {/* Page numbers come from the feed's `total`, so they count the whole
+                period rather than the rows held in memory. */}
+            <Pagination
+              pager={{
+                page: logPage,
+                pages: Math.max(1, Math.ceil(logTotal / PAGE_SIZE)),
+                total: logTotal,
+                from: logTotal ? logPage * PAGE_SIZE + 1 : 0,
+                to: Math.min(logTotal, (logPage + 1) * PAGE_SIZE),
+              }}
+              onPage={setLogPage}
+              unit="records"/>
+          </>
         )}
       </Card>
       </>
