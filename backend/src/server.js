@@ -8,7 +8,10 @@ import { serviceAuth } from './middleware/serviceAuth.js';
 import authRouter from './routes/auth.js';
 import catalogueRouter from './routes/catalogue.js';
 import inboundRequestsRouter from './routes/inboundRequests.js';
+import inboundBalancesRouter from './routes/inboundBalances.js';
 import requestsRouter from './routes/requests.js';
+import schemesRouter from './routes/schemes.js';
+import accountsRouter from './routes/accounts.js';
 import vendorsRouter from './routes/vendors.js';
 import commoditiesRouter from './routes/commodities.js';
 import batchesRouter from './routes/batches.js';
@@ -32,10 +35,13 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRouter);
 app.use('/api/catalogue', serviceAuth, catalogueRouter);
 app.use('/inbound/requests', serviceAuth, inboundRequestsRouter);
+app.use('/inbound', serviceAuth, inboundBalancesRouter);
 app.use('/api', authMiddleware);
 
 app.use('/api/requests', requestsRouter);
 
+app.use('/api/schemes', schemesRouter);
+app.use('/api/accounts', accountsRouter);
 app.use('/api/vendors', vendorsRouter);
 app.use('/api/commodities', commoditiesRouter);
 app.use('/api/batches', batchesRouter);

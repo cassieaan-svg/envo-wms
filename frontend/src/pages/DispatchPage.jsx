@@ -51,6 +51,16 @@ export default function DispatchPage({ isAdmin }) {
   const [facilityId, setFacilityId] = useState('');
   const [lines, setLines] = useState([]);
   const [notes, setNotes] = useState('');
+  // A direct dispatch has no facility request behind it, so the fund IS the warehouse's
+  // decision here — unlike fulfilling a request, which inherits the facility's choice.
+  // Not defaulted: which fund an issue is made against decides who pays for it.
+  const [scheme, setScheme] = useState('');
+  // Remembered locally: the same officer usually dispatches several orders in a row,
+  // and re-typing a name every time is how it ends up left blank.
+  const [dispatchedBy, setDispatchedBy] = useState(
+    () => localStorage.getItem('wms_dispatched_by') || ''
+  );
+  const [schemes, setSchemes] = useState([]);
   const [history, setHistory] = useState([]);
   // Empty means the whole log. A date narrows it to that day, which is the same
   // History affordance every other Operations page has.
@@ -137,9 +147,26 @@ export default function DispatchPage({ isAdmin }) {
 
   const filled = lines.filter((l) => l.commodityId && Number(l.quantity) > 0 && l.unitPrice !== '');
 
+  useEffect(() => {
+    let off = false;
+    api.schemes.list().then((r) => { if (!off) setSchemes(r || []); }).catch(() => {});
+    return () => { off = true; };
+  }, []);
+
+  // Changing the facility clears the scheme. The fund is a decision about THIS order, so
+  // carrying it across to a different facility risks issuing on a fund that was chosen
+  // for someone else — and the DRF is the one that bills them. Better to re-pick.
+  // Every path that changes the facility goes through here, including "Clear filters".
+  function changeFacility(next) {
+    setFacilityId(next);
+    setScheme('');
+  }
+
   async function submit(event) {
     event.preventDefault();
     if (filled.length === 0) return setError('add at least one complete commodity line');
+    if (!scheme) return setError('choose the scheme this dispatch is issued against');
+    if (!dispatchedBy.trim()) return setError('enter who is dispatching this order');
 
     setBusy(true);
     setError(null);
@@ -151,12 +178,16 @@ export default function DispatchPage({ isAdmin }) {
           unitPrice: Number(l.unitPrice),
         })),
         notes: notes || null,
+        scheme,
+        dispatchedBy: dispatchedBy.trim(),
       });
+      localStorage.setItem('wms_dispatched_by', dispatchedBy.trim());
       setNotice(
         `dispatched ${order.items.length} line(s) totalling ${money(order.total_amount)} — order #${order.id}`
       );
       setLines([]);
       setNotes('');
+      setScheme('');
       setPicking(true);
       setViewOrder(order);
       await Promise.all([loadHistory(), loadReference()]);
@@ -189,7 +220,29 @@ export default function DispatchPage({ isAdmin }) {
       </Banner>
 
       <div className="card">
-        <FacilityPicker facilities={facilities} value={facilityId} onChange={setFacilityId} />
+        {/* Scheme sits here, above the facility and outside the "pick a facility" branch,
+            so it is visible from the moment the page opens. It was originally at the
+            foot of the order form beside "Notes (optional)" — which buried the one
+            decision on this page that determines whether the facility gets billed. */}
+        <div className="dispatch-filters">
+        <Field label="Scheme *">
+          <select value={scheme} onChange={(e) => setScheme(e.target.value)} required>
+            <option value="">Select scheme…</option>
+            {schemes.map((x) => (
+              <option key={x.key} value={x.key}>{x.label}</option>
+            ))}
+          </select>
+          {/* creates_debt comes from the scheme row — the UI never hardcodes which fund
+              bills the facility. */}
+          {schemes.find((x) => x.key === scheme)?.creates_debt && (
+            <div className="muted">This issue will be billed to the facility.</div>
+          )}
+          {!scheme && (
+            <div className="muted">Choose the fund this dispatch is issued against.</div>
+          )}
+        </Field>
+        <FacilityPicker facilities={facilities} value={facilityId} onChange={changeFacility} />
+        </div>
         <button
           className="btn"
           style={{ marginTop: 10 }}
@@ -201,7 +254,7 @@ export default function DispatchPage({ isAdmin }) {
           <button
             className="btn"
             style={{ marginTop: 10, marginLeft: 8 }}
-            onClick={() => setFacilityId('')}
+            onClick={() => changeFacility('')}
           >
             Clear filters
           </button>
@@ -293,6 +346,13 @@ export default function DispatchPage({ isAdmin }) {
               </div>
 
               <div className="toolbar" style={{ marginTop: 14, marginBottom: 0 }}>
+                <Field label="Dispatched by *">
+                  <input
+                    value={dispatchedBy}
+                    onChange={(e) => setDispatchedBy(e.target.value)}
+                    placeholder="who is issuing this order"
+                  />
+                </Field>
                 <Field label="Notes (optional)">
                   <input
                     value={notes}
@@ -303,7 +363,7 @@ export default function DispatchPage({ isAdmin }) {
                 <button
                   className="btn primary"
                   type="submit"
-                  disabled={busy || filled.length === 0}
+                  disabled={busy || filled.length === 0 || !scheme || !dispatchedBy.trim()}
                   style={{ marginLeft: 'auto' }}
                 >
                   {busy ? 'dispatching…' : `Dispatch ${filled.length} line(s)`}

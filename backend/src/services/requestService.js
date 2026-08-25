@@ -12,7 +12,7 @@ export class RequestService {
   // EnVo POSTs { envoRequestId, envoFacilityId, facilityName, items:[{ wmsCommodityId, quantity }] }.
   // Resolve the facility, price each line, store the request 'pending'. Idempotent on
   // envo_request_id (a resubmit returns the existing row). Returns the created/existing request.
-  static async receiveFromEnvo({ envoRequestId, envoFacilityId, facilityName, items, requestedBy, requesterPhone, notes }) {
+  static async receiveFromEnvo({ envoRequestId, envoFacilityId, facilityName, items, requestedBy, requesterPhone, notes, scheme }) {
     if (!envoRequestId) { const e = new Error('envoRequestId is required'); e.status = 400; throw e; }
     if (!Array.isArray(items) || !items.length) { const e = new Error('items are required'); e.status = 400; throw e; }
 
@@ -61,10 +61,14 @@ export class RequestService {
       const { rows } = await client.query(
         `INSERT INTO requests
            (envo_request_id, envo_facility_id, facility_id, status, total_amount,
-            requested_by, requester_phone, notes)
-         VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7) RETURNING *`,
+            requested_by, requester_phone, notes, scheme)
+         VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, coalesce($8, 'drf')) RETURNING *`,
         [envoRequestId, envoFacilityId ?? null, facility?.id ?? null, total,
-         requestedBy ?? null, requesterPhone ?? null, notes ?? null]
+         requestedBy ?? null, requesterPhone ?? null, notes ?? null,
+         // The fund the FACILITY raised this against. Binding — the warehouse fills from
+         // it or rejects the request. 'drf' only for a request from an EnVo old enough
+         // not to send one.
+         scheme ?? null]
       );
       const req = rows[0];
       for (const l of lines) {
@@ -95,7 +99,7 @@ export class RequestService {
     const { rows } = await query(
       `SELECT r.id, r.envo_request_id, r.status, r.total_amount, r.created_at, r.dispatched_at,
               r.requested_by, r.requester_phone, r.picked_by, r.carrier_name, r.carrier_phone,
-              r.received_by, r.received_at,
+              r.received_by, r.received_at, r.scheme,
               f.name AS facility_name, f.state, f.lga,
               COUNT(i.id)::int AS line_count, COALESCE(SUM(i.quantity),0)::int AS total_quantity
          FROM requests r
@@ -205,6 +209,11 @@ export class RequestService {
   // Fulfil: record the dispatched quantities + price the order, mark dispatched, and tell
   // EnVo. (Batch-level FEFO depletion via DispatchService is deferred until the warehouse
   // holds batch stock — it currently holds none.)
+  // NOTE: fulfil takes no `scheme`. A request is filled from the fund the FACILITY
+  // raised it against, or it is rejected so the facility re-raises. Letting the store
+  // move an order onto another fund would change who pays for it — a free BHCPF issue
+  // becoming a DRF debt — without the facility ever agreeing. The warehouse does choose
+  // a fund for a direct dispatch it raises itself (DispatchService.createOrder).
   static async fulfil(id, { dispatchedBy, carrierName, carrierPhone, pickedBy, items } = {}) {
     // Stock is not released to an unnamed carrier — the pair is the handover record.
     if (!carrierName?.trim()) { const e = new Error("the carrier's name is required"); e.status = 400; throw e; }
@@ -228,6 +237,7 @@ export class RequestService {
       // the picker is captured here instead; an existing picked_by is left alone.
       const picker = req.picked_by || pickedBy?.trim() || null;
       if (!picker) { const e = new Error('the name of the person who picked this order is required'); e.status = 400; throw e; }
+
 
       // Short-dispatch: allocate each line FEFO up to what's physically on hand and record
       // the actual amount shipped. A line the warehouse can't cover yet ships 0 and stays
@@ -286,10 +296,12 @@ export class RequestService {
       // batch_movements; this is the order-level document over the same handover.
       const orderTotal = round2(dispatchedLines.reduce((s, l) => s + l.lineTotal, 0));
       const { rows: ord } = await client.query(
-        `INSERT INTO dispatch_orders (facility_id, total_amount, dispatched_by, notes)
-         VALUES ($1, $2, $3, $4) RETURNING id`,
+        `INSERT INTO dispatch_orders (facility_id, total_amount, dispatched_by, notes, scheme)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
         [req.facility_id, orderTotal, dispatchedBy ?? null,
-         `Essential request #${dispatched.id}${dispatched.envo_request_id ? ` (${dispatched.envo_request_id})` : ''}`]);
+         `Essential request #${dispatched.id}${dispatched.envo_request_id ? ` (${dispatched.envo_request_id})` : ''}`,
+         // The dispatch order inherits the request's fund; it is not a separate choice.
+         req.scheme]);
       const dispatchOrderId = ord[0].id;
       for (const l of dispatchedLines) {
         await client.query(

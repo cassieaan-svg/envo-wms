@@ -130,7 +130,11 @@ router.post('/:id/dispatch-orders', requireAdmin, async (req, res, next) => {
       facilityId: Number(req.params.id),
       items,
       notes: notes || null,
-      dispatchedBy: req.user.username,
+      // The person who actually issued the stock, as typed on the form. Store logins
+      // are shared, so stamping the account name says nothing about who handed it over.
+      dispatchedBy: (typeof req.body?.dispatchedBy === 'string' && req.body.dispatchedBy.trim())
+        || req.user?.fullName || req.user?.username || null,
+      scheme: req.body?.scheme,   // the fund this direct issue is made against
     });
     return res.status(201).json(order);
   } catch (err) {

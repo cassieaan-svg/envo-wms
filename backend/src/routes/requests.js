@@ -35,6 +35,7 @@ router.patch('/:id/picking', async (req, res) => {
   try {
     const request = await RequestService.markPicking(Number(req.params.id), {
       pickedBy: req.body?.pickedBy,
+
     });
     if (!request) return res.status(409).json({ error: 'request is not pending' });
     res.json(request);
@@ -45,11 +46,14 @@ router.patch('/:id/picking', async (req, res) => {
   }
 });
 
-/** POST /api/requests/:id/fulfil — dispatch. Body: { carrierName, carrierPhone, pickedBy? }. */
+/** POST /api/requests/:id/fulfil — dispatch. Body: { carrierName, carrierPhone, pickedBy?, dispatchedBy? }. */
 router.post('/:id/fulfil', async (req, res) => {
   try {
     const request = await RequestService.fulfil(Number(req.params.id), {
-      dispatchedBy: who(req),
+      // Typed name wins; who(req) (the login) is only the fallback. Store logins are
+      // shared, so the account name says nothing about who released the stock.
+      dispatchedBy: (typeof req.body?.dispatchedBy === 'string' && req.body.dispatchedBy.trim())
+        || who(req),
       carrierName: req.body?.carrierName,
       carrierPhone: req.body?.carrierPhone,
       pickedBy: req.body?.pickedBy,
@@ -67,7 +71,8 @@ router.post('/:id/fulfil', async (req, res) => {
 router.post('/:id/reject', async (req, res) => {
   try {
     const request = await RequestService.reject(Number(req.params.id), {
-      rejectedBy: who(req),
+      rejectedBy: (typeof req.body?.rejectedBy === 'string' && req.body.rejectedBy.trim())
+        || who(req),
       reason: req.body?.reason,
     });
     res.json(request);

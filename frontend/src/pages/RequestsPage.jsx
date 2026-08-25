@@ -180,6 +180,7 @@ export default function RequestsPage() {
                   <th className="wrap">Facility</th>
                   <th className="wrap">Requested by</th>
                   <th>Status</th>
+                  <th>Scheme</th>
                   <th className="num">Lines</th>
                   <th className="num">Units</th>
                   <th className="num">Total</th>
@@ -202,6 +203,10 @@ export default function RequestsPage() {
                       <span className={`badge ${STATUS_BADGE[r.status] || 'inactive'}`}>
                         {STATUS_LABEL[r.status] || r.status}
                       </span>
+                    </td>
+                    <td>
+                      {/* The fund the facility raised it against. */}
+                      {r.scheme || <span className="muted">—</span>}
                     </td>
                     <td className="num">{r.line_count}</td>
                     <td className="num">{qty(r.total_quantity)}</td>
@@ -271,15 +276,33 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
   const [pickedBy, setPickedBy] = useState(request.picked_by || '');
   const [carrierName, setCarrierName] = useState(request.carrier_name || '');
   const [carrierPhone, setCarrierPhone] = useState(request.carrier_phone || '');
+  // Who released the stock. Remembered locally, like the payment and direct-dispatch
+  // forms, so the same officer isn't retyping their name on every handover.
+  const [dispatchedBy, setDispatchedBy] = useState(
+    () => request.dispatched_by || localStorage.getItem('wms_dispatched_by') || ''
+  );
   const [receivedBy, setReceivedBy] = useState(request.received_by || '');
   // Issue quantity per line, editable while picking (defaults to the requested amount);
   // clamped to [0, requested] on submit. Only meaningful before dispatch.
   const [issue, setIssue] = useState(() =>
     Object.fromEntries(request.items.map((i) => [i.id, String(i.qty_dispatched ?? i.quantity)])));
   const [rejectReason, setRejectReason] = useState('');
+  // Schemes are loaded only to turn the key into a label. The fund is the FACILITY's
+  // choice and is not editable here — the store fills the request from that fund or
+  // rejects it, so there is deliberately no control to change it.
+  const [schemes, setSchemes] = useState([]);
+  useEffect(() => {
+    let off = false;
+    api.schemes.list().then((r) => { if (!off) setSchemes(r || []); }).catch(() => {});
+    return () => { off = true; };
+  }, []);
+  const requestScheme = schemes.find((x) => x.key === request.scheme);
+  const schemeLabel = requestScheme?.label || request.scheme || '—';
   const clampIssue = (i) => Math.max(0, Math.min(Number(issue[i.id] ?? i.quantity) || 0, Number(i.quantity)));
 
-  const canDispatch = (request.picked_by || pickedBy.trim()) && carrierName.trim() && carrierPhone.trim();
+  const canDispatch =
+    (request.picked_by || pickedBy.trim()) && carrierName.trim() && carrierPhone.trim()
+    && dispatchedBy.trim();
 
   const phoneValid = isValidNgPhone(carrierPhone);
 
@@ -293,6 +316,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         ['LGA / State', where || '—'],
         ['Requested', dateTime(request.created_at)],
         ['Status', STATUS_LABEL[request.status] || request.status],
+        ['Scheme', request.scheme || '—'],
         ['Requested by', [request.requested_by, request.requester_phone].filter(Boolean).join(' · ') || '—'],
         ['Picked by', request.picked_by || '—'],
         ['Carried by', [request.carrier_name, request.carrier_phone].filter(Boolean).join(' · ') || '—'],
@@ -414,12 +438,15 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
           onKeyDown={blockEnterSubmit}
           onSubmit={(e) => {
             e.preventDefault();
+            // Remembered here rather than through onAct, which takes only (fn, okMsg).
+            localStorage.setItem('wms_dispatched_by', dispatchedBy.trim());
             onAct(
               () =>
                 api.requests.fulfil(request.id, {
                   pickedBy: pickedBy.trim(),
                   carrierName: carrierName.trim(),
                   carrierPhone: carrierPhone.trim(),
+                  dispatchedBy: dispatchedBy.trim(),
                   items: request.items.map((i) => ({ itemId: i.id, qty: clampIssue(i) })),
                 }),
               'Dispatched — EnVo notified.'
@@ -432,6 +459,24 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
             that stock.
           </p>
           <div className="form-grid">
+            <Field label="Scheme">
+              {/* Read-only: the facility raised this request against this fund, and it is
+                  filled from that fund or rejected. */}
+              <div>
+                <strong>{schemeLabel}</strong>
+                {requestScheme?.creates_debt && (
+                  <div className="muted">Billed to the facility.</div>
+                )}
+              </div>
+            </Field>
+            <Field label="Dispatched by *">
+              <input
+                value={dispatchedBy}
+                onChange={(e) => setDispatchedBy(e.target.value)}
+                placeholder="who is releasing the stock"
+                required
+              />
+            </Field>
             <Field label="Carrier name *">
               <input
                 value={carrierName}

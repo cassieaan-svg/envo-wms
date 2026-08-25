@@ -14,6 +14,7 @@ import FacilitiesPage from './pages/FacilitiesPage.jsx';
 import MonitoringPage from './pages/MonitoringPage.jsx';
 import ActivityLogPage from './pages/ActivityLogPage.jsx';
 import AdjustmentsPage from './pages/AdjustmentsPage.jsx';
+import AccountsPage from './pages/AccountsPage.jsx';
 
 // 16x16 stroked outlines, matching the icon set EnVo uses in its own nav.
 const icon = (paths) => (
@@ -108,6 +109,7 @@ const NAV = [
   [
     'Reports',
     [
+      ['Accounts', AccountsPage, ICONS.monitoring],
       ['Monitoring', MonitoringPage, ICONS.monitoring],
       ['Activity log', ActivityLogPage, ICONS.activity],
       ['Alerts', AlertsPage, ICONS.alerts],

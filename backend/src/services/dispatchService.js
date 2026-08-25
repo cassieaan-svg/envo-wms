@@ -8,7 +8,11 @@ export class DispatchService {
   // Creates one dispatch order covering every line. Each line is fulfilled FEFO
   // (soonest expiry first) across that commodity's batches. If any line cannot be
   // filled the whole transaction rolls back — no partially dispatched orders.
-  static async createOrder({ facilityId, items, notes, dispatchedBy }) {
+  // A DIRECT dispatch — raised in the warehouse with no EnVo request behind it. This is
+  // the one place the store chooses the fund, because there is no facility request whose
+  // choice it would be overriding. (Fulfilling a request inherits that request's scheme;
+  // see RequestService.fulfil.)
+  static async createOrder({ facilityId, items, notes, dispatchedBy, scheme }) {
     return withTransaction(async (client) => {
       const facility = await client.query('SELECT id FROM facilities WHERE id = $1 AND is_active', [facilityId]);
       if (!facility.rows[0]) {
@@ -30,11 +34,18 @@ export class DispatchService {
 
       const totalAmount = round2(lines.reduce((sum, line) => sum + line.lineTotal, 0));
 
+      // Which fund this issue is made against decides who pays for it, so it is required
+      // rather than defaulted, and validated against the table rather than a hardcoded list.
+      const issueScheme = String(scheme ?? '').trim();
+      if (!issueScheme) { const e = new Error('scheme is required'); e.status = 400; throw e; }
+      const okScheme = await client.query('SELECT 1 FROM schemes WHERE key = $1 AND active', [issueScheme]);
+      if (!okScheme.rows.length) { const e = new Error(`Unknown scheme: ${issueScheme}`); e.status = 400; throw e; }
+
       const orderResult = await client.query(
-        `INSERT INTO dispatch_orders (facility_id, total_amount, dispatched_by, notes)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, facility_id, total_amount, dispatched_by, dispatched_at, notes`,
-        [facilityId, totalAmount, dispatchedBy ?? null, notes ?? null]
+        `INSERT INTO dispatch_orders (facility_id, total_amount, dispatched_by, notes, scheme)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, facility_id, total_amount, dispatched_by, dispatched_at, notes, scheme`,
+        [facilityId, totalAmount, dispatchedBy ?? null, notes ?? null, issueScheme]
       );
       const order = orderResult.rows[0];
 

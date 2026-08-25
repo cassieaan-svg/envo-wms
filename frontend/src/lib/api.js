@@ -65,6 +65,20 @@ const qs = (params) => {
 };
 
 export const api = {
+  schemes: {
+    list: () => request('/api/schemes'),
+  },
+
+  // Facility indebtedness: per-order balances and the payments that clear them.
+  accounts: {
+    debtors:        ()             => request('/api/accounts/debtors'),
+    facilityOrders: (id, params)   => request(`/api/accounts/facilities/${id}/orders${params?.onlyOutstanding ? '?onlyOutstanding=true' : ''}`),
+    orderPayments:  (orderId)      => request(`/api/accounts/orders/${orderId}/payments`),
+    settled:        (facilityId)   => request(`/api/accounts/settled${facilityId ? `?facilityId=${facilityId}` : ''}`),
+    outstanding:    (facilityId)   => request(`/api/accounts/outstanding${facilityId ? `?facilityId=${facilityId}` : ''}`),
+    recordPayment:  (orderId, body) => request(`/api/accounts/orders/${orderId}/payments`, { method: 'POST', body }),
+  },
+
   vendors: {
     list: (params) => request(`/api/vendors${qs(params)}`),
     create: (body) => request('/api/vendors', { method: 'POST', body }),
