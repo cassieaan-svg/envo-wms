@@ -200,10 +200,11 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     // the FacilityPicker narrows it to an LGA/facility — the same narrowing that
     // used to be applied by filtering the full stock array client-side.
     const [summary, everUsed] = await Promise.all([
-      api.stock.summary({
-        facility_id: scopeFid || undefined,
-        facility_ids: (!scopeFid && scopeIdList && scopeIdList.length) ? scopeIdList : undefined,
-      }).catch(() => []),
+      // Compact scope params, not an enumerated facility id list — see the
+      // Dashboard: a large state's ids pushed that URL past the reverse proxy's
+      // query-string limit and it was rejected before reaching the API. Both come
+      // from the same store state, so the facility set is identical.
+      api.stock.summary(store.getAdminScopeParams()).catch(() => []),
       // Commodity ids this scope has ever transacted (any intake/dispense, however
       // old) — one of the "in use here" signals, mirroring the Dashboard.
       api.commodities.transacted(store.getAdminScopeParams()).catch(() => []),

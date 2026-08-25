@@ -295,10 +295,11 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     // everyone else sees their whole scope — the same narrowing that used to be
     // applied by filtering the full stock array client-side.
     const [summary, everUsed] = await Promise.all([
-      api.stock.summary({
-        facility_id: scopeFid || undefined,
-        facility_ids: (!scopeFid && scopeIdList && scopeIdList.length) ? scopeIdList : undefined,
-      }).catch(() => []),
+      // Compact scope params, not an enumerated facility id list — see the
+      // Dashboard: a large state's ids pushed that URL past the reverse proxy's
+      // query-string limit and it was rejected before reaching the API. Both come
+      // from the same store state, so the facility set is identical.
+      api.stock.summary(store.getAdminScopeParams()).catch(() => []),
       // Commodity ids this scope has ever transacted (any intake/dispense, however
       // old) — one of the "in use here" signals, mirroring the Dashboard.
       api.commodities.transacted(store.getAdminScopeParams()).catch(() => []),
@@ -364,8 +365,11 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   useEffect(() => {
     if (!drillComm) { setDrillRows([]); return }
     let active = true
-    const facIds = store.isOverallAdmin() ? undefined : store.allFacilities.map(f => f.id)
-    api.stock.summary({ group_by: 'facility', commodity_id: drillComm.id, facility_ids: facIds })
+    // No facility_ids: the list sent here was the caller's own facilities, which
+    // is precisely the scope the server already applies from the token. Sending it
+    // narrowed nothing and, for a large state, put ~6 KB of ids in the URL — the
+    // same thing that had the dashboards' request rejected by the reverse proxy.
+    api.stock.summary({ group_by: 'facility', commodity_id: drillComm.id })
       .then(rows => { if (active) setDrillRows(rows || []) })
       .catch(() => { if (active) setDrillRows([]) })
     return () => { active = false }

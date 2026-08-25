@@ -24,6 +24,28 @@ export function todayLagos() {
   return new Date().toLocaleDateString('en-CA', { timeZone: LAGOS })
 }
 
+// A date value as a plain yyyy-mm-dd, resolved in Lagos. Null for anything that
+// isn't a usable date, including the pre-2000 "no expiry recorded" sentinels.
+//
+// Use this before PUTTING a date into a payload or a note. The API returns expiry
+// dates as timestamps, and passing one straight back is wrong twice: it records a
+// timestamp where every other row holds a date, and it reads a day EARLY, because
+// the value is UTC midnight and Lagos is an hour ahead — 2027-06-30 arrives as
+// "2027-06-29T23:00:00.000Z" and naive slicing yields the 29th.
+//
+// Deliberately mirrors the backend's ymd() in lotService.js; the server normalises
+// too, so a stray timestamp is corrected rather than stored, but the payload the
+// form sends should be right on its own.
+export function ymdLagos(d) {
+  if (!d) return null
+  const t = new Date(d)
+  if (isNaN(t.getTime())) return null
+  const s = t.toLocaleDateString('en-CA', { timeZone: LAGOS })
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const year = +s.slice(0, 4)
+  return year >= 2000 && year <= 2100 ? s : null
+}
+
 // Expiry entered at intake must be a REAL FUTURE date: you can't receive stock
 // that's already expired, and a `<input type="date">` otherwise lets a fumbled
 // year (e.g. "0001-01-01") through the non-empty "required" check. Valid when the
@@ -285,6 +307,19 @@ export function reviewerNameOf(user) {
   return (m.reviewer_name || m.full_name || m.name || '').trim()
 }
 
+// The same name, but with NO full_name fallback — only an explicitly-set
+// reviewer_name counts.
+//
+// Used for the sender's own "Record approved by" / "Carrier" fields on a dispatch.
+// Those are a legal record of who released the stock and who carried it, so they must
+// not be auto-filled with whatever the account happens to be labelled: falling back to
+// full_name would put a name on every facility dispatch in the system. Returning ''
+// leaves the field exactly as it is today (empty, required, typed by hand), so the
+// prefill reaches only the accounts an admin has deliberately named.
+export function explicitReviewerName(user) {
+  return (user?.user_metadata?.reviewer_name || '').trim()
+}
+
 // A commodity category belongs to the lab section (uses SDP, no dispensary/DSD).
 export const isLabCategory = (category) => (SECTION_CATEGORIES.lab || []).includes(category)
 
@@ -413,12 +448,21 @@ export function capExpiryBatchesToStockByFacility(batches, sohByFacComm) {
 // matches the summed stock. `section` adds the pharmacy/lab filter server-side.
 export async function loadConsumptionAmcMap({ commIds, scopeParams, section }) {
   const ids = [...new Set((commIds || []).filter(Boolean))]
+  // `commIds` is still required, but only to decide whether there is anything to
+  // ask about — a caller with an empty catalogue should not make the request at all.
   if (!ids.length) return {}
   let rows
   try {
     rows = await api.dispense.summary({
       ...(scopeParams || {}),
-      commodity_ids: ids,
+      // The ids are deliberately NOT sent. The server already restricts the
+      // response to the caller's section from their token, so listing them
+      // narrowed nothing while adding ~3.4 KB to the URL — the same weight that
+      // pushed the stock rollup past the reverse proxy's query-string limit.
+      //
+      // Returning rows the caller did not ask about is harmless: every consumer
+      // reads this as a lookup table, keyed by ids from its own catalogue, so
+      // extra entries are never visited.
       group_by: 'commodity,lifetime',
       section: section || undefined,
     })

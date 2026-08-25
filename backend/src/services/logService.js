@@ -467,11 +467,21 @@ export class LogService {
           const current = await binSoh(exec, bin)
           const target = current + delta
           if (target < 0) {
-            const msg = `Cannot apply this edit: ${binLabel(bin)} holds ${current}, and the change would take it to ${target}.`
-            if (enforceBinStock()) { const e = new Error(msg); e.status = 409; throw e }
-            console.warn(`[bin-stock] edit clamped (ENFORCE_BIN_STOCK is off): ${msg}`)
+            // ALWAYS refuse, whatever ENFORCE_BIN_STOCK says. That flag exists so a
+            // live movement can still be recorded when the balance on file disagrees
+            // with the shelf — recording what happened matters more than the figure
+            // being tidy. An edit is the opposite case: nothing is happening in the
+            // real world, someone is correcting the record. Clamping here would set
+            // the bin to zero and report success, silently writing off whatever it
+            // held — a loss the edit never authorised and that nothing in the UI
+            // would show. Better to refuse and name the shortfall.
+            const e = new Error(
+              `Cannot apply this edit: ${binLabel(bin)} holds ${current}, ` +
+              `and the change would take it to ${target}.`)
+            e.status = 409
+            throw e
           }
-          await setBinSoh(exec, bin, Math.max(0, target))
+          await setBinSoh(exec, bin, target)
         }
       }
 
@@ -482,8 +492,34 @@ export class LogService {
           newBatch: updated.batch_number, newExpiry: updated.expiry_date, newQty: updated.quantity,
         })
       } else if (updated && fields.quantity !== undefined) {
-        // Debits carry no lot identity, so bring the ledger back to the bin total.
-        await LotService.reconcile(exec, editBin(type, old))
+        const bin = editBin(type, old)
+
+        // Put the difference back on the batch the record names, when it names one.
+        //
+        // reconcile() alone only knows the bin total, so it credits the difference to
+        // a lot with no batch and no expiry. Cancelling a consumption of a dated batch
+        // therefore returned the stock as UNDATED — which the dispatch path now
+        // refuses to move, so correcting one mistake created another. The batch and
+        // expiry are recorded on the row being edited, so use them: about a quarter of
+        // dispense rows carry them.
+        //
+        // Sign: this branch is the DEBIT types (a consumption, a Decrease adjustment).
+        // Less consumed than recorded means stock comes back, more means it goes out.
+        const batch = (old.batch_number || '').trim()
+        if (batch) {
+          const back = (Number(old.quantity) || 0) - (Number(updated.quantity) || 0)
+          if (back > 0) {
+            await LotService.credit(exec, bin, { batch, expiry: old.expiry_date, qty: back })
+          } else if (back < 0) {
+            // Not enforced: if that batch can no longer cover the increase, take what
+            // it has and let reconcile settle the rest rather than blocking the edit.
+            await LotService.debit(exec, bin, -back, { batch })
+          }
+        }
+
+        // Safety net, and the whole story when the record names no batch: bring the
+        // ledger back to the bin total either way.
+        await LotService.reconcile(exec, bin)
       }
       return updated
     })

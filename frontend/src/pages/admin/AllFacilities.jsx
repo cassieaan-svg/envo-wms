@@ -82,11 +82,13 @@ export function AllFacilities() {
   useEffect(() => {
     let active = true
     setStockLoading(true)
-    api.stock.summary({
-      facility_id: scopeFid || undefined,
-      facility_ids: (!scopeFid && scopeIdList && scopeIdList.length) ? scopeIdList : undefined,
-      group_by: 'facility',
-    }).then(rows => { if (active) setFacGrain(rows || []) })
+    // Compact scope params, not an enumerated facility id list — see the Dashboard:
+    // a large state's ids pushed that URL past the reverse proxy's query-string
+    // limit and it was rejected before reaching the API. The id list is still used
+    // below (scopeSet) to filter what has already been fetched; it just no longer
+    // travels in the URL.
+    api.stock.summary({ ...store.getAdminScopeParams(), group_by: 'facility' })
+      .then(rows => { if (active) setFacGrain(rows || []) })
       .catch(() => { if (active) setFacGrain([]) })
       .finally(() => { if (active) setStockLoading(false) })
     return () => { active = false }
@@ -149,11 +151,14 @@ export function AllFacilities() {
     })
   })
 
-  const commOpts = Object.entries(agg).sort((a,b)=>a[1].name?.localeCompare(b[1].name))
-  const items = commOpts
-    .filter(([,r]) => (!search||(r.name?.toLowerCase()||'').includes(search.toLowerCase())) && (!commFilter||r.cat===commFilter))
-    .map(([,r])=>r)
-    .sort((a,b)=>b.out-a.out||b.low-a.low)
+  // Alphabetical by commodity name. This used to sort by out-of-stock site count,
+  // which put the worst-affected commodities first but left the list in an order
+  // that changed with the data — so a commodity was never in the same place twice
+  // and had to be hunted for. The severity signal is still in the coloured site
+  // counts on each row, and the search box narrows faster than a scan.
+  const items = Object.values(agg)
+    .filter(r => (!search||(r.name?.toLowerCase()||'').includes(search.toLowerCase())) && (!commFilter||r.cat===commFilter))
+    .sort((a,b)=>(a.name||'').localeCompare(b.name||''))
 
   const categories = [...new Set(Object.values(agg).map(r=>r.cat).filter(Boolean))].sort()
 
@@ -166,10 +171,13 @@ export function AllFacilities() {
   // rows over 12 sequential requests locally) purely to dedupe them into sets.
   useEffect(() => {
     let active = true
-    const facIds = store.isOverallAdmin() ? null : store.allFacilities.map(f => f.id)
     const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 12)
+    // No facility_ids: the list sent here was the caller's own facilities, which is
+    // exactly the scope the server already applies from the token. For a 163-facility
+    // state it put ~6.4 KB of ids in the URL — the same thing that had the stock
+    // rollup rejected by the reverse proxy, and this call was only just under the
+    // limit rather than safely below it.
     api.dispense.summary({
-      facility_ids: (facIds && facIds.length) ? facIds : undefined,
       from: cutoff.toISOString(),
       group_by: 'commodity,facility',
     }).then(rows => {

@@ -53,15 +53,18 @@ export function Stock() {
     // or all): single facility → its custom window; multi-facility/admin scope →
     // the default window with consumption aggregated across the whole scope so the
     // AMC matches the summed stock below.
-    const { fid: amcFid, scopeIds } = store.getAdminStockScope()
+    const { fid: amcFid } = store.getAdminStockScope()
 
     // Per-commodity rollup for this scope (store + SDP totals and baseline AMC) in
     // one response, replacing the full stock-table download plus the SDP row dump
     // that was only summed per commodity here.
-    const summary = await api.stock.summary({
-      facility_id: amcFid || undefined,
-      facility_ids: (!amcFid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-    }).catch(() => [])
+    //
+    // Compact scope params, not an enumerated facility id list — see the Dashboard:
+    // a large state's ids pushed that URL past the reverse proxy's query-string
+    // limit and the request was rejected before it reached the API. This page sat
+    // just under the same cliff. The server resolves state/lga against the token
+    // scope, so the facility set is identical.
+    const summary = await api.stock.summary(store.getAdminScopeParams()).catch(() => [])
     const gMap = {}
     ;(summary || []).forEach(r => { gMap[r.commodity_id] = r })
 
@@ -79,8 +82,11 @@ export function Stock() {
       const g        = gMap[c.id] || {}
       const comm     = c
       const storeQty = g.store_qty || 0
-      // SDP stock is only folded in when a single facility is in view, as before.
-      const sdpQty   = fid ? (g.sdp_qty || 0) : 0
+      // SDP stock counts at every grain. It used to be zeroed unless a single
+      // facility was in view, which made a state or cluster login read store-only
+      // while All Facilities — and the whole pharmacy section — counted SDP, so the
+      // same commodity showed two different totals and a false low-stock badge.
+      const sdpQty   = g.sdp_qty || 0
       const calcAmc  = amcMap[c.id]
       const amc      = calcAmc && calcAmc > 0 ? +calcAmc.toFixed(1) : +(g.baseline_amc || 0).toFixed(1)
       // Lab has no dispensary — total is store + SDP only

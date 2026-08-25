@@ -108,8 +108,13 @@ export class StockService {
    * Scoping mirrors getScopedStock: `facilityIds` null = all (unconstrained),
    * an array = only those, [] = short-circuit to none. `commodityIds` narrows to a
    * section-filtered catalogue; `categories` enforces the caller's section.
+   *
+   * `exec` defaults to a pooled query. Pass one to read inside a caller's
+   * transaction — a caller that reads this rollup alongside the facility grain (or
+   * alongside the raw tables) needs both to see ONE snapshot, or the two disagree
+   * whenever a dispense or transfer commits between them.
    */
-  static async getScopedStockSummary({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null } = {}) {
+  static async getScopedStockSummary({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null } = {}, exec = query) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     // One parameter list shared by all four branches, so the same filter lands on
@@ -176,7 +181,7 @@ export class StockService {
         left join p on p.commodity_id = c.id
        where coalesce(s.stock_rows, 0) > 0 or d.qty is not null or p.qty is not null`
 
-    const { rows } = await query(sql, params)
+    const { rows } = await exec(sql, params)
     return rows
   }
 
@@ -196,7 +201,7 @@ export class StockService {
    * `commodityId` narrows to one commodity for the drill-down, which is the only
    * view that needs every facility at once.
    */
-  static async getScopedStockByFacility({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null, commodityId = null } = {}) {
+  static async getScopedStockByFacility({ facilityIds = null, commodityIds = null, categories = null, commodityNames = null, commodityId = null } = {}, exec = query) {
     if (Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
     const params = []
@@ -257,7 +262,7 @@ export class StockService {
         left join d on d.commodity_id = k.commodity_id and d.facility_id = k.facility_id
         left join p on p.commodity_id = k.commodity_id and p.facility_id = k.facility_id`
 
-    const { rows } = await query(sql, params)
+    const { rows } = await exec(sql, params)
     return rows
   }
 
