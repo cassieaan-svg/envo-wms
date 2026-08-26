@@ -167,7 +167,8 @@ export class AccountService {
               COALESCE(
                 (SELECT json_agg(json_build_object(
                           'id', p.id, 'amount', p.amount, 'paid_at', p.paid_at,
-                          'recorded_by', p.recorded_by, 'note', p.note)
+                          'recorded_by', p.recorded_by, 'note', p.note,
+                          'receipt_no', p.receipt_no)
                         ORDER BY p.paid_at, p.id)
                    FROM dispatch_order_payments p
                   WHERE p.dispatch_order_id = b.dispatch_order_id),
@@ -259,7 +260,7 @@ export class AccountService {
 
   static async payments(dispatchOrderId) {
     const { rows } = await query(
-      `SELECT id, amount, paid_at, recorded_by, note
+      `SELECT id, amount, paid_at, recorded_by, note, receipt_no
          FROM dispatch_order_payments
         WHERE dispatch_order_id = $1
         ORDER BY paid_at, id`, [dispatchOrderId]);
@@ -279,11 +280,15 @@ export class AccountService {
    * `amount` is signed: positive is a payment, negative reverses an entry made in error
    * (nothing is ever deleted, so a correction is as visible as the mistake).
    */
-  static async recordPayment(dispatchOrderId, { amount, recordedBy, note, paidAt } = {}) {
+  static async recordPayment(dispatchOrderId, { amount, recordedBy, note, paidAt, receiptNo } = {}) {
     const value = round2(amount);
     if (!Number.isFinite(value) || value === 0) {
       const e = new Error('a non-zero amount is required'); e.status = 400; throw e;
     }
+    // The receipt the store issues to the facility. Required, because the facility
+    // holds it as proof and a balance it cannot be matched against is not a record.
+    const receipt = String(receiptNo ?? '').trim();
+    if (!receipt) { const e = new Error('a receipt number is required'); e.status = 400; throw e; }
 
     return withTransaction(async (client) => {
       // Lock the order so two people recording payments at once cannot both read the
@@ -312,10 +317,21 @@ export class AccountService {
         e.status = 400; throw e;
       }
 
-      await client.query(
-        `INSERT INTO dispatch_order_payments (dispatch_order_id, amount, recorded_by, note, paid_at)
-         VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()))`,
-        [dispatchOrderId, value, recordedBy ?? null, note ?? null, paidAt ?? null]);
+      try {
+        await client.query(
+          `INSERT INTO dispatch_order_payments
+             (dispatch_order_id, amount, recorded_by, note, paid_at, receipt_no)
+           VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6)`,
+          [dispatchOrderId, value, recordedBy ?? null, note ?? null, paidAt ?? null, receipt]);
+      } catch (err) {
+        // A receipt number is unique: reusing one means either a duplicate entry or a
+        // typo, and both are worth stopping rather than banking twice.
+        if (err.code === '23505') {
+          const e = new Error(`receipt ${receipt} has already been recorded`);
+          e.status = 409; throw e;
+        }
+        throw err;
+      }
 
       return this.balance(dispatchOrderId, client);
     });

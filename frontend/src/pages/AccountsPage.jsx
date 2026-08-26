@@ -62,6 +62,9 @@ export default function AccountsPage() {
   const [openOrder, setOpenOrder] = useState(null);
 
   const [amount, setAmount] = useState('');
+  // The receipt the store issues to the facility for this payment. Not remembered
+  // between entries, unlike the officer's name — every payment gets its own.
+  const [receiptNo, setReceiptNo] = useState('');
   const [note, setNote] = useState('');
   const [recordedBy, setRecordedBy] = useState(
     () => localStorage.getItem('wms_payment_recorded_by') || ''
@@ -93,7 +96,7 @@ export default function AccountsPage() {
   // One entry point for the panel: fetches the history the first time, and clears any
   // half-typed amount so it can't be carried onto a different order.
   async function togglePanel(orderId) {
-    setAmount(''); setNote('');   // recordedBy is deliberately kept — same officer, next order
+    setAmount(''); setNote(''); setReceiptNo('');   // recordedBy is kept — same officer, next order
     await toggleInstalments(orderId);
   }
 
@@ -111,15 +114,17 @@ export default function AccountsPage() {
   async function submitPayment(order) {
     const value = Number(amount);
     if (!Number.isFinite(value) || value === 0) return setError('enter an amount');
+    if (!receiptNo.trim()) return setError('enter the receipt number issued to the facility');
     setBusy(true);
     try {
       const b = await api.accounts.recordPayment(order.id, {
         amount: value, note: note || null, recordedBy: recordedBy.trim(),
+        receiptNo: receiptNo.trim(),
       });
       // Remembered locally so the same officer isn't retyping their name on every
       // instalment; it is still a typed value, not the login account.
       localStorage.setItem('wms_payment_recorded_by', recordedBy.trim());
-      setAmount(''); setNote('');
+      setAmount(''); setNote(''); setReceiptNo('');
       const cleared = Number(b.outstanding) === 0;
       // The panel stays open on a part-payment, so REFETCH the history rather than just
       // dropping the cache — an emptied cache would leave the open panel reading "none
@@ -325,6 +330,13 @@ export default function AccountsPage() {
                                   placeholder={String(o.outstanding)}
                                 />
                               </Field>
+                              <Field label="Receipt no. *">
+                                <input
+                                  value={receiptNo}
+                                  onChange={(e) => setReceiptNo(e.target.value)}
+                                  placeholder="receipt issued to the facility"
+                                />
+                              </Field>
                               <Field label="Recorded by *">
                                 <input
                                   value={recordedBy}
@@ -337,7 +349,7 @@ export default function AccountsPage() {
                               </Field>
                               <button
                                 className="btn primary"
-                                disabled={busy || !recordedBy.trim()}
+                                disabled={busy || !recordedBy.trim() || !receiptNo.trim()}
                                 onClick={() => submitPayment(o)}
                               >
                                 {busy ? 'saving…' : `Record payment`}
@@ -362,6 +374,7 @@ export default function AccountsPage() {
                               <thead>
                                 <tr>
                                   <th>When</th>
+                                  <th>Receipt no.</th>
                                   <th className="num">Amount</th>
                                   <th className="num">Running total</th>
                                   <th>Recorded by</th>
@@ -379,6 +392,10 @@ export default function AccountsPage() {
                                     return (
                                       <tr key={p.id}>
                                         <td className="muted">{dateTime(p.paid_at)}</td>
+                                        {/* Blank for payments recorded before receipts
+                                            were captured — not backfilled, because a
+                                            receipt that was never issued has no number. */}
+                                        <td>{p.receipt_no || <span className="muted">—</span>}</td>
                                         <td className="num">{money(p.amount)}</td>
                                         <td className="num muted">{money(running)}</td>
                                         <td>{p.recorded_by || '—'}</td>

@@ -443,14 +443,44 @@ export class MonitoringService {
               c.unit,
               d.quantity,
               d.unit_price,
-              ROUND(d.line_value, 2) AS line_value
+              ROUND(d.line_value, 2) AS line_value,
+              -- Order-level money, repeated on each of its lines. Joined here rather
+              -- than in the shared DISPATCHED_LINES CTE, which several other queries
+              -- use and none of them need this.
+              b.scheme,
+              b.is_debt,
+              b.amount_paid,
+              b.outstanding,
+              -- The dispatch order the money hangs off. A 'request' line's order_ref is
+              -- the REQUEST id, so it cannot be used to match payments; this can.
+              b.dispatch_order_id AS balance_order_id
          FROM dispatched_lines d
          JOIN commodities c ON c.id = d.commodity_id
+         -- A 'request' line is priced against the dispatch order the request produced,
+         -- so it has to hop through requests to find the same balance.
+         LEFT JOIN requests rq ON d.source = 'request' AND rq.id = d.order_ref
+         LEFT JOIN dispatch_order_balances b
+                ON b.dispatch_order_id = CASE WHEN d.source = 'dispatch'
+                                              THEN d.order_ref
+                                              ELSE rq.dispatch_order_id END
         WHERE d.facility_id = $3
         ORDER BY d.dispatched_at DESC, c.name`,
       [from, to, facilityId]
     );
 
-    return { period: { from, to }, lines };
+    // The instalments behind those balances, so the dispatch history can show HOW an
+    // order was paid — receipt number included, which is what a facility quotes when it
+    // queries a payment. Fetched alongside the lines rather than per-order on expand:
+    // the volume is small, and it keeps the panel from loading one order at a time.
+    const { rows: payments } = await query(
+      `SELECT p.id, p.dispatch_order_id, p.amount, p.paid_at, p.recorded_by, p.note, p.receipt_no
+         FROM dispatch_order_payments p
+         JOIN dispatch_orders o ON o.id = p.dispatch_order_id
+        WHERE o.facility_id = $1
+        ORDER BY p.paid_at, p.id`,
+      [facilityId]
+    );
+
+    return { period: { from, to }, lines, payments };
   }
 }

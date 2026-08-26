@@ -60,6 +60,7 @@ router.post('/orders/:id/payments', requireAdmin, async (req, res, next) => {
       amount: req.body?.amount,
       note: req.body?.note,
       paidAt: req.body?.paidAt,
+      receiptNo: req.body?.receiptNo,
       // The person who actually took the payment, as typed on the form. The login
       // account is only a fallback: several people share a store login, so stamping
       // 'cms.admin' on every entry says nothing about who received the money.

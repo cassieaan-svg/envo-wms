@@ -302,13 +302,18 @@ export class DispatchService {
               o.notes,
               o.edited_at,
               o.edit_count,
+              o.scheme,
+              b.is_debt,
+              b.amount_paid,
+              b.outstanding,
               COUNT(i.id)::int AS line_count,
               COALESCE(SUM(i.quantity), 0) AS total_quantity
          FROM dispatch_orders o
          JOIN facilities f ON f.id = o.facility_id
+         JOIN dispatch_order_balances b ON b.dispatch_order_id = o.id
          LEFT JOIN dispatch_order_items i ON i.dispatch_order_id = o.id
         WHERE ($1::int IS NULL OR o.facility_id = $1)
-        GROUP BY o.id, f.name, f.lga
+        GROUP BY o.id, f.name, f.lga, b.is_debt, b.amount_paid, b.outstanding
         ORDER BY o.dispatched_at DESC
         LIMIT $2`,
       [facilityId, limit]

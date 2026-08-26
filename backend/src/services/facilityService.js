@@ -3,13 +3,20 @@ import { query, withTransaction } from '../db.js';
 export class FacilityService {
   static async list({ state = null, lga = null, search = null, includeInactive = false } = {}) {
     const { rows } = await query(
-      `SELECT id, envo_facility_id, name, state, lga, is_active, created_at
-         FROM facilities
-        WHERE ($1 OR is_active)
-          AND ($2::text IS NULL OR state = $2)
-          AND ($3::text IS NULL OR lga = $3)
-          AND ($4::text IS NULL OR name ILIKE '%' || $4 || '%')
-        ORDER BY state, lga NULLS LAST, name`,
+      `SELECT f.id, f.envo_facility_id, f.name, f.state, f.lga, f.is_active, f.created_at,
+              -- What the facility owes the store. Joined here so the list can be scanned
+              -- for debtors without opening each facility in turn; the balances view
+              -- already encodes which schemes are billable, so this doesn't restate it.
+              COALESCE(SUM(b.outstanding), 0)::numeric(14,2) AS outstanding,
+              COUNT(b.dispatch_order_id) FILTER (WHERE b.outstanding > 0)::int AS unpaid_orders
+         FROM facilities f
+         LEFT JOIN dispatch_order_balances b ON b.facility_id = f.id
+        WHERE ($1 OR f.is_active)
+          AND ($2::text IS NULL OR f.state = $2)
+          AND ($3::text IS NULL OR f.lga = $3)
+          AND ($4::text IS NULL OR f.name ILIKE '%' || $4 || '%')
+        GROUP BY f.id
+        ORDER BY f.state, f.lga NULLS LAST, f.name`,
       [includeInactive, state, lga, search]
     );
     return rows;

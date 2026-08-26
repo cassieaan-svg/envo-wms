@@ -124,6 +124,7 @@ export default function FacilitiesPage({ isAdmin }) {
                 <tr>
                   <th className="wrap">Name</th>
                   <th>LGA</th>
+                  <th className="num">Owed</th>
                   <th />
                 </tr>
               </thead>
@@ -132,6 +133,18 @@ export default function FacilitiesPage({ isAdmin }) {
                   <tr key={facility.id}>
                     <td className="wrap">{facility.name}</td>
                     <td>{facility.lga || '—'}</td>
+                    {/* What this facility owes the store, so debtors can be spotted while
+                        scanning the list instead of only from the Accounts page. */}
+                    <td className="num">
+                      {Number(facility.outstanding) > 0 ? (
+                        <>
+                          <strong>{money(facility.outstanding)}</strong>
+                          <div className="muted">{facility.unpaid_orders} unpaid</div>
+                        </>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
                     <td>
                       <div className="row-actions">
                         <button className="btn small" onClick={() => setStockFor(facility)}>
@@ -166,6 +179,7 @@ function FacilityHistoryModal({ facility, onClose }) {
   const today = new Date().toISOString().slice(0, 10);
   const [period, setPeriod] = useState({ from: '2020-01-01', to: today });
   const [lines, setLines] = useState(null);
+  const [payments, setPayments] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   // Selecting a dispatch or a commodity narrows everything below, the totals included.
@@ -176,6 +190,7 @@ function FacilityHistoryModal({ facility, onClose }) {
     try {
       const data = await api.monitoring.facility(facility.id, period);
       setLines(data.lines);
+      setPayments(data.payments || []);
       setSelected(null);
       setError(null);
     } catch (err) {
@@ -210,6 +225,26 @@ function FacilityHistoryModal({ facility, onClose }) {
     [shown]
   );
 
+  // Money owed is per ORDER, so it is summed over distinct orders rather than over
+  // lines — summing a line-level view would multiply the balance by the line count.
+  const owed = useMemo(() => {
+    const byOrder = new Map();
+    for (const l of all) {
+      if (l.balance_order_id == null || !l.is_debt) continue;
+      byOrder.set(l.balance_order_id, {
+        paid: Number(l.amount_paid || 0),
+        outstanding: Number(l.outstanding || 0),
+      });
+    }
+    let paid = 0, outstanding = 0, unpaid = 0;
+    for (const b of byOrder.values()) {
+      paid += b.paid;
+      outstanding += b.outstanding;
+      if (b.outstanding > 0) unpaid += 1;
+    }
+    return { paid, outstanding, unpaid };
+  }, [all]);
+
   const history = useMemo(() => {
     const map = new Map();
     for (const l of all) {
@@ -221,6 +256,13 @@ function FacilityHistoryModal({ facility, onClose }) {
           ref: l.order_ref,
           at: l.dispatched_at,
           by: l.dispatched_by,
+          // Order-level, so taken from the first line of the group rather than summed —
+          // adding them per line would multiply the balance by the line count.
+          scheme: l.scheme,
+          isDebt: l.is_debt,
+          balanceOrderId: l.balance_order_id,
+          paid: Number(l.amount_paid || 0),
+          outstanding: Number(l.outstanding || 0),
           lines: [],
           quantity: 0,
           value: 0,
@@ -254,6 +296,13 @@ function FacilityHistoryModal({ facility, onClose }) {
     }
     return [...map.values()].sort((a, b) => b.value - a.value);
   }, [shown]);
+
+  // Payments belong to the DISPATCH order. A request-sourced row's own ref is the
+  // request id, so matching on that would find nothing — hence balanceOrderId.
+  function paymentsFor(h) {
+    if (h.balanceOrderId == null) return [];
+    return payments.filter((p) => p.dispatch_order_id === h.balanceOrderId);
+  }
 
   function toggle(kind, key) {
     setSelected((cur) =>
@@ -338,6 +387,19 @@ function FacilityHistoryModal({ facility, onClose }) {
               <div className="label">Commodities</div>
               <div className="value">{totals.commodities}</div>
             </div>
+            {/* Owed is not affected by the commodity/order selection above — a balance
+                belongs to the order, and narrowing the view does not change the debt. */}
+            <div className="stat">
+              <div className="label">Paid</div>
+              <div className="value">{money(owed.paid)}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Outstanding</div>
+              <div className="value">{money(owed.outstanding)}</div>
+              <div className="muted">
+                {owed.unpaid} unpaid order{owed.unpaid === 1 ? '' : 's'}
+              </div>
+            </div>
           </div>
 
           <div className="card">
@@ -349,9 +411,12 @@ function FacilityHistoryModal({ facility, onClose }) {
                     <th>Reference</th>
                     <th>When</th>
                     <th>By</th>
+                    <th>Scheme</th>
                     <th className="num">Lines</th>
                     <th className="num">Quantity</th>
                     <th className="num">Value</th>
+                    <th className="num">Paid</th>
+                    <th className="num">Outstanding</th>
                     <th />
                   </tr>
                 </thead>
@@ -370,9 +435,21 @@ function FacilityHistoryModal({ facility, onClose }) {
                           </td>
                           <td>{dateTime(h.at)}</td>
                           <td className="muted">{h.by || '—'}</td>
+                          <td>{h.scheme || <span className="muted">—</span>}</td>
                           <td className="num">{h.lines.length}</td>
                           <td className="num">{qty(h.quantity)}</td>
                           <td className="num">{money(h.value)}</td>
+                          <td className="num">{h.isDebt ? money(h.paid) : <span className="muted">—</span>}</td>
+                          <td className="num">
+                            {/* A BHCPF/insurance order is not the facility's to pay, so it
+                                is neither outstanding nor "paid" — saying ₦0 outstanding
+                                would read as settled. */}
+                            {!h.isDebt
+                              ? <span className="muted">not billed</span>
+                              : h.outstanding > 0
+                                ? <strong>{money(h.outstanding)}</strong>
+                                : <span className="badge ok">paid</span>}
+                          </td>
                           <td>
                             {/* The row is clickable, but a button says so — not everyone
                                 will think to try. */}
@@ -387,17 +464,59 @@ function FacilityHistoryModal({ facility, onClose }) {
                             </button>
                           </td>
                         </tr>
+                        {/* Payments on this order, shown with its lines — the receipt
+                            number is what a facility quotes when it queries a payment,
+                            so the dispatch history is where it has to be findable. */}
+                        {isOpen && paymentsFor(h).length > 0 && (
+                          <tr className="row-child">
+                            <td colSpan={10}>
+                              <div className="muted" style={{ marginBottom: 4 }}>
+                                Payments received on this order
+                              </div>
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>Receipt no.</th>
+                                    <th>Paid on</th>
+                                    <th className="num">Amount</th>
+                                    <th>Recorded by</th>
+                                    <th className="wrap">Note</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {paymentsFor(h).map((p) => (
+                                    <tr key={p.id}>
+                                      <td>
+                                        {/* Blank on payments taken before receipts were
+                                            captured — never backfilled. */}
+                                        {p.receipt_no || <span className="muted">—</span>}
+                                      </td>
+                                      <td className="muted">{dateTime(p.paid_at)}</td>
+                                      <td className="num">{money(p.amount)}</td>
+                                      <td>{p.recorded_by || '—'}</td>
+                                      <td className="wrap muted">{p.note || ''}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
                         {isOpen &&
                           h.lines.map((l) => (
                             <tr key={h.key + '-' + l.commodity_id} className="row-child">
-                              <td colSpan={3} className="wrap">
+                              {/* Header is 10 columns: Reference, When, By, Scheme, Lines,
+                                  Quantity, Value, Paid, Outstanding, actions. The name
+                                  spans the first four; paid/outstanding are order-level
+                                  and stay blank on a line. */}
+                              <td colSpan={4} className="wrap">
                                 {l.commodity_name}
                                 <span className="muted"> · {l.category || 'uncategorised'}</span>
                               </td>
                               <td className="num muted">{money(l.unit_price)}</td>
                               <td className="num">{qty(l.quantity)}</td>
                               <td className="num">{money(l.line_value)}</td>
-                              <td />
+                              <td colSpan={3} />
                             </tr>
                           ))}
                       </Fragment>
