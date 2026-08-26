@@ -225,12 +225,27 @@ function BalanceRow({ b, open, onToggle, orders, error }) {
                       <tr key={`p-${o.id}`}>
                         <td colSpan={7} className="pl-4 pb-2 text-gray-500">
                           <div className="text-sm text-gray-100 font-semibold mb-1">Payments</div>
+                          {/* The receipt number leads, because that is what the facility
+                              is holding in its hand when it queries a payment — the row
+                              exists so a receipt can be matched against the balance. */}
+                          <div className="flex gap-3 text-[10px] uppercase tracking-wide text-gray-600 pb-0.5">
+                            <span className="w-24">Receipt no.</span>
+                            <span className="w-20">Paid on</span>
+                            <span className="w-24 text-right">Amount</span>
+                            <span className="flex-1">Recorded by</span>
+                          </div>
                           {o.payments.map(p => (
-                            <div key={p.id} className="flex gap-3">
-                              <span>{String(p.paid_at).slice(0, 10)}</span>
-                              <span className="tabular-nums">{naira(p.amount)}</span>
-                              <span>{p.recorded_by || '—'}</span>
-                              {p.note && <span className="text-gray-600">{p.note}</span>}
+                            <div key={p.id} className="flex gap-3 py-0.5">
+                              <span className="w-24 text-gray-100 font-medium">
+                                {/* Blank on payments taken before receipts were captured. */}
+                                {p.receipt_no || <span className="text-gray-600 font-normal">—</span>}
+                              </span>
+                              <span className="w-20">{String(p.paid_at).slice(0, 10)}</span>
+                              <span className="w-24 text-right tabular-nums text-gray-300">{naira(p.amount)}</span>
+                              <span className="flex-1">
+                                {p.recorded_by || '—'}
+                                {p.note && <span className="text-gray-600"> · {p.note}</span>}
+                              </span>
                             </div>
                           ))}
                         </td>
