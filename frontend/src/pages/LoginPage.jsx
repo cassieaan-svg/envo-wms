@@ -16,6 +16,10 @@ export default function LoginPage({ onSignedIn }) {
   const [server, setServer] = useState(() => describeServer());
   const [probe, setProbe] = useState({ state: 'checking' });
   const [editing, setEditing] = useState(false);
+  // When the server is healthy the address is noise — on most devices the app was opened
+  // from that very address. It stays one click away, and un-hides itself the moment the
+  // probe fails, which is when it is the first thing anyone needs.
+  const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState(() => describeServer().url || '');
 
   async function check() {
@@ -60,6 +64,8 @@ export default function LoginPage({ onSignedIn }) {
   }
 
   const down = probe.state === 'down';
+  // Quiet only while everything is fine and nobody has asked for more.
+  const quiet = probe.state === 'up' && !editing && !expanded;
 
   return (
     <div className="login-wrap">
@@ -67,7 +73,7 @@ export default function LoginPage({ onSignedIn }) {
         <h1>
           CMS <span style={{ color: 'var(--accent)' }}>Warehouse</span>
         </h1>
-        <p className="sub">Central Medical Store — stock, dispatch and requests</p>
+        <p className="sub">Central Medical Store</p>
 
         <Banner kind="error">{error}</Banner>
 
@@ -77,8 +83,10 @@ export default function LoginPage({ onSignedIn }) {
         <div
           className="muted"
           style={{
-            fontSize: 12, marginBottom: 14, padding: '8px 10px',
-            border: '1px solid var(--border)', borderRadius: 6,
+            fontSize: 12, marginBottom: 14,
+            padding: quiet ? '2px 0' : '8px 10px',
+            border: quiet ? '1px solid transparent' : '1px solid var(--border)',
+            borderRadius: 6,
           }}
         >
           {editing ? (
@@ -118,8 +126,9 @@ export default function LoginPage({ onSignedIn }) {
               />
               <span style={{ flex: 1 }}>
                 {probe.state === 'checking' && <>Checking the warehouse server…</>}
-                {probe.state === 'up' && (
-                  <>Connected to the warehouse server <strong>{server.label}</strong></>
+                {probe.state === 'up' && (quiet
+                  ? <>Connected</>
+                  : <>Connected to the warehouse server <strong>{server.label}</strong></>
                 )}
                 {down && (
                   <>
@@ -129,9 +138,25 @@ export default function LoginPage({ onSignedIn }) {
                   </>
                 )}
               </span>
-              <button type="button" className="btn small" onClick={() => setEditing(true)}>
-                change
-              </button>
+              {quiet ? (
+                // A plain word, not a button: it reveals the address, it does not change
+                // anything. `change` only appears once the address is on screen to change.
+                <button
+                  type="button"
+                  onClick={() => setExpanded(true)}
+                  style={{
+                    background: 'none', border: 0, padding: 0, font: 'inherit',
+                    color: 'inherit', opacity: 0.75, cursor: 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  server
+                </button>
+              ) : (
+                <button type="button" className="btn small" onClick={() => setEditing(true)}>
+                  change
+                </button>
+              )}
             </div>
           )}
         </div>
