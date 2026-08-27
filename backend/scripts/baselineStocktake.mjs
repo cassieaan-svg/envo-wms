@@ -85,6 +85,11 @@ async function main() {
     return;
   }
 
+  // The movement and the balance change must stay in ONE transaction. The balance guard
+  // (migrations/035) checks at commit that a batch's quantity_remaining agrees with its
+  // movements, so zeroing the balance in a separate transaction from the adjustment that
+  // explains it would be rejected — correctly, since that is exactly the out-of-band edit
+  // that produced the discrepancies this guard exists to prevent.
   await withTransaction(async (client) => {
     for (const b of stale) {
       await client.query(

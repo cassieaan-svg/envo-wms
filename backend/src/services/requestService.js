@@ -2,6 +2,10 @@ import { query, withTransaction } from '../db.js';
 import { OutboxService } from './outboxService.js';
 import { DispatchService } from './dispatchService.js';
 import { normalizeNgPhone } from '../lib/phone.js';
+import { IdempotencyService } from './idempotencyService.js';
+import { ORIGIN, INSTANCE_ID } from '../lib/instance.js';
+import { assertCanWriteWarehouseStock, IS_CLOUD } from '../lib/role.js';
+import { RequestStatusService } from './requestStatusService.js';
 
 function round2(v) { return Math.round(Number(v) * 100) / 100; }
 
@@ -123,7 +127,16 @@ export class RequestService {
       `SELECT i.*, c.name AS commodity_name, c.category, c.unit
          FROM request_items i JOIN commodities c ON c.id = i.commodity_id
         WHERE i.request_id = $1 ORDER BY c.category, c.name`, [id]);
-    return { ...req, items };
+
+    // The transitions this request has been through, oldest first. `synced_at` is what tells
+    // a warehouse user whether Cloud (and so EnVo, and so the facility) has been told yet —
+    // during an outage the answer is no, and that is worth being able to see rather than
+    // guess at.
+    const { rows: statusEvents } = await run(
+      `SELECT uid, status, actor, note, occurred_at, synced_at, origin
+         FROM request_status_events WHERE request_id = $1 ORDER BY occurred_at, id`, [id]);
+
+    return { ...req, items, statusEvents };
   }
 
   // The store officer who starts picking is named, so the order is never in an
@@ -138,7 +151,16 @@ export class RequestService {
       const req = rows[0];
       if (!req) return null;
 
-      await OutboxService.enqueue(
+      // Recorded as an event so it can travel. On CMS this queues it for Cloud; on Cloud it
+      // is history beside the callback below.
+      await RequestStatusService.record(client, {
+        requestId: req.id, envoRequestId: req.envo_request_id,
+        status: 'picking', actor: req.picked_by,
+      });
+
+      // Cloud's callback to make, not the warehouse's — CMS cannot reach EnVo. When CMS
+      // raises this, the event above carries it to Cloud, which then tells EnVo.
+      if (IS_CLOUD) await OutboxService.enqueue(
         'request_status',
         { envoRequestId: req.envo_request_id, wmsRequestId: req.id, status: 'picking', pickedBy: req.picked_by },
         client
@@ -165,7 +187,13 @@ export class RequestService {
         [id, ` [Rejected by ${rejectedBy || 'warehouse'}: ${reason.trim()}]`]);
       const request = upd[0];
 
-      await OutboxService.enqueue(
+      await RequestStatusService.record(client, {
+        requestId: request.id, envoRequestId: request.envo_request_id,
+        status: 'rejected', actor: rejectedBy ?? null, note: reason.trim(),
+      });
+
+      // As above: Cloud owns the EnVo conversation; from CMS the event carries it there.
+      if (IS_CLOUD) await OutboxService.enqueue(
         'request_status',
         { envoRequestId: request.envo_request_id, wmsRequestId: request.id, status: 'cancelled', reason: reason.trim() },
         client
@@ -214,12 +242,14 @@ export class RequestService {
   // move an order onto another fund would change who pays for it — a free BHCPF issue
   // becoming a DRF debt — without the facility ever agreeing. The warehouse does choose
   // a fund for a direct dispatch it raises itself (DispatchService.createOrder).
-  static async fulfil(id, { dispatchedBy, carrierName, carrierPhone, pickedBy, items } = {}) {
+  static async fulfil(id, { dispatchedBy, carrierName, carrierPhone, pickedBy, items, clientTxnId = null, actorUserId = null } = {}) {
     // Stock is not released to an unnamed carrier — the pair is the handover record.
     if (!carrierName?.trim()) { const e = new Error("the carrier's name is required"); e.status = 400; throw e; }
     if (!carrierPhone?.trim()) { const e = new Error("the carrier's phone number is required"); e.status = 400; throw e; }
     // Stored in the same 0-leading shape EnVo uses, so a +234… or spaced entry doesn't
     // leave two stores holding the same number in two forms.
+    assertCanWriteWarehouseStock();
+
     const carrierPhoneNorm = normalizeNgPhone(carrierPhone);
     if (!carrierPhoneNorm) {
       const e = new Error("the carrier phone must be a complete Nigerian number, e.g. 08012345678 or +2348012345678");
@@ -228,6 +258,19 @@ export class RequestService {
     }
 
     await withTransaction(async (client) => {
+      // Claimed before the request row is locked. Fulfilment draws FEFO stock and writes a
+      // dispatch order, so a retried fulfil would issue the stock twice; the status guard
+      // below ('Cannot fulfil a dispatched request') would usually catch it, but it answers
+      // with an error rather than the original result, which is not what a retry needs.
+      let txnId = null;
+      if (clientTxnId) {
+        const { txn, replay } = await IdempotencyService.claim(client, {
+          clientTxnId, operation: 'request_fulfil', actorUserId, actor: dispatchedBy ?? null,
+        });
+        if (replay) return;   // already fulfilled by this transaction — change nothing
+        txnId = txn.id;
+      }
+
       const { rows } = await client.query('SELECT * FROM requests WHERE id = $1 FOR UPDATE', [id]);
       const req = rows[0];
       if (!req) { const e = new Error('request not found'); e.status = 404; throw e; }
@@ -259,7 +302,11 @@ export class RequestService {
         let want = issueQty.has(it.id) ? issueQty.get(it.id) : requested;
         if (!(want >= 0)) want = 0;
         if (want > requested) want = requested;
-        const allocated = want > 0
+        // The dispatch order does not exist yet — it is written below, once we know which
+        // lines actually shipped — so the movements are linked to it afterwards, by id,
+        // inside this same transaction. Previously they were never linked at all, and a
+        // fulfilment's stock could not be traced to any document.
+        const { allocated, movementIds } = want > 0
           ? await DispatchService.allocateFefo(client, {
               commodityId: it.commodity_id,
               quantity: want,
@@ -267,13 +314,17 @@ export class RequestService {
               itemId: null,
               actor: dispatchedBy ?? null,
               allowShort: true,
+              txnId,
             })
-          : 0;
+          : { allocated: 0, movementIds: [] };
         await client.query('UPDATE request_items SET qty_dispatched = $2 WHERE id = $1', [it.id, allocated]);
         if (allocated > 0) {
           anyDispatched = true;
           const unitPrice = Number(it.unit_price);
-          dispatchedLines.push({ commodityId: it.commodity_id, quantity: allocated, unitPrice, lineTotal: round2(allocated * unitPrice) });
+          dispatchedLines.push({
+            commodityId: it.commodity_id, quantity: allocated, unitPrice,
+            lineTotal: round2(allocated * unitPrice), movementIds,
+          });
         }
       }
       if (!anyDispatched) {
@@ -296,18 +347,28 @@ export class RequestService {
       // batch_movements; this is the order-level document over the same handover.
       const orderTotal = round2(dispatchedLines.reduce((s, l) => s + l.lineTotal, 0));
       const { rows: ord } = await client.query(
-        `INSERT INTO dispatch_orders (facility_id, total_amount, dispatched_by, notes, scheme)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        `INSERT INTO dispatch_orders
+           (facility_id, total_amount, dispatched_by, notes, scheme, origin, source_instance)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [req.facility_id, orderTotal, dispatchedBy ?? null,
          `Essential request #${dispatched.id}${dispatched.envo_request_id ? ` (${dispatched.envo_request_id})` : ''}`,
          // The dispatch order inherits the request's fund; it is not a separate choice.
-         req.scheme]);
+         req.scheme, ORIGIN, INSTANCE_ID]);
       const dispatchOrderId = ord[0].id;
       for (const l of dispatchedLines) {
-        await client.query(
+        const { rows: line } = await client.query(
           `INSERT INTO dispatch_order_items (dispatch_order_id, commodity_id, quantity, unit_price, line_total)
-           VALUES ($1, $2, $3, $4, $5)`,
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
           [dispatchOrderId, l.commodityId, l.quantity, l.unitPrice, l.lineTotal]);
+        // Close the loop: the movements drawn for this line now name the order and the line
+        // they belong to, so a fulfilment is traceable exactly like a direct dispatch.
+        if (l.movementIds.length) {
+          await client.query(
+            `UPDATE batch_movements
+                SET dispatch_order_id = $2, dispatch_order_item_id = $3
+              WHERE id = ANY($1)`,
+            [l.movementIds, dispatchOrderId, line[0].id]);
+        }
       }
       await client.query('UPDATE requests SET dispatch_order_id = $2 WHERE id = $1', [id, dispatchOrderId]);
 
@@ -316,7 +377,20 @@ export class RequestService {
       const { rows: shippedItems } = await client.query(
         'SELECT commodity_id, qty_dispatched FROM request_items WHERE request_id = $1', [id]);
 
-      await OutboxService.enqueue(
+      await RequestStatusService.record(client, {
+        requestId: dispatched.id, envoRequestId: dispatched.envo_request_id,
+        status: 'dispatched', actor: dispatched.dispatched_by,
+      });
+
+      // Telling EnVo is Cloud's relationship, not the warehouse's.
+      //
+      // On CMS this queued a callback the instance can never deliver: it has no ENVO_API_URL
+      // by design, so the row failed on every attempt and would have retried forever. The
+      // fulfilment reaches EnVo the proper way — CMS syncs the transaction to Cloud, and
+      // Cloud queues the callback as it ingests. Found by the two-instance commissioning
+      // drill; a single-database test cannot see it, because there the two roles are one
+      // process with EnVo configured.
+      if (IS_CLOUD) await OutboxService.enqueue(
         'request_status',
         {
           envoRequestId: dispatched.envo_request_id,
@@ -331,9 +405,15 @@ export class RequestService {
         client
       );
 
+      if (txnId) {
+        await IdempotencyService.complete(client, txnId, dispatched,
+          { requestId: id, dispatchOrderId });
+      }
+
       return dispatched;
     });
 
+    // A replay answers with the request as it stands, exactly as the first attempt did.
     return this.getById(id);
   }
 }

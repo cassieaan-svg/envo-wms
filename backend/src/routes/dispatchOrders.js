@@ -1,6 +1,7 @@
 import express from 'express';
 import { DispatchService } from '../services/dispatchService.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { IdempotencyService } from '../services/idempotencyService.js';
 
 const router = express.Router();
 
@@ -48,8 +49,39 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
       items,
       notes,
       editedBy: req.user.username,
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user.id,
     });
     return res.json(order);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
+ * POST /api/dispatch-orders/:id/print — take a copy of the waybill.
+ *
+ * Returns the label the sheet should carry (ORIGINAL, then REPRINT #1, #2 …). Writes no
+ * movement and no inventory transaction: printing is not a stock operation, and there is a
+ * test that holds it to that.
+ */
+router.post('/:id/print', async (req, res, next) => {
+  try {
+    const record = await DispatchService.recordPrint(Number(req.params.id), {
+      printedBy: (typeof req.body?.printedBy === 'string' && req.body.printedBy.trim())
+        || req.user?.fullName || req.user?.username || null,
+    });
+    return res.status(201).json(record);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+});
+
+/** GET /api/dispatch-orders/:id/prints — who has printed this, and when. */
+router.get('/:id/prints', async (req, res, next) => {
+  try {
+    return res.json(await DispatchService.printHistory(Number(req.params.id)));
   } catch (err) {
     return next(err);
   }

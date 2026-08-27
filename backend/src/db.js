@@ -34,7 +34,10 @@ export async function withTransaction(fn) {
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    // A failed ROLLBACK (a dropped connection, usually) must not replace the error that
+    // caused it — that error is the one worth seeing, and losing it turns a clear
+    // "insufficient stock" into an unrelated connection message.
+    try { await client.query('ROLLBACK'); } catch { /* the original error is the useful one */ }
     throw err;
   } finally {
     client.release();

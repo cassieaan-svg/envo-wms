@@ -1,6 +1,7 @@
 import express from 'express';
 import { AccountService } from '../services/accountService.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { IdempotencyService } from '../services/idempotencyService.js';
 
 const router = express.Router();
 
@@ -66,6 +67,8 @@ router.post('/orders/:id/payments', requireAdmin, async (req, res, next) => {
       // 'cms.admin' on every entry says nothing about who received the money.
       recordedBy: (typeof req.body?.recordedBy === 'string' && req.body.recordedBy.trim())
         || req.user?.username || null,
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user?.id ?? null,
     });
     return res.status(201).json(balance);
   } catch (err) {

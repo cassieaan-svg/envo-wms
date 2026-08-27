@@ -3,6 +3,7 @@ import { FacilityService } from '../services/facilityService.js';
 import { DispatchService } from '../services/dispatchService.js';
 import { fetchEnvoStock } from '../lib/envoClient.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { IdempotencyService } from '../services/idempotencyService.js';
 import { query } from '../db.js';
 
 const router = express.Router();
@@ -135,6 +136,10 @@ router.post('/:id/dispatch-orders', requireAdmin, async (req, res, next) => {
       dispatchedBy: (typeof req.body?.dispatchedBy === 'string' && req.body.dispatchedBy.trim())
         || req.user?.fullName || req.user?.username || null,
       scheme: req.body?.scheme,   // the fund this direct issue is made against
+      // Optional: a retry carrying the same id returns the original order rather than
+      // drawing the stock a second time.
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user.id,
     });
     return res.status(201).json(order);
   } catch (err) {

@@ -1,5 +1,6 @@
 import express from 'express';
 import { RequestService } from '../services/requestService.js';
+import { IdempotencyService } from '../services/idempotencyService.js';
 
 const router = express.Router();
 
@@ -58,6 +59,8 @@ router.post('/:id/fulfil', async (req, res) => {
       carrierPhone: req.body?.carrierPhone,
       pickedBy: req.body?.pickedBy,
       items: req.body?.items,   // optional [{ itemId, qty }] — issue quantities set while picking
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user?.id ?? null,
     });
     res.json(request);
   } catch (err) {

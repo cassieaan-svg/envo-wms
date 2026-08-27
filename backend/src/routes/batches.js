@@ -1,6 +1,7 @@
 import express from 'express';
 import { BatchService } from '../services/batchService.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { IdempotencyService } from '../services/idempotencyService.js';
 
 const router = express.Router();
 
@@ -32,6 +33,10 @@ router.post('/', requireAdmin, async (req, res, next) => {
       unitCost: req.body.unitCost != null ? Number(req.body.unitCost) : null,
       receivedDate: req.body.receivedDate || null,
       createdBy: req.user.username,
+      // Optional: when supplied, a retry of this receipt returns the original batch
+      // instead of creating a second lot. Validated here so a malformed id is a clear 400.
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user.id,
     });
     return res.status(201).json(batch);
   } catch (err) {
@@ -89,6 +94,8 @@ router.post('/:id/adjust', requireAdmin, async (req, res, next) => {
       // Whoever physically did the count signs for it. Falls back to the account in use,
       // which is the same person unless a store shares a login.
       createdBy: adjustedBy?.trim() || req.user.username,
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user.id,
     });
     return res.json(batch);
   } catch (err) {

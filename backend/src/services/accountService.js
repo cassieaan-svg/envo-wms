@@ -1,4 +1,5 @@
 import { query, withTransaction } from '../db.js';
+import { IdempotencyService } from './idempotencyService.js';
 
 function round2(v) { return Math.round(Number(v) * 100) / 100; }
 
@@ -280,7 +281,7 @@ export class AccountService {
    * `amount` is signed: positive is a payment, negative reverses an entry made in error
    * (nothing is ever deleted, so a correction is as visible as the mistake).
    */
-  static async recordPayment(dispatchOrderId, { amount, recordedBy, note, paidAt, receiptNo } = {}) {
+  static async recordPayment(dispatchOrderId, { amount, recordedBy, note, paidAt, receiptNo, clientTxnId = null, actorUserId = null } = {}) {
     const value = round2(amount);
     if (!Number.isFinite(value) || value === 0) {
       const e = new Error('a non-zero amount is required'); e.status = 400; throw e;
@@ -291,6 +292,19 @@ export class AccountService {
     if (!receipt) { const e = new Error('a receipt number is required'); e.status = 400; throw e; }
 
     return withTransaction(async (client) => {
+      // Money, so the same gate as a stock movement. The unique receipt number already
+      // stopped a duplicate being banked, but it answered a lost-response retry with
+      // "receipt X has already been recorded" — an error, for a request that in fact
+      // succeeded. With an id, the retry gets the balance the first attempt produced.
+      let txnId = null;
+      if (clientTxnId) {
+        const { txn, replay } = await IdempotencyService.claim(client, {
+          clientTxnId, operation: 'payment', actorUserId, actor: recordedBy ?? null,
+        });
+        if (replay) return txn.result;
+        txnId = txn.id;
+      }
+
       // Lock the order so two people recording payments at once cannot both read the
       // same outstanding figure and jointly overpay it.
       const { rows: ord } = await client.query(
@@ -320,9 +334,9 @@ export class AccountService {
       try {
         await client.query(
           `INSERT INTO dispatch_order_payments
-             (dispatch_order_id, amount, recorded_by, note, paid_at, receipt_no)
-           VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6)`,
-          [dispatchOrderId, value, recordedBy ?? null, note ?? null, paidAt ?? null, receipt]);
+             (dispatch_order_id, amount, recorded_by, note, paid_at, receipt_no, txn_id)
+           VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6, $7)`,
+          [dispatchOrderId, value, recordedBy ?? null, note ?? null, paidAt ?? null, receipt, txnId]);
       } catch (err) {
         // A receipt number is unique: reusing one means either a duplicate entry or a
         // typo, and both are worth stopping rather than banking twice.
@@ -333,7 +347,11 @@ export class AccountService {
         throw err;
       }
 
-      return this.balance(dispatchOrderId, client);
+      const balance = await this.balance(dispatchOrderId, client);
+      if (txnId) {
+        await IdempotencyService.complete(client, txnId, balance, { dispatchOrderId });
+      }
+      return balance;
     });
   }
 }

@@ -1,5 +1,8 @@
 import { query } from '../db.js';
 import { postRequestStatus, postPriceUpdate } from '../lib/envoClient.js';
+import { pushTransaction, pushRequestStatus } from '../lib/cloudClient.js';
+import { SyncService } from './syncService.js';
+import { RequestStatusService } from './requestStatusService.js';
 
 // Durable delivery of outbound calls to EnVo.
 //
@@ -18,6 +21,31 @@ const MAX_BACKOFF_SECONDS = 3600;
 const SENDERS = {
   request_status: (payload) => postRequestStatus(payload, { attempts: 1 }),
   commodity_price: (payload) => postPriceUpdate(payload, { attempts: 1 }),
+
+  // CMS -> Cloud. The envelope is built at SEND time, not at enqueue time, so a transaction
+  // that was corrected before it ever synced (an order edited while the link was down) goes
+  // up in its final state rather than as a stale snapshot followed by a correction.
+  sync_transaction: async (payload) => {
+    const envelope = await SyncService.buildEnvelope(payload.clientTxnId);
+    if (!envelope) {
+      // The transaction no longer exists locally. Nothing to send, and retrying forever
+      // would block every later row for the same batch behind it.
+      return { skipped: 'transaction no longer present locally' };
+    }
+    const res = await pushTransaction(envelope);
+    await SyncService.markSynced(payload.clientTxnId);
+    return res;
+  },
+
+  // CMS -> Cloud, for the transitions that move no stock and so have no inventory
+  // transaction to travel inside.
+  sync_request_status: async (payload) => {
+    const envelope = await RequestStatusService.envelope(payload.eventUid);
+    if (!envelope) return { skipped: 'status event no longer present locally' };
+    const res = await pushRequestStatus(envelope);
+    await RequestStatusService.markSynced(payload.eventUid);
+    return res;
+  },
 };
 
 export class OutboxService {
@@ -95,6 +123,37 @@ export class OutboxService {
     }
 
     return { claimed: claimed.length, delivered, failed };
+  }
+
+  /**
+   * Drop delivered rows older than `days`. Undelivered rows are NEVER removed, however old:
+   * an undelivered callback is a thing EnVo still does not know, and age makes that more
+   * important rather than less. Delivered rows are an audit trail whose value decays, so
+   * they are kept for a season and then let go.
+   */
+  static async prune({ days = 90 } = {}) {
+    const { rowCount } = await query(
+      `DELETE FROM outbox
+        WHERE delivered_at IS NOT NULL
+          AND delivered_at < now() - ($1 || ' days')::interval`,
+      [days]
+    );
+    return rowCount;
+  }
+
+  // Callbacks EnVo has still not received. `stuckHours` is the age past which a pending row
+  // stops being "the link is down for a bit" and becomes something to look at: EnVo is
+  // showing a facility a request that the warehouse believes it has already dispatched.
+  static async stuck({ stuckHours = 6 } = {}) {
+    const { rows } = await query(
+      `SELECT id, kind, attempts, last_error, created_at, next_attempt_at
+         FROM outbox
+        WHERE delivered_at IS NULL
+          AND created_at < now() - ($1 || ' hours')::interval
+        ORDER BY id`,
+      [stuckHours]
+    );
+    return rows;
   }
 
   // Surfaced so staff can see whether anything is stuck waiting for EnVo.

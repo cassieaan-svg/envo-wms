@@ -6,6 +6,15 @@ const TOKEN_TTL = '12h';
 
 export class UserService {
   static async login(username, password) {
+    // CMS authenticates against its own replicated roster, for as long as it needs to.
+    //
+    // Phase 4 expired the roster after 72 hours without Cloud. That has been withdrawn: the
+    // warehouse must keep working whether or not the internet does, and locking staff out of
+    // their own store because a link has been down for three days protects nobody. A user
+    // disabled in Cloud during an outage does keep working here until the roster refreshes —
+    // that is the accepted cost of operating offline, and a local admin can disable the
+    // account immediately if it matters.
+
     const { rows } = await query(
       'SELECT id, username, password_hash, full_name, role FROM users WHERE username = $1 AND is_active',
       [username]

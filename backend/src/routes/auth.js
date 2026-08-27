@@ -17,6 +17,9 @@ router.post('/login', async (req, res, next) => {
     }
     return res.json(result);
   } catch (err) {
+    // A stale local roster is a 503, not a 500: the credentials may well be right, the
+    // warehouse simply cannot vouch for them any more. The message tells the operator that.
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     return next(err);
   }
 });

@@ -159,6 +159,12 @@ async function main() {
 
   // One transaction for the sheet: a stock-take is a single event, and a half-loaded
   // sheet is worse than none — you cannot tell which lines are missing.
+  //
+  // The single transaction is now also load-bearing for correctness. The balance guard
+  // (migrations/035) checks at commit that every batch's quantity_remaining agrees with its
+  // movements; creating the batch in one transaction and its opening receipt in another
+  // would leave the balance unexplained at the first commit and be rejected. Keep the
+  // INSERT of the batch and the INSERT of its movement together.
   await withTransaction(async (client) => {
     for (const p of plan) {
       const { rows: created } = await client.query(
