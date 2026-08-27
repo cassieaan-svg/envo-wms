@@ -28,8 +28,11 @@ ipconfig
 Take the IPv4 address on the warehouse network — something like `192.168.1.20`. The server
 address is that plus the port: `192.168.1.20:5100`.
 
-Give the CMS machine a fixed IP or a DHCP reservation. If its address changes, every device
-has to be pointed at the new one.
+**The CMS machine must have a DHCP reservation or a static IP.** This is not optional. A
+device talks to whichever address it was installed from, and there is no way to re-point it
+from the app — deliberately, so that warehouse staff cannot break their own device. If the
+CMS machine's address changes, every device has to be uninstalled and reinstalled at the new
+address. Set the reservation on the router before you set up a single device.
 
 ## 2. Install the app on the device
 
@@ -51,17 +54,11 @@ its own window with no address bar — it behaves like any other installed progr
 > Installing is not required. The app works in a normal browser tab. Installing gives it an
 > icon, its own window, and a shell that loads even with no internet.
 
-## 3. Point the device at the server
+## 3. Sign in
 
-The sign-in screen shows which server the device is using, with a green or red dot.
-
-- If the app was opened from the server's address, it is already correct — leave it.
-- Otherwise press **change**, type the address (`192.168.1.20:5100`), and **Save**.
-
-The address is remembered on that device. Setting it wrong is not dangerous — the sign-in
-screen will say the server is unavailable, and you can change it again.
-
-## 4. Sign in
+The sign-in screen shows a green dot and **Connected** when it can reach the CMS server. If
+it cannot, it says so plainly and shows the server address it tried — check that before
+assuming a password is wrong.
 
 Normal username and password. Authentication is handled by the **CMS server**, not by Cloud,
 so **signing in works with the internet down** and keeps working for as long as the store

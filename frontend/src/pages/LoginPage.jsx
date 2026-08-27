@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { auth } from '../lib/api.js';
 import { Banner, Field, PasswordInput } from '../components/ui.jsx';
-import { describeServer, isValidServerUrl, setConfiguredServer, clearConfiguredServer } from '../lib/cmsServer.js';
+import { describeServer } from '../lib/cmsServer.js';
 import { probeServer } from '../lib/connection.js';
 
 export default function LoginPage({ onSignedIn }) {
@@ -13,14 +13,8 @@ export default function LoginPage({ onSignedIn }) {
   // The warehouse server this device talks to. Checked BEFORE anyone types a password: if
   // the server is unreachable, "wrong username or password" would be a lie and would send a
   // storekeeper hunting for the wrong problem.
-  const [server, setServer] = useState(() => describeServer());
+  const server = describeServer();
   const [probe, setProbe] = useState({ state: 'checking' });
-  const [editing, setEditing] = useState(false);
-  // When the server is healthy the address is noise — on most devices the app was opened
-  // from that very address. It stays one click away, and un-hides itself the moment the
-  // probe fails, which is when it is the first thing anyone needs.
-  const [expanded, setExpanded] = useState(false);
-  const [draft, setDraft] = useState(() => describeServer().url || '');
 
   async function check() {
     setProbe({ state: 'checking' });
@@ -31,19 +25,6 @@ export default function LoginPage({ onSignedIn }) {
   }
 
   useEffect(() => { check(); }, [server.url]);
-
-  function saveServer(event) {
-    event.preventDefault();
-    if (draft.trim() && !isValidServerUrl(draft)) {
-      setError('That does not look like an address. Try something like 192.168.1.20:5100');
-      return;
-    }
-    setError(null);
-    if (draft.trim()) setConfiguredServer(draft);
-    else clearConfiguredServer();
-    setServer(describeServer());
-    setEditing(false);
-  }
 
   async function submit(event) {
     event.preventDefault();
@@ -64,8 +45,6 @@ export default function LoginPage({ onSignedIn }) {
   }
 
   const down = probe.state === 'down';
-  // Quiet only while everything is fine and nobody has asked for more.
-  const quiet = probe.state === 'up' && !editing && !expanded;
 
   return (
     <div className="login-wrap">
@@ -77,88 +56,46 @@ export default function LoginPage({ onSignedIn }) {
 
         <Banner kind="error">{error}</Banner>
 
-        {/* The server line is always visible, not hidden behind a settings screen. It is the
-            first thing to check when nothing works, and the person checking it is usually
-            not the person who set it up. */}
+        {/* Status only — there is deliberately no way to edit the server address from here.
+            The app always talks to whichever server served it, which is correct on every
+            device that was set up by browsing to the CMS machine. Exposing an editable
+            address to warehouse staff can only ever make a working device stop working, and
+            the person who could fix it is not the person holding the device. If the CMS
+            machine's address really does change, the fix is on the server (a fixed IP or a
+            DHCP reservation), not on twenty tablets.
+
+            The address is still shown when the probe FAILS, because then it is diagnostic. */}
         <div
           className="muted"
           style={{
             fontSize: 12, marginBottom: 14,
-            padding: quiet ? '2px 0' : '8px 10px',
-            border: quiet ? '1px solid transparent' : '1px solid var(--border)',
+            padding: down ? '8px 10px' : '2px 0',
+            border: down ? '1px solid var(--border)' : '1px solid transparent',
             borderRadius: 6,
           }}
         >
-          {editing ? (
-            <>
-              <label htmlFor="cms-server" style={{ display: 'block', marginBottom: 4 }}>
-                Warehouse server address
-              </label>
-              <input
-                id="cms-server"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                placeholder="192.168.1.20:5100"
-                style={{ width: '100%', marginBottom: 6 }}
-              />
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button type="button" className="btn small" onClick={saveServer}>Save</button>
-                <button
-                  type="button" className="btn small"
-                  onClick={() => { setDraft(server.url || ''); setEditing(false); setError(null); }}
-                >
-                  Cancel
-                </button>
-              </div>
-              <div style={{ marginTop: 6 }}>
-                Leave empty to use the server that provided this page.
-              </div>
-            </>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                  background: probe.state === 'up' ? 'var(--ok, #16a34a)'
-                    : down ? 'var(--danger, #dc2626)' : 'var(--border)',
-                }}
-              />
-              <span style={{ flex: 1 }}>
-                {probe.state === 'checking' && <>Checking the warehouse server…</>}
-                {probe.state === 'up' && (quiet
-                  ? <>Connected</>
-                  : <>Connected to the warehouse server <strong>{server.label}</strong></>
-                )}
-                {down && (
-                  <>
-                    <strong>Warehouse server unavailable.</strong> Check that the CMS server is
-                    running, and that this device is on the warehouse network.
-                    {probe.reason ? <> ({probe.reason})</> : null}
-                  </>
-                )}
-              </span>
-              {quiet ? (
-                // A plain word, not a button: it reveals the address, it does not change
-                // anything. `change` only appears once the address is on screen to change.
-                <button
-                  type="button"
-                  onClick={() => setExpanded(true)}
-                  style={{
-                    background: 'none', border: 0, padding: 0, font: 'inherit',
-                    color: 'inherit', opacity: 0.75, cursor: 'pointer',
-                    textDecoration: 'underline',
-                  }}
-                >
-                  server
-                </button>
-              ) : (
-                <button type="button" className="btn small" onClick={() => setEditing(true)}>
-                  change
-                </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              aria-hidden="true"
+              style={{
+                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                background: probe.state === 'up' ? 'var(--ok, #16a34a)'
+                  : down ? 'var(--danger, #dc2626)' : 'var(--border)',
+              }}
+            />
+            <span style={{ flex: 1 }}>
+              {probe.state === 'checking' && <>Checking the warehouse server…</>}
+              {probe.state === 'up' && <>Connected</>}
+              {down && (
+                <>
+                  <strong>Warehouse server unavailable.</strong> Check that the CMS server is
+                  running, and that this device is on the warehouse network.
+                  {' '}Server: <strong>{server.label}</strong>
+                  {probe.reason ? <> ({probe.reason})</> : null}
+                </>
               )}
-            </div>
-          )}
+            </span>
+          </div>
         </div>
 
         <Field label="Username">

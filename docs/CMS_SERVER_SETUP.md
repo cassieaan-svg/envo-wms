@@ -106,7 +106,7 @@ npm start --workspace @envo/wms-backend
 ```
 
 You should see `EnVo WMS backend listening on :5100`. Open `http://localhost:5100` — the
-sign-in screen, with a green dot and "Connected to the warehouse server".
+sign-in screen, with a green dot and "Connected".
 
 If you see JSON instead of the app, step 7 has not been run.
 
@@ -118,8 +118,12 @@ Same nine steps, plus the four below. Do them in this order.
 
 ### 10. Give the machine a fixed address
 
-A DHCP reservation on the router is best; a static IP also works. **If its address changes,
-every device stops working** until they are re-pointed.
+A DHCP reservation on the router, or a static IP. **Do this before setting up any device.**
+
+This is required, not advisory. Devices talk to whichever address they were installed from,
+and the app has no setting to change it — that is deliberate, so warehouse staff cannot
+break their own device. If this machine's address changes, every device must be uninstalled
+and reinstalled at the new address.
 
 Note the address — `ipconfig`, the IPv4 line on the warehouse network. Say `192.168.1.20`.
 
@@ -206,7 +210,7 @@ Migrations never run by themselves — that step is not optional. Devices will o
 | JSON instead of the app | The frontend has not been built — step 7 |
 | Devices cannot reach it, the server machine can | Firewall — step 11 — or the network is set to Public |
 | Worked yesterday, not today | Machine rebooted and the service is not installed — step 12 |
-| Devices worked, now say "server unavailable" | The machine's IP changed — step 10 |
+| Devices worked, now say "server unavailable" | The machine's IP changed — step 10. Restore the old address on the router, or reinstall the app on each device |
 | Server will not start, complains about role | `WMS_ROLE` and `WMS_ORIGIN` disagree in `.env` |
 | Amber bar, "waiting to reach Cloud" | Normal. The internet is down; the warehouse is fine |
 
