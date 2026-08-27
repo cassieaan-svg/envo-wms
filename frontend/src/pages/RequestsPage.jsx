@@ -5,6 +5,7 @@ import DayHistory from '../components/DayHistory.jsx';
 import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
 import { printDrfVoucher } from '../lib/drfVoucher.js';
 import { isValidNgPhone } from '../lib/phone.js';
+import { withTxn } from '../lib/txn';
 
 const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched', rejected: 'Rejected', cancelled: 'Cancelled' };
 // Reuses the shared badge palette rather than a private set of chip classes.
@@ -241,6 +242,61 @@ export default function RequestsPage() {
 
 // Who handled the request at each stage. Blank stages are shown as pending rather than
 // hidden, so it's obvious what the order is still waiting on.
+/**
+ * The transitions this request has been through, and whether Cloud has been told.
+ *
+ * The custody trail beside it answers "who handled this". This answers "what has the system
+ * done, and does anyone outside the warehouse know yet". During an outage that second half
+ * is the useful part: the dispatch is real, the facility simply has not been told, and a
+ * storekeeper who can see that will not go looking for a problem that is not there.
+ */
+function StatusTrail({ events }) {
+  if (!events?.length) return null;
+
+  const LABEL = { picking: 'Picking started', rejected: 'Rejected',
+                  cancelled: 'Cancelled', dispatched: 'Dispatched' };
+  const pending = events.filter((e) => !e.synced_at).length;
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="card-head">
+        <h2>Status history</h2>
+        {pending > 0 && (
+          <span className="badge soon">{pending} not yet sent to EnVo</span>
+        )}
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr><th>When</th><th>What</th><th>By</th><th>Note</th><th>EnVo</th></tr>
+          </thead>
+          <tbody>
+            {events.map((e) => (
+              <tr key={e.uid}>
+                <td className="muted">{dateTime(e.occurred_at)}</td>
+                <td>{LABEL[e.status] || e.status}</td>
+                <td>{e.actor || <span className="muted">—</span>}</td>
+                <td className="wrap">{e.note || <span className="muted">—</span>}</td>
+                <td>
+                  {e.synced_at
+                    ? <span className="muted" title={dateTime(e.synced_at)}>sent</span>
+                    : <span className="badge soon">held</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pending > 0 && (
+        <p className="muted" style={{ fontSize: 12, margin: '8px 0 0' }}>
+          Held updates reach EnVo on their own once the connection is back. The dispatch itself
+          is already recorded here — nothing is waiting on it.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CustodyTrail({ request }) {
   const stages = [
     { role: 'Requested by', name: request.requested_by, phone: request.requester_phone, at: request.created_at },
@@ -287,6 +343,35 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
   const [issue, setIssue] = useState(() =>
     Object.fromEntries(request.items.map((i) => [i.id, String(i.qty_dispatched ?? i.quantity)])));
   const [rejectReason, setRejectReason] = useState('');
+  const [printing, setPrinting] = useState(false);
+  const [prints, setPrints] = useState([]);
+
+  // A request only has a dispatch order once it has shipped. Before that the voucher is a
+  // pick list and there is nothing to record a copy against.
+  const orderId = request.dispatch_order_id || null;
+
+  useEffect(() => {
+    if (!orderId) { setPrints([]); return; }
+    api.dispatchOrders.prints(orderId).then(setPrints).catch(() => setPrints([]));
+  }, [orderId]);
+
+  async function printVoucher() {
+    setPrinting(true);
+    let label = null;
+    if (orderId) {
+      try {
+        const record = await api.dispatchOrders.print(orderId, {});
+        label = record.label;
+        setPrints((p) => [...p, record]);
+      } catch {
+        // Recording the copy failed. Print anyway — refusing to produce a waybill because an
+        // audit row could not be written would stop stock leaving over bookkeeping.
+        label = null;
+      }
+    }
+    printDrfVoucher(request, { printLabel: label });
+    setPrinting(false);
+  }
   // Schemes are loaded only to turn the key into a label. The fund is the FACILITY's
   // choice and is not editable here — the store fills the request from that fund or
   // rejects it, so there is deliberately no control to change it.
@@ -342,12 +427,27 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         <button className="btn small" onClick={pdf}>
           ⭳ PDF
         </button>
-        <button className="btn small" onClick={() => printDrfVoucher(request)}>
-          ⎙ DRF Voucher
+        <button className="btn small" onClick={printVoucher} disabled={printing}>
+          {printing ? 'preparing…'
+            : prints.length === 0 ? '⎙ DRF Voucher'
+            : `⎙ Reprint (#${prints.length})`}
         </button>
       </div>
 
       <CustodyTrail request={request} />
+
+      <StatusTrail events={request.statusEvents} />
+
+      {prints.length > 1 && (
+        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+          <strong>{prints.length} copies of this waybill taken.</strong>{' '}
+          {prints.map((p, i) => (
+            <span key={p.uid || i}>
+              {i > 0 && ' · '}{p.label}{p.printed_by ? ` — ${p.printed_by}` : ''}
+            </span>
+          ))}
+        </div>
+      )}
 
       {request.notes && <Banner kind="warn">{request.notes}</Banner>}
 
@@ -442,13 +542,15 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
             localStorage.setItem('wms_dispatched_by', dispatchedBy.trim());
             onAct(
               () =>
-                api.requests.fulfil(request.id, {
-                  pickedBy: pickedBy.trim(),
-                  carrierName: carrierName.trim(),
-                  carrierPhone: carrierPhone.trim(),
-                  dispatchedBy: dispatchedBy.trim(),
-                  items: request.items.map((i) => ({ itemId: i.id, qty: clampIssue(i) })),
-                }),
+                withTxn(`fulfil:${request.id}`, (clientTxnId) =>
+                  api.requests.fulfil(request.id, {
+                    pickedBy: pickedBy.trim(),
+                    carrierName: carrierName.trim(),
+                    carrierPhone: carrierPhone.trim(),
+                    dispatchedBy: dispatchedBy.trim(),
+                    items: request.items.map((i) => ({ itemId: i.id, qty: clampIssue(i) })),
+                    clientTxnId,
+                  })),
               'Dispatched — EnVo notified.'
             );
           }}
@@ -620,6 +722,12 @@ function SyncMarker({ sync }) {
 
   const pending = Number(sync.pending) || 0;
   const lastDelivered = sync.last_delivered_at;
+  // Present only on a CMS instance. On Cloud these are undefined and the extra lines simply
+  // do not render, so one component serves both roles.
+  const isCms = sync.role?.role === 'cms';
+  const pendingTxns = Number(sync.pendingTransactions) || 0;
+  const pendingStatus = Number(sync.pendingStatusEvents) || 0;
+  const stale = sync.masterData?.staleness;
 
   return (
     <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
@@ -633,6 +741,39 @@ function SyncMarker({ sync }) {
           <>EnVo is up to date</>
         )}
       </div>
+
+      {/* On CMS the question staff actually ask during an outage is not "does EnVo know?"
+          but "is my work safe?". A backlog here is normal and self-healing — the stock has
+          already moved locally and the record is committed — so it is stated plainly rather
+          than as a warning. */}
+      {isCms && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          {pendingTxns > 0 || pendingStatus > 0 ? (
+            <>
+              <span className="badge soon">
+                {[pendingTxns > 0 && `${pendingTxns} transaction(s)`,
+                  pendingStatus > 0 && `${pendingStatus} status update(s)`]
+                  .filter(Boolean).join(' and ')} held for Cloud
+              </span>
+              {' '}· recorded here and safe
+            </>
+          ) : (
+            <>Cloud has everything this warehouse has done</>
+          )}
+        </div>
+      )}
+
+      {/* Stale master data is the one thing that does change what the warehouse may do. */}
+      {isCms && stale && stale.level !== 'fresh' && (
+        <div style={{ fontSize: 12 }}>
+          <span className={`badge ${stale.level === 'blocked' ? 'alert' : 'soon'}`}>
+            {stale.level === 'blocked' ? 'Priced dispatch paused' : 'Master data ageing'}
+          </span>
+          {' '}
+          <span className="muted">{stale.message}</span>
+        </div>
+      )}
+
       {lastDelivered && (
         <div className="muted" style={{ fontSize: 12 }}>
           last synced {dateTime(lastDelivered)}

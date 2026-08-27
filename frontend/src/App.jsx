@@ -3,6 +3,7 @@ import { auth, getStoredUser, getToken } from './lib/api.js';
 import { applyTheme, getStoredTheme, resolveDark, storeTheme, systemPrefersDark } from './lib/theme.js';
 import ChangePasswordModal from './components/ChangePasswordModal.jsx';
 import ThemeSwitch from './components/ThemeSwitch.jsx';
+import ConnectionBar from './components/ConnectionBar.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import VendorsPage from './pages/VendorsPage.jsx';
 import CommoditiesPricesPage from './pages/CommoditiesPricesPage.jsx';
@@ -242,6 +243,7 @@ export default function App() {
       </aside>
 
       <main>
+        <ConnectionBar />
         <Page isAdmin={isAdmin} />
       </main>
 

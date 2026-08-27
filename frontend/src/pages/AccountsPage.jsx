@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { Banner, Empty, Field, dateOnly, dateTime, money } from '../components/ui.jsx';
 import { downloadCsv, stamp } from '../lib/download.js';
+import { withTxn } from '../lib/txn';
 
 // What facilities owe the central store, as two lists of ORDERS: unpaid and paid.
 //
@@ -117,10 +118,15 @@ export default function AccountsPage() {
     if (!receiptNo.trim()) return setError('enter the receipt number issued to the facility');
     setBusy(true);
     try {
-      const b = await api.accounts.recordPayment(order.id, {
-        amount: value, note: note || null, recordedBy: recordedBy.trim(),
-        receiptNo: receiptNo.trim(),
-      });
+      // Money: the same stable id as a stock movement. Keyed on the receipt number as
+      // well as the order, because two instalments against one order are two different
+      // transactions and must not share an id.
+      const b = await withTxn(`payment:${order.id}:${receiptNo.trim()}`, (clientTxnId) =>
+        api.accounts.recordPayment(order.id, {
+          amount: value, note: note || null, recordedBy: recordedBy.trim(),
+          receiptNo: receiptNo.trim(),
+          clientTxnId,
+        }));
       // Remembered locally so the same officer isn't retyping their name on every
       // instalment; it is still a typed value, not the login account.
       localStorage.setItem('wms_payment_recorded_by', recordedBy.trim());

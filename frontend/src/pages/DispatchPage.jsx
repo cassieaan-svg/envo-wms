@@ -6,6 +6,7 @@ import { CommodityPicker, FacilityPicker } from '../components/pickers.jsx';
 import { ymd } from '../components/PeriodFilter.jsx';
 import { downloadCsv, slug, stamp } from '../lib/download.js';
 import { printDrfVoucher } from '../lib/drfVoucher.js';
+import { withTxn } from '../lib/txn';
 
 // A dispatch order shaped for the DRF voucher: what was dispatched is what was issued,
 // and the "to be completed by" sections stay open (no request/receipt to pre-fill).
@@ -171,16 +172,20 @@ export default function DispatchPage({ isAdmin }) {
     setBusy(true);
     setError(null);
     try {
-      const order = await api.facilities.createDispatchOrder(facilityId, {
-        items: filled.map((l) => ({
-          commodityId: Number(l.commodityId),
-          quantity: Number(l.quantity),
-          unitPrice: Number(l.unitPrice),
-        })),
-        notes: notes || null,
-        scheme,
-        dispatchedBy: dispatchedBy.trim(),
-      });
+      // The id is minted before the request goes out and survives a reload, so a dispatch
+      // whose reply was lost is retried as the SAME dispatch rather than issued twice.
+      const order = await withTxn(`dispatch:${facilityId}`, (clientTxnId) =>
+        api.facilities.createDispatchOrder(facilityId, {
+          items: filled.map((l) => ({
+            commodityId: Number(l.commodityId),
+            quantity: Number(l.quantity),
+            unitPrice: Number(l.unitPrice),
+          })),
+          notes: notes || null,
+          scheme,
+          dispatchedBy: dispatchedBy.trim(),
+          clientTxnId,
+        }));
       localStorage.setItem('wms_dispatched_by', dispatchedBy.trim());
       setNotice(
         `dispatched ${order.items.length} line(s) totalling ${money(order.total_amount)} — order #${order.id}`
@@ -519,6 +524,38 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState(null);
   const [picking, setPicking] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const [prints, setPrints] = useState([]);
+
+  useEffect(() => {
+    api.dispatchOrders.prints(order.id).then(setPrints).catch(() => setPrints([]));
+  }, [order.id]);
+
+  /**
+   * Take a copy of the waybill.
+   *
+   * The copy is RECORDED FIRST, and the label the server gives back is what goes on the
+   * paper. Counting in the browser would let two devices each believe they hold the
+   * original — the label has to come from the one place that knows.
+   *
+   * If recording fails (Cloud is irrelevant here; this is the local server) the document is
+   * still printed, unlabelled, with the reason shown. Refusing to print because the audit
+   * write failed would stop stock leaving the warehouse over a bookkeeping problem.
+   */
+  async function printVoucher() {
+    setPrinting(true);
+    setEditError(null);
+    let label = null;
+    try {
+      const record = await api.dispatchOrders.print(order.id, {});
+      label = record.label;
+      setPrints((p) => [...p, record]);
+    } catch (err) {
+      setEditError(`Could not record this copy (${err.message}) — printing anyway, unlabelled.`);
+    }
+    printDrfVoucher(orderAsVoucher(order), { printLabel: label });
+    setPrinting(false);
+  }
 
   function startEdit() {
     setDraft(order.items.map((i) => ({
@@ -545,14 +582,18 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
     setSaving(true);
     setEditError(null);
     try {
-      const updated = await api.dispatchOrders.update(order.id, {
-        items: filled.map((l) => ({
-          commodityId: Number(l.commodityId),
-          quantity: Number(l.quantity),
-          unitPrice: Number(l.unitPrice),
-        })),
-        notes: draftNotes || null,
-      });
+      // An edit reverses and re-draws real stock, so it needs the same protection as the
+      // original dispatch.
+      const updated = await withTxn(`dispatch-edit:${order.id}`, (clientTxnId) =>
+        api.dispatchOrders.update(order.id, {
+          items: filled.map((l) => ({
+            commodityId: Number(l.commodityId),
+            quantity: Number(l.quantity),
+            unitPrice: Number(l.unitPrice),
+          })),
+          notes: draftNotes || null,
+          clientTxnId,
+        }));
       setEditing(false);
       onSaved?.(updated);
     } catch (err) {
@@ -576,8 +617,8 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
         <button className="btn small" onClick={csv} disabled={editing}>
           ⭳ CSV
         </button>
-        <button className="btn small" onClick={() => printDrfVoucher(orderAsVoucher(order))} disabled={editing}>
-          ⎙ DRF Voucher
+        <button className="btn small" onClick={printVoucher} disabled={editing || printing}>
+          {printing ? 'preparing…' : prints.length === 0 ? '⎙ DRF Voucher' : `⎙ Reprint (#${prints.length})`}
         </button>
         {isAdmin && !editing && !/^Essential request #/.test(order.notes || '') && (
           <button className="btn small" onClick={startEdit} style={{ marginLeft: 'auto' }}>
@@ -594,6 +635,23 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
       <Banner kind="error" onDismiss={() => setEditError(null)}>
         {editError}
       </Banner>
+
+      {/* Shown only once a second copy exists. Before that it is noise; after that it is the
+          thing someone needs to see before taking a third — printing moves no stock, but two
+          copies of a waybill in circulation is a real-world problem. */}
+      {prints.length > 1 && (
+        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+          <strong>{prints.length} copies taken.</strong>{' '}
+          {prints.map((p, i) => (
+            <span key={p.uid || i}>
+              {i > 0 && ' · '}
+              {p.label}
+              {p.printed_by ? ` — ${p.printed_by}` : ''}
+              {p.printed_at ? ` (${dateTime(p.printed_at)})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
 
       {editing ? (
         <form onSubmit={saveEdit} onKeyDown={blockEnterSubmit}>

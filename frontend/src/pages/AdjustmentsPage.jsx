@@ -4,6 +4,7 @@ import { Banner, dateOnly, dateTime, qty, qtyWithUnit } from '../components/ui.j
 import DayHistory from '../components/DayHistory.jsx';
 import { CommodityPicker } from '../components/pickers.jsx';
 import { reasonLabel } from '../lib/adjustments.js';
+import { withTxn } from '../lib/txn';
 
 const COLUMNS = [
   { header: 'Date', value: (r) => dateTime(r.created_at), muted: true },
@@ -136,12 +137,16 @@ function AdjustmentForm({ onSaved, onError }) {
       // The reason fixes the sign server-side for everything but a recount, where the
       // chosen type is what decides it — so a recount sends a signed number.
       const payload = rule.direction === 0 ? signed : magnitude;
-      await api.batches.adjust(Number(batchId), {
-        quantity: payload,
-        reason,
-        note,
-        adjustedBy,
-      });
+      // One stable id per adjustment being entered, so pressing Save twice — or
+      // reloading and trying again — cannot write the correction off the batch twice.
+      await withTxn(`adjust:${batchId}`, (clientTxnId) =>
+        api.batches.adjust(Number(batchId), {
+          quantity: payload,
+          reason,
+          note,
+          adjustedBy,
+          clientTxnId,
+        }));
       onSaved(`${rule.label.toLowerCase()}: ${qty(magnitude)} on ${commodity?.name}`);
       setAmount('1');
       setNote('');

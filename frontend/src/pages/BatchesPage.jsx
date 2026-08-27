@@ -6,6 +6,7 @@ import BatchTable from '../components/BatchTable.jsx';
 import { CommodityPicker } from '../components/pickers.jsx';
 import { reasonLabel } from '../lib/adjustments.js';
 import { downloadCsv, slug, stamp } from '../lib/download.js';
+import { withTxn } from '../lib/txn';
 
 
 // The day's receipts, shown the same way as every other Operations history.
@@ -78,15 +79,20 @@ export default function BatchesPage({ isAdmin }) {
     setBusy(true);
     setError(null);
     try {
-      await api.batches.receive({
-        commodityId: Number(commodityId),
-        batchNumber: receipt.batchNumber,
-        expiryDate: receipt.expiryDate,
-        quantity: Number(receipt.quantity),
-        unitCost: receipt.unitCost === '' ? null : Number(receipt.unitCost),
-        vendorId: receipt.vendorId === '' ? null : Number(receipt.vendorId),
-        receivedDate: receipt.receivedDate || null,
-      });
+      // Receiving is the path with no natural uniqueness to fall back on: most lots
+      // arrive without a batch number, so a repeated submit would otherwise create a
+      // second lot in silence.
+      await withTxn(`receive:${commodityId}`, (clientTxnId) =>
+        api.batches.receive({
+          commodityId: Number(commodityId),
+          batchNumber: receipt.batchNumber,
+          expiryDate: receipt.expiryDate,
+          quantity: Number(receipt.quantity),
+          unitCost: receipt.unitCost === '' ? null : Number(receipt.unitCost),
+          vendorId: receipt.vendorId === '' ? null : Number(receipt.vendorId),
+          receivedDate: receipt.receivedDate || null,
+          clientTxnId,
+        }));
       setNotice(`received batch ${receipt.batchNumber}`);
       setReceipt(BLANK_RECEIPT);
       await loadBatches();
@@ -380,7 +386,8 @@ function AdjustModal({ batch, onClose, onSaved, onError }) {
     event.preventDefault();
     setBusy(true);
     try {
-      await api.batches.adjust(batch.id, { quantity: Number(amount), reason, note });
+      await withTxn(`adjust:${batch.id}`, (clientTxnId) =>
+        api.batches.adjust(batch.id, { quantity: Number(amount), reason, note, clientTxnId }));
       onSaved(`${rule.label.toLowerCase()}: ${qty(Math.abs(signed))} on ${batch.batch_number || 'unlabelled batch'}`);
     } catch (err) {
       onError(err.message);

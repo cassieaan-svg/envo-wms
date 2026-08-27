@@ -26,7 +26,7 @@ const line = (label, value, flex) =>
 
 const ROW_COUNT = 14;   // the paper form has 14 numbered lines
 
-export function buildDrfVoucherHtml(request) {
+export function buildDrfVoucherHtml(request, { printLabel = null } = {}) {
   // Once dispatched, a line the warehouse removed (issued 0) isn't part of the voucher —
   // the facility re-requests it later. Before dispatch (qty_dispatched null) every
   // requested line still shows, so the pick list is complete.
@@ -75,6 +75,16 @@ export function buildDrfVoucherHtml(request) {
   .head .fund { font-size:11px; font-weight:bold; }
   .head .title { font-size:12px; font-weight:bold; text-decoration:underline; margin-top:2px; }
   .vno { float:right; border:1px solid #000; padding:2px 8px; font-weight:bold; color:#b00; }
+  /* A reprint has to be obvious on paper. Two copies of one waybill in circulation are
+     dangerous only when nobody can tell which is which, so the label sits beside the
+     voucher number — where a storekeeper already looks — and again as a watermark that
+     survives being glanced at from across a counter. */
+  .reprint { float:right; margin-right:6px; border:2px solid #b00; color:#b00;
+             padding:2px 8px; font-weight:bold; letter-spacing:.5px; }
+  .wm { position:fixed; top:42%; left:0; right:0; text-align:center; font-size:64px;
+        font-weight:bold; color:rgba(176,0,0,.10); letter-spacing:6px;
+        transform:rotate(-18deg); pointer-events:none; z-index:0; }
+  .sheet { position:relative; z-index:1; }
   .fld { display:flex; gap:4px; align-items:flex-end; margin:2px 0; }
   .fld .lbl { white-space:nowrap; }
   .fld .val { flex:1; border-bottom:1px solid #000; min-height:12px; padding:0 3px; font-weight:bold; }
@@ -93,8 +103,10 @@ export function buildDrfVoucherHtml(request) {
   @media screen { body { background:#f2f2f2; padding:10px; } .sheet { background:#fff; padding:10mm; max-width:1100px; margin:0 auto; box-shadow:0 1px 6px rgba(0,0,0,.2); } }
 </style></head>
 <body onload="window.focus(); window.print();">
+${printLabel && printLabel !== 'ORIGINAL' ? `<div class="wm">${esc(printLabel)}</div>` : ''}
 <div class="sheet">
   <div class="vno">No. ${esc(request.id)}</div>
+  ${printLabel && printLabel !== 'ORIGINAL' ? `<div class="reprint">${esc(printLabel)}</div>` : ''}
   <div class="head">
     <div class="ministry">MINISTRY OF HEALTH, AKWA IBOM STATE</div>
     <div class="fund">ESSENTIAL DRUG REVOLVING FUND (DRF)</div>
@@ -176,10 +188,18 @@ export function buildDrfVoucherHtml(request) {
   return html;
 }
 
-export function printDrfVoucher(request) {
+/**
+ * Open the voucher in a print window.
+ *
+ * `printLabel` is what the server said this copy is — ORIGINAL, REPRINT #1, and so on. It is
+ * passed in rather than counted here because the count belongs to the record, not to the
+ * browser: two people printing from two devices must not both believe they hold the original.
+ */
+export function printDrfVoucher(request, { printLabel = null } = {}) {
   const w = window.open('', '_blank', 'width=1100,height=800');
-  if (!w) return;
+  if (!w) return false;
   w.document.open();
-  w.document.write(buildDrfVoucherHtml(request));
+  w.document.write(buildDrfVoucherHtml(request, { printLabel }));
   w.document.close();
+  return true;
 }

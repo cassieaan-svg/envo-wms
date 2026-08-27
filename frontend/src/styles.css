@@ -1315,3 +1315,30 @@ tr.row-child > td {
   outline: 2px solid var(--accent-soft);
   color: var(--text);
 }
+
+/* The connection bar. Sits at the top of the working area rather than floating, so it
+   cannot cover a form field, and is quiet by default — it renders nothing at all when the
+   warehouse server is reachable and Cloud is up to date. */
+.conn-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+/* Amber: work is being held for Cloud. Normal, and deliberately not red — this state is the
+   system doing its job, and colouring it as a fault teaches people to ignore the red one. */
+.conn-bar.soon {
+  border-color: #b45309;
+  background: color-mix(in srgb, #b45309 12%, transparent);
+}
+/* Red: the warehouse server cannot be reached and nothing can be recorded. */
+.conn-bar.alert {
+  border-color: #dc2626;
+  background: color-mix(in srgb, #dc2626 14%, transparent);
+}

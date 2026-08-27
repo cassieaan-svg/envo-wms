@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 import { Banner, Empty, Field, Modal, dateOnly, money, qty, unitLabel } from '../components/ui.jsx';
 import PriceSection from '../components/PriceSection.jsx';
 import { downloadCsv, downloadPdf, stamp } from '../lib/download.js';
+import { withTxn } from '../lib/txn';
 
 const PRICE_LIST_COLUMNS = [
   { header: 'Category', value: (c) => c.category || 'Uncategorised' },
@@ -566,13 +567,15 @@ function BatchesSection({ commodity, isAdmin, onSaved }) {
     setBusy(true);
     setError(null);
     try {
-      await api.batches.receive({
-        commodityId: commodity.id,
-        batchNumber: form.batchNumber.trim(),
-        expiryDate: form.expiryDate,
-        quantity: Number(form.quantity),
-        unitCost: form.unitCost === '' ? null : Number(form.unitCost),
-      });
+      await withTxn(`receive:${commodity.id}`, (clientTxnId) =>
+        api.batches.receive({
+          commodityId: commodity.id,
+          batchNumber: form.batchNumber.trim(),
+          expiryDate: form.expiryDate,
+          quantity: Number(form.quantity),
+          unitCost: form.unitCost === '' ? null : Number(form.unitCost),
+          clientTxnId,
+        }));
       setForm({ batchNumber: '', expiryDate: '', quantity: '', unitCost: '' });
       await load();
       onSaved?.(`batch added to ${commodity.name}${form.batchNumber.trim() ? ` (${form.batchNumber.trim()})` : ''}`);

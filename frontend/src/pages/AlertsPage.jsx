@@ -30,6 +30,8 @@ export default function AlertsPage() {
   const [withinDays, setWithinDays] = useState(90);
   const [expiry, setExpiry] = useState([]);
   const [stock, setStock] = useState({ understock: [], overstock: [] });
+  // Batches whose recorded movements do not add up to the quantity on the batch row.
+  const [drift, setDrift] = useState([]);
   // '' | 'expired' | 'soon' — set by the two expiry tiles, which split the same table.
   const [expiryFilter, setExpiryFilter] = useState('');
   const [loading, setLoading] = useState(true);
@@ -38,16 +40,22 @@ export default function AlertsPage() {
   const expiryCard = useRef(null);
   const understockCard = useRef(null);
   const overstockCard = useRef(null);
+  const driftCard = useRef(null);
 
   async function load() {
     setLoading(true);
     try {
-      const [expiryRows, stockRows] = await Promise.all([
+      const [expiryRows, stockRows, driftRows] = await Promise.all([
         api.alerts.expiry({ withinDays }),
         api.alerts.stock(),
+        // Open findings only — recorded by the scheduled check, not run from here. Showing
+        // them beside the stock alerts is the point: a batch that does not reconcile is a
+        // stock problem, not a database curiosity.
+        api.reconciliation.open().catch(() => []),
       ]);
       setExpiry(expiryRows);
       setStock(stockRows);
+      setDrift(driftRows || []);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -255,6 +263,54 @@ export default function AlertsPage() {
           )}
         </div>
         <StockTable rows={stock.overstock} loading={loading} kind="overstock" />
+      </div>
+
+      <div className="card" ref={driftCard}>
+        <div className="card-head">
+          <h2>Stock integrity — batches that do not reconcile</h2>
+        </div>
+        <p className="muted" style={{ margin: '0 0 12px' }}>
+          The movements recorded against these batches do not add up to the quantity the
+          batch is carrying. Either stock moved without a movement being written, or a
+          movement was written without the stock moving. Nothing is corrected automatically:
+          check the shelf, then put it right with a physical count correction so the
+          adjustment is recorded and signed for.
+        </p>
+        {drift.length === 0 ? (
+          <Empty>{loading ? 'checking…' : 'Every batch agrees with its ledger.'}</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Commodity</th>
+                  <th>Intake batch no.</th>
+                  <th className="num">Expected</th>
+                  <th className="num">On the batch</th>
+                  <th className="num">Variance</th>
+                  <th>Detected</th>
+                </tr>
+              </thead>
+              <tbody>
+                {drift.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.commodity_name}</td>
+                    <td>{row.batch_number || <span className="muted">unlabelled</span>}</td>
+                    <td className="num">{qty(row.expected_quantity)}</td>
+                    <td className="num">{qty(row.actual_quantity)}</td>
+                    <td className="num">
+                      <strong>
+                        {Number(row.variance) > 0 ? '+' : ''}
+                        {qty(row.variance)}
+                      </strong>
+                    </td>
+                    <td>{dateOnly(row.detected_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </>
   );

@@ -1,7 +1,5 @@
-// `??` rather than `||` so an explicitly empty VITE_API_URL means "same origin" — the
-// tunnel/demo case, where requests go through the dev proxy — instead of silently falling
-// back to localhost, which would be the viewer's own machine.
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5100';
+import { getServerBase } from './cmsServer.js';
+
 const TOKEN_KEY = 'envo_wms_token';
 const USER_KEY = 'envo_wms_user';
 
@@ -19,17 +17,35 @@ function clearSession() {
   localStorage.removeItem(USER_KEY);
 }
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, signal } = {}) {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  // Resolved per call, not once at module load: the operator can point the device at a
+  // different warehouse server without reloading the app.
+  const base = getServerBase();
+
+  let res;
+  try {
+    res = await fetch(`${base}${path}`, {
+      method,
+      headers,
+      signal,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (cause) {
+    // fetch only rejects when the request never got an answer — the server is off, the
+    // address is wrong, or the device is off the LAN. That is a different problem from a
+    // 4xx, and the UI has to say so differently: one means "check the warehouse server",
+    // the other means "you did something the server refused".
+    const err = new Error('Warehouse server unavailable');
+    err.offline = true;
+    err.cause = cause;
+    err.serverBase = base;
+    throw err;
+  }
 
   if (res.status === 401) {
     clearSession();
@@ -121,6 +137,10 @@ export const api = {
     list: (params) => request(`/api/dispatch-orders${qs(params)}`),
     get: (id) => request(`/api/dispatch-orders/${id}`),
     update: (id, body) => request(`/api/dispatch-orders/${id}`, { method: 'PUT', body }),
+    // Records that a copy of the waybill was taken and returns the label it should carry
+    // (ORIGINAL, REPRINT #1, …). Moves no stock — see DispatchService.recordPrint.
+    print: (id, body) => request(`/api/dispatch-orders/${id}/print`, { method: 'POST', body }),
+    prints: (id) => request(`/api/dispatch-orders/${id}/prints`),
   },
   requests: {
     list: (params) => request(`/api/requests${qs(params)}`),
@@ -147,6 +167,14 @@ export const api = {
   sync: {
     status: () => request('/api/sync/status'),
   },
+  // Stock integrity: where the ledger and the shelf figure disagree. Findings only —
+  // nothing here corrects anything.
+  reconciliation: {
+    open: () => request('/api/reconciliation'),
+    run: () => request('/api/reconciliation/run', { method: 'POST', body: {} }),
+    resolve: (id, body) => request(`/api/reconciliation/${id}/resolve`, { method: 'POST', body }),
+  },
+
   alerts: {
     expiry: (params) => request(`/api/alerts/expiry${qs(params)}`),
     stock: () => request('/api/alerts/stock'),
