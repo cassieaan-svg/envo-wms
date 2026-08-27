@@ -1,5 +1,9 @@
 # Setting up a warehouse device
 
+> The CMS server serves **both the app and the API on one port**, so a device only ever
+> needs one address: `http://<cms-ip>:5100`. Setting up the server itself is a separate
+> document — see `docs/CMS_SERVER_SETUP.md`.
+
 The warehouse app runs on any device on the store's network — a laptop, a desktop at the
 issuing counter, or a tablet. It talks to the **CMS server** over the LAN, and it keeps
 working when the internet is down.

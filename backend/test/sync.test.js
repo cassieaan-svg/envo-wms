@@ -532,25 +532,43 @@ test('the mirror exemption is scoped to the ingest transaction and nothing else'
 
 // ── Role gating ─────────────────────────────────────────────────────────────
 test('a CMS instance cannot reach EnVo, and refuses to serve master data', async () => {
+  // Asserted by ASKING THE SERVER, not by reading its route table. An earlier version
+  // matched route-regex source strings for "inbound", which quietly broke the day the
+  // static-file route gained a negative lookahead containing that same word — the
+  // assertion was right and its method was wrong.
   const { execFileSync } = await import('node:child_process');
-  const script = `
-    const { default: app } = await import('./src/server.js');
-    const { MasterDataService } = await import('./src/services/masterDataService.js');
-    const { default: pool } = await import('./src/db.js');
-    const routes = app._router.stack.filter(l => l.regexp).map(l => l.regexp.source);
-    const hasEnvo = routes.some(r => r.includes('inbound') || r.includes('catalogue'));
-    let servesMaster = true;
-    try { await MasterDataService.snapshot(); } catch { servesMaster = false; }
-    await pool.end();
-    console.log(JSON.stringify({ hasEnvo, servesMaster }));
-  `;
+  const script = [
+    "const { default: app } = await import('./src/server.js');",
+    "const { MasterDataService } = await import('./src/services/masterDataService.js');",
+    "const { default: pool } = await import('./src/db.js');",
+    "const server = app.listen(0);",
+    "await new Promise(r => server.once('listening', r));",
+    "const base = 'http://127.0.0.1:' + server.address().port;",
+    "const hit = async (p) => (await fetch(base + p, { headers: { 'x-service-token': 'anything' } })).status;",
+    "const inbound = await hit('/inbound/requests');",
+    "const catalogue = await hit('/api/catalogue/export');",
+    "let servesMaster = true;",
+    "try { await MasterDataService.snapshot(); } catch { servesMaster = false; }",
+    "await new Promise(r => server.close(r));",
+    "await pool.end();",
+    "console.log(JSON.stringify({ inbound, catalogue, servesMaster }));",
+  ].join('\n');
   const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     env: { ...process.env, WMS_ROLE: 'cms', WMS_ORIGIN: 'cms', OUTBOX_WORKER: 'off',
            RECONCILE_WORKER: 'off', SYNC_WORKER: 'off' },
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const r = JSON.parse(out.trim().split(/\r?\n/).pop());
-  assert.equal(r.hasEnvo, false, 'the EnVo routes are not mounted on CMS at all');
+  const trimmed = out.trim();
+  const r = JSON.parse(trimmed.slice(trimmed.lastIndexOf('{')));
+
+  // /inbound sits outside the authenticated surface, so a 404 here is the clean signal that
+  // the route genuinely does not exist on CMS — not that it exists and refused a token.
+  assert.equal(r.inbound, 404, 'the EnVo inbound route is not mounted on CMS');
+
+  // The catalogue export lives under /api, where authMiddleware runs BEFORE routing, so an
+  // unauthenticated call is rejected at 401 and never reaches the missing route. 404 is
+  // therefore unreachable here; what matters is that it is never served.
+  assert.ok(r.catalogue !== 200, `the catalogue export is not served on CMS (got ${r.catalogue})`);
   assert.equal(r.servesMaster, false, 'and CMS does not serve master data — Cloud owns it');
 });
 

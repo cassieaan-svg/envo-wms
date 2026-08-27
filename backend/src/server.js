@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
 
 import { authMiddleware } from './middleware/auth.js';
 import { startOutboxWorker } from './lib/outboxWorker.js';
@@ -67,6 +69,47 @@ app.use('/api/reconciliation', reconciliationRouter);
 // Facility CRUD, its commodity assignments, stock proxy and dispatch-order history all
 // hang off /api/facilities.
 app.use('/api/facilities', facilitiesRouter);
+
+// ── Serve the warehouse app itself ──────────────────────────────────────────
+//
+// The built frontend is served by this same server, so a warehouse device has ONE address
+// to know: http://<cms-machine>:5100 gives it both the app and the API.
+//
+// That is not just convenience. Same origin means the device needs no configuration at all
+// (the app's default is "ask the server that served me"), there is no CORS to get wrong, and
+// the service worker's scope covers the whole app. Running the frontend on a second port
+// would mean every device had to be pointed at the API separately, and every one of those is
+// a chance to point it somewhere wrong.
+//
+// Mounted AFTER the API routes, so nothing here can shadow /api, /health, /inbound or /sync.
+// Skipped entirely when there is no build — a dev machine running `vite` separately is
+// unaffected.
+const distDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'frontend', 'dist');
+
+if (existsSync(join(distDir, 'index.html'))) {
+  app.use(express.static(distDir, {
+    // Hashed assets can be cached hard; index.html and the service worker must not be, or a
+    // device keeps running an old build after an update has been deployed.
+    setHeaders(res, filePath) {
+      if (/(index\.html|sw\.js|manifest\.webmanifest|registerSW\.js)$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache');
+      } else if (/[.-][A-Za-z0-9_-]{8,}\.(js|css|woff2?|png)$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+
+  // Anything else that is not an API call is the app being opened at some path — hand back
+  // index.html and let the app render. Restricted to GET so a mistyped POST still 404s
+  // honestly instead of returning a page.
+  app.get(/^\/(?!api|health|inbound|sync).*/, (req, res, next) => {
+    if (req.accepts('html')) return res.sendFile(join(distDir, 'index.html'));
+    return next();
+  });
+} else {
+  console.log('[web] no frontend build found — serving the API only '
+    + '(run `npm run build --workspace @envo/wms-frontend` to serve the app from here)');
+}
 
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 
