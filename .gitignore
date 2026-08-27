@@ -7,3 +7,9 @@ dist/
 
 # Local scratch: a copy of .env taken before the tunnel demo.
 .env.backup
+
+# Claude Code local config — editor/agent scratch, not part of the project.
+.claude/
+
+# Commissioning drill output (pg_dump files from scripts/commission.mjs).
+.commission-backups/
