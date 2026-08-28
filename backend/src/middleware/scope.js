@@ -321,23 +321,30 @@ export async function enforceTransferAccess(req, res, transfer) {
 // rejected even though they can read. Also applies the section gate. When `transfer`
 // carries no nested commodity (e.g. a create line), pass its category via the
 // separate enforceCommoditySection check instead.
-export async function enforceTransferWrite(req, res, transfer) {
+export async function mayWriteTransfer(req, transfer) {
   const s = req.scope
   if (s.sectionCategories) {
     // Unlike the read guard, an absent category is allowed through here (a create line
     // carries no nested commodity — the route checks it via enforceCommoditySection).
     const { category, name } = transfer.commodities || {}
     if (category != null && !allowsCommodity(s.sectionCategories, s.sectionCommodityNames, category, name)) {
-      return forbid(res, 'Not authorized for this transfer'), false
+      return false
     }
   }
   if (isWriteAdmin(s, 'transfers')) { // state_admin
     const allowed = await narrowedAdminFacilityIds(req)
     if (allowed === null) return true
-    if (allowed.includes(transfer.sending_facility_id) || allowed.includes(transfer.receiving_facility_id)) return true
-    return forbid(res, 'Not authorized for this transfer'), false
+    return allowed.includes(transfer.sending_facility_id) || allowed.includes(transfer.receiving_facility_id)
   }
-  if (s.facilityId && (transfer.sending_facility_id === s.facilityId || transfer.receiving_facility_id === s.facilityId)) return true
+  return !!s.facilityId &&
+    (transfer.sending_facility_id === s.facilityId || transfer.receiving_facility_id === s.facilityId)
+}
+
+// Response-writing wrapper. Delegates to mayWriteTransfer so the rule has ONE
+// definition: a bulk endpoint checking rows in a loop must not be able to drift from
+// what the single-row endpoint enforces.
+export async function enforceTransferWrite(req, res, transfer) {
+  if (await mayWriteTransfer(req, transfer)) return true
   return forbid(res, 'Not authorized for this transfer'), false
 }
 

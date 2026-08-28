@@ -1,6 +1,6 @@
 import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceTransferAccess, enforceTransferWrite, mayWriteTransferFacility, enforceCommoditySection, ownFacilityId, resolveListFacilityIds, sectionFilter } from '../middleware/scope.js'
+import { enforceTransferAccess, enforceTransferWrite, mayWriteTransfer, mayWriteTransferFacility, enforceCommoditySection, ownFacilityId, resolveListFacilityIds, sectionFilter } from '../middleware/scope.js'
 import { narrowGrantsToCategories } from '../constants/sections.js'
 import { TransferService, TRANSFER_IN_GROUP_BY_KEYS } from '../services/transferService.js'
 
@@ -235,6 +235,51 @@ router.patch('/:id/dispatch', async (req, res) => {
 })
 
 /** PATCH /api/transfers/:id/assign - admin assigns a source facility */
+/**
+ * PATCH /api/transfers/assign-batch — assign one source to several pending requests.
+ * Body: { sending_facility_id, sending_facility_name?, reviewed_by, items: [{ id, quantity }] }
+ *
+ * MUST stay above '/:id' (declared further down), which would otherwise capture
+ * 'assign-batch' as an id.
+ */
+router.patch('/assign-batch', async (req, res) => {
+  try {
+    const { sending_facility_id, sending_facility_name, reviewed_by, items } = req.body || {}
+    if (!sending_facility_id) {
+      return res.status(400).json({ success: false, error: 'sending_facility_id is required', code: 'MISSING_FIELDS' })
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, error: 'Select at least one request', code: 'MISSING_FIELDS' })
+    }
+
+    // Write access is checked per ROW before anything is written — a bulk endpoint must
+    // not become a way to touch a request outside the caller's jurisdiction or section.
+    for (const item of items) {
+      const transfer = await TransferService.getTransferById(item.id)
+      if (!transfer) {
+        return res.status(404).json({ success: false, error: `Request ${item.id} not found`, code: 'TRANSFER_NOT_FOUND' })
+      }
+      if (!(await mayWriteTransfer(req, transfer))) {
+        return res.status(403).json({ success: false, error: 'Not authorized for one of the selected requests', code: 'FORBIDDEN' })
+      }
+    }
+    // The source must also be a facility this caller may act for.
+    if (!(await mayWriteTransferFacility(req, sending_facility_id))) {
+      return res.status(403).json({ success: false, error: 'Not authorized for that source facility', code: 'FORBIDDEN' })
+    }
+
+    const assigned = await TransferService.assignSourceBulk({
+      items, sendingFacilityId: sending_facility_id,
+      sendingFacilityName: sending_facility_name, reviewedBy: reviewed_by,
+    })
+    res.json({ success: true, data: assigned, count: assigned.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message, code: 'ASSIGN_ERROR' })
+    console.error('Error assigning transfers in batch:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'ASSIGN_ERROR' })
+  }
+})
+
 router.patch('/:id/assign', async (req, res) => {
   try {
     if (!req.body?.sending_facility_id) {

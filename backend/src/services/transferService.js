@@ -439,6 +439,69 @@ export class TransferService {
   /**
    * Admin assigns a source facility to a pending request (no stock movement).
    */
+  /**
+   * Assign ONE source facility to several pending requests at once.
+   *
+   * The admin's real workflow is "these twenty lab requests all come from the State
+   * Office Store", not twenty passes through a single-row form. Quantities stay
+   * per-request, because reviewing them is the part of the job that must not be lost
+   * in a bulk action.
+   *
+   * ALL-OR-NOTHING. Each row is re-checked inside the transaction with FOR UPDATE and
+   * must still be unassigned; if any has been taken by another admin, or cancelled by
+   * the requester, since the list was loaded, nothing is written and the caller is told
+   * which one. A half-assigned batch is the worst outcome here — the admin cannot tell
+   * from the screen which of the twenty went through.
+   *
+   * Callers MUST have already checked write access per row (routes use mayWriteTransfer);
+   * this only re-checks the state that can change underneath them.
+   */
+  static async assignSourceBulk({ items, sendingFacilityId, sendingFacilityName, reviewedBy }) {
+    if (!Array.isArray(items) || items.length === 0) {
+      const e = new Error('Select at least one request'); e.status = 400; throw e
+    }
+    if (!sendingFacilityId) {
+      const e = new Error('sending_facility_id is required'); e.status = 400; throw e
+    }
+    const name = sendingFacilityName ?? (await this._facilityName(sendingFacilityId))
+
+    return withTransaction(async exec => {
+      const assigned = []
+      for (const item of items) {
+        const qty = parseInt(item.quantity)
+        if (!(qty > 0)) {
+          const e = new Error(`Quantity for request ${item.id} must be at least 1`); e.status = 400; throw e
+        }
+        // Locked so two admins cannot assign the same request to different sources.
+        const { rows } = await exec(
+          'select id, sending_facility_id, status, quantity, notes from stock_transfer_log where id = $1 for update',
+          [item.id]
+        )
+        const row = rows[0]
+        if (!row) { const e = new Error(`Request ${item.id} no longer exists`); e.status = 409; throw e }
+        if (row.sending_facility_id) {
+          const e = new Error('One of the selected requests has already been assigned to a source — refresh and try again')
+          e.status = 409; throw e
+        }
+        if (row.status !== 'pending') {
+          const e = new Error(`One of the selected requests is no longer pending (it is ${row.status}) — refresh and try again`)
+          e.status = 409; throw e
+        }
+
+        const note = `[Reviewed by: ${reviewedBy || ''}]`
+        const newNotes = row.notes ? `${row.notes} ${note}` : note
+        const { rows: upd } = await exec(
+          `update stock_transfer_log
+              set sending_facility_id = $2, sending_facility_name = $3, quantity = $4, notes = $5
+            where id = $1 returning *`,
+          [item.id, sendingFacilityId, name || '', qty, newNotes]
+        )
+        assigned.push(upd[0])
+      }
+      return assigned
+    })
+  }
+
   static async assignSource(transferId, data) {
     const { sending_facility_id, sending_facility_name, quantity, reviewed_by } = data
     const transfer = await this.getTransferById(transferId)

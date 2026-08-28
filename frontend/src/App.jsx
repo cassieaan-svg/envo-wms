@@ -15,7 +15,11 @@ import { Intake     as PharmIntake     } from './pages/pharmacy/Intake'
 import { Adjustment as PharmAdjustment } from './pages/pharmacy/Adjustment'
 import { Transfers  as PharmTransfers  } from './pages/pharmacy/Transfers'
 import { Log        as PharmLog        } from './pages/pharmacy/Log'
-import { Alerts     as PharmAlerts     } from './pages/pharmacy/Alerts'
+// NOT pharmacy-only despite the path: this is the shared Alerts page, used by pharmacy
+// facilities AND by every admin tier (see adminMap below), lab admins included. Only
+// lab FACILITY users get their own (LabAlerts). The old alias implied lab admins had a
+// separate page; they never did.
+import { Alerts     as SharedAlerts    } from './pages/pharmacy/Alerts'
 import { Monitoring as PharmMonitoring } from './pages/pharmacy/Monitoring'
 
 // Lab pages
@@ -59,7 +63,7 @@ const pharmMap = {
   dashboard: PharmDashboard, stock: PharmStock, dispense: PharmDispense,
   intake: PharmIntake, adjustment: PharmAdjustment, transfers: PharmTransfers,
   log: PharmLog, crrf: PharmCRRF,
-  alerts: PharmAlerts, monitoring: PharmMonitoring,
+  alerts: SharedAlerts, monitoring: PharmMonitoring,
   // Reachable by the section-routed oversight viewers (cluster/lga/state) whose
   // AdminNav links here; AllFacilities adapts per-commodity, so one component fits
   // both sections. Facility users never link to it.
@@ -76,7 +80,7 @@ const labMap = {
 // adjustment / transfers), so those pages are deliberately omitted here.
 const adminMap = {
   dashboard: PharmDashboard, stock: PharmStock, 'all-facilities': AllFacilities,
-  alerts: PharmAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
+  alerts: SharedAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
 }
 
 // ── Which pages still read the global stock array ────────────────────────────
@@ -86,7 +90,7 @@ const adminMap = {
 //
 //   pharmacy dispense = pages/pharmacy/RecordStock  → reads (lines 64, 72, 180)
 //   lab      dispense = pages/lab/RecordStock       → does NOT read
-//   pharmacy alerts   = pages/pharmacy/Alerts       → reads only for a FACILITY
+//   shared alerts     = pages/pharmacy/Alerts       → reads only for a FACILITY
 //                                                     user (1 KB scope); its admin
 //                                                     drill-in now uses the rollup
 //   all-facilities    = pages/admin/AllFacilities   → no longer reads it; moved to

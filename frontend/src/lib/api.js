@@ -134,6 +134,9 @@ export const api = {
     // lifecycle transitions
     dispatch:        (id, body) => patch(`/transfers/${id}/dispatch`, body),
     assignSource:    (id, body) => patch(`/transfers/${id}/assign`, body),
+    // Assign ONE source to several pending requests at once, all-or-nothing.
+    // body: { sending_facility_id, sending_facility_name, reviewed_by, items:[{id, quantity}] }
+    assignBatch:     (body)     => patch('/transfers/assign-batch', body),
     accept:          (id, body) => patch(`/transfers/${id}/accept`, body),
     dispute:         (id, body) => patch(`/transfers/${id}/dispute`, body),
     cancel:          (id, body) => patch(`/transfers/${id}/cancel`, body),
