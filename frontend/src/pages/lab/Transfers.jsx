@@ -466,11 +466,21 @@ export function Transfers() {
       date_field: 'initiated_at', from: f, to: t2, limit: 200,
       section: commoditySection || undefined,
     }).catch(() => [])
-    // External redistributions only: a real facility→facility move (both parties
-    // set and different), never an internal store→dispensary/DSD/SDP redistribution.
-    const ext = (data || []).filter(r => r.sending_facility_id && r.receiving_facility_id
-      && r.sending_facility_id !== r.receiving_facility_id
-      && !r.notes?.includes('[Internal:') && !r.notes?.includes('[DSD:') && !r.notes?.includes('[SDP:'))
+    // The facility's own request record. Internal store→dispensary and DSD/SDP site
+    // moves are excluded — those are not requests to anyone.
+    //
+    // A request CANCELLED before an admin assigned a source has no sending facility at
+    // all, and the old rule (both parties set and different) dropped it silently. That
+    // hid the outcome from the facility that raised it: they asked, were refused with a
+    // reason recorded in the notes ("no stock", "you have sufficient stock"), and saw an
+    // empty history. An unassigned-then-cancelled request is still part of their history.
+    const isInternal = r => r.notes?.includes('[Internal:') || r.notes?.includes('[DSD:') || r.notes?.includes('[SDP:')
+    const ext = (data || []).filter(r => !isInternal(r) && (
+      // assigned: a real facility→facility move
+      (r.sending_facility_id && r.receiving_facility_id && r.sending_facility_id !== r.receiving_facility_id)
+      // or never assigned, and closed without one — still the facility's own record
+      || (!r.sending_facility_id && ['cancelled', 'dismissed'].includes(r.status))
+    ))
     setRequestHistory(ext); setLoadingReqHist(false)
   }
 
