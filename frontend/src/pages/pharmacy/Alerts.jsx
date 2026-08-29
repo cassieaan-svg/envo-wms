@@ -10,7 +10,7 @@ import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, transferReason, reviewerNameOf } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, transferReason, reviewerNameOf, facilityGroupLabel } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
 
 // Defined at module scope, not inside Alerts(). A component created during render is a
@@ -459,11 +459,12 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     const g = {}
     for (const f of batchFacPool) {
       // No state at all = not a dispatchable source (leaked test fixtures look like
-      // this). But a State Office Store legitimately has NO LGA — it serves the whole
-      // state — so it gets its own bucket rather than being dropped. It is the source
-      // most of these requests are headed for, so hiding it would defeat the feature.
+      // this). But a State Office Store and a cluster store legitimately have NO LGA —
+      // they serve a whole state / cluster — so facilityGroupLabel gives each its own
+      // bucket rather than dropping them. They are the sources most of these requests
+      // are headed for, so hiding them would defeat the feature.
       if (!f.state) continue
-      const st = f.state, lg = f.lga || 'State Office'
+      const st = f.state, lg = facilityGroupLabel(f)
       if (!g[st]) g[st] = {}
       if (!g[st][lg]) g[st][lg] = []
       g[st][lg].push(f)
@@ -1122,7 +1123,7 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                 ;(assignFacPool.length ? assignFacPool : store.allFacilities)
                   .filter(f => f.id !== req.receiving_facility_id && f.state)
                   .forEach(f => {
-                  const s=f.state, l=f.lga || 'State Office'
+                  const s=f.state, l=facilityGroupLabel(f)
                   if(!assignFacGroups[s]) assignFacGroups[s]={}
                   if(!assignFacGroups[s][l]) assignFacGroups[s][l]=[]
                   assignFacGroups[s][l].push(f)

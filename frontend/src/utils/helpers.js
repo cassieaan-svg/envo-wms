@@ -261,6 +261,13 @@ export const STATE_OFFICE_CATEGORIES = ['Lab consumables', GENERAL_CONSUMABLES]
 // A facility is a per-state office store when its name reads "… State Office Store".
 export const isStateOfficeName = (name) => /state office store/i.test(name || '')
 
+// Which bucket a facility falls into in the State -> LGA -> Facility pickers.
+// Most facilities have an LGA. Two kinds legitimately do not: a State Office Store
+// (serves the whole state) and a cluster store (serves a whole cluster), so they get
+// named buckets of their own rather than being lumped together or dropped.
+export const facilityGroupLabel = (f) =>
+  f?.lga || (f?.cluster ? `${f.cluster} Cluster` : 'State Office')
+
 // The categories a section-pinned account may see. A State Office Store gets its
 // bespoke set; everyone else gets their section's list. Returns null (= all) when
 // there is no section restriction (admins).

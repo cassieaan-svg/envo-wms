@@ -11,7 +11,7 @@ import { BatchSelect } from '../../components/ui/BatchSelect'
 import { BatchSplitPicker } from '../../components/ui/BatchSplitPicker'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf } from '../../utils/helpers'
+import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf, facilityGroupLabel } from '../../utils/helpers'
 import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
@@ -214,7 +214,7 @@ export function Transfers() {
 
   const facGroups = {}
   allFacilities.filter(f => f.id !== fid).forEach(f => {
-    const s = f.state || 'Other', l = f.lga || 'Other'
+    const s = f.state || 'Other', l = facilityGroupLabel(f)
     if (!facGroups[s]) facGroups[s] = {}
     if (!facGroups[s][l]) facGroups[s][l] = []
     facGroups[s][l].push(f)
@@ -1183,7 +1183,7 @@ export function Transfers() {
                     if (t.status === 'disputed') return null
                     const assignFacGroups = {}
                     allFacilities.filter(f => f.id !== t.receiving_facility_id).forEach(f => {
-                      const s = f.state || 'Other', l = f.lga || 'Other'
+                      const s = f.state || 'Other', l = facilityGroupLabel(f)
                       if (!assignFacGroups[s]) assignFacGroups[s] = {}
                       if (!assignFacGroups[s][l]) assignFacGroups[s][l] = []
                       assignFacGroups[s][l].push(f)
