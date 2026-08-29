@@ -9,9 +9,10 @@ import { Button } from '../../components/ui/Button'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { BatchSelect } from '../../components/ui/BatchSelect'
 import { BatchSplitPicker } from '../../components/ui/BatchSplitPicker'
+import { BatchDispatchPanel } from '../../components/BatchDispatchPanel'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf, explicitReviewerName } from '../../utils/helpers'
+import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf, explicitReviewerName, isStateOfficeName, facilityGroupLabel } from '../../utils/helpers'
 import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
@@ -83,6 +84,9 @@ export function Transfers() {
 
   // Pending transfers
   const [pending, setPending] = useState([])
+  // The pending list is collapsible. At the State Office Store it runs to dozens of rows
+  // and buries the batch panel above it, so it starts collapsed there and open elsewhere.
+  const [pendingOpen, setPendingOpen] = useState(null)   // null = not yet decided
   const [loadingP, setLoadingP] = useState(true)
   const [acceptingId, setAcceptingId] = useState(null)
   const [acceptReceiverName, setAcceptReceiverName] = useState('')
@@ -215,7 +219,7 @@ export function Transfers() {
 
   const facGroups = {}
   allFacilities.filter(f => f.id !== fid).forEach(f => {
-    const s = f.state || 'Other', l = f.lga || 'Other'
+    const s = f.state || 'Other', l = facilityGroupLabel(f)
     if (!facGroups[s]) facGroups[s] = {}
     if (!facGroups[s][l]) facGroups[s][l] = []
     facGroups[s][l].push(f)
@@ -1119,14 +1123,39 @@ export function Transfers() {
             </Card>
           )}
 
+          {/* Batch dispatch, grouped by commodity — STATE OFFICE STORE ONLY.
+              It is the store that receives bulk assignments (65 pending across 17
+              commodities at Lagos, against 4-6 at a busy facility) and the only one
+              that carries stock out itself, so the approver-is-carrier rule below
+              holds. An ordinary facility keeps the per-transfer dispatch flow. */}
+          {reqSub === 'pending' && isStateOfficeName(currentFacility?.name) && (
+            <BatchDispatchPanel
+              facilityId={fid}
+              facilityName={currentFacility?.name}
+              tasks={pending.filter(t => t.sending_facility_id === fid && t.status === 'pending')}
+              onDone={loadPending}
+            />
+          )}
+
           {/* Pending transfers */}
           {reqSub === 'pending' && (
             <Card>
               <CardHeader>
-                <CardTitle>Pending transfers — action required</CardTitle>
+                <CardTitle>
+                  <button type="button"
+                    onClick={() => setPendingOpen(o => !(o ?? !isStateOfficeName(currentFacility?.name)))}
+                    className="flex items-center gap-2 text-left hover:opacity-80">
+                    <span className="text-gray-500 text-xs">
+                      {(pendingOpen ?? !isStateOfficeName(currentFacility?.name)) ? '▾' : '▸'}
+                    </span>
+                    Pending transfers — action required
+                    {pending.length > 0 && <span className="text-gray-500 font-normal"> ({pending.length})</span>}
+                  </button>
+                </CardTitle>
                 <button onClick={loadPending} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
               </CardHeader>
-              {loadingP ? <LoadingState /> : pending.length === 0 ? <EmptyState message="No pending transfers" /> : (
+              {!(pendingOpen ?? !isStateOfficeName(currentFacility?.name)) ? null
+                : loadingP ? <LoadingState /> : pending.length === 0 ? <EmptyState message="No pending transfers" /> : (
                 pending.map(t => {
                   const isSender        = fid === t.sending_facility_id
                   const isReceiver      = fid === t.receiving_facility_id
@@ -1138,7 +1167,7 @@ export function Transfers() {
                   if (t.status === 'disputed') return null
                   const assignFacGroups = {}
                   allFacilities.filter(f => f.id !== t.receiving_facility_id).forEach(f => {
-                    const s = f.state || 'Other', l = f.lga || 'Other'
+                    const s = f.state || 'Other', l = facilityGroupLabel(f)
                     if (!assignFacGroups[s]) assignFacGroups[s] = {}
                     if (!assignFacGroups[s][l]) assignFacGroups[s][l] = []
                     assignFacGroups[s][l].push(f)

@@ -322,13 +322,17 @@ export class TransferService {
     await exec(`update stock_lot set ${sets.join(', ')}, updated_at = now() where ${where}`, params)
   }
 
-  static async dispatch(transferId, data) {
+  /**
+   * The body of a dispatch, running inside a caller-supplied transaction.
+   *
+   * Extracted so several transfers can be dispatched atomically in ONE transaction
+   * (dispatchBatch). `dispatch` below is unchanged in behaviour — it opens a
+   * transaction and calls this — so every existing caller is unaffected.
+   */
+  static async _dispatchOne(exec, transfer, data) {
     const { approved_by, carrier, expiry, batch, quantity, lots } = data
-    const transfer = await this.getTransferById(transferId)
-    if (!transfer) return null
     const qty = parseInt(quantity ?? transfer.quantity)
-
-    return withTransaction(async exec => {
+    const transferId = transfer.id
       // Guard: never dispatch more than the sender's store actually holds.
       if (transfer.sending_facility_id) {
         const stk = await StockService.getStockByFacilityAndCommodity(
@@ -433,6 +437,58 @@ export class TransferService {
         [transferId, qty, newNotes, JSON.stringify(drawn)]
       )
       return rows[0] || null
+  }
+
+  static async dispatch(transferId, data) {
+    const transfer = await this.getTransferById(transferId)
+    if (!transfer) return null
+    return withTransaction(async exec => this._dispatchOne(exec, transfer, data))
+  }
+
+  /**
+   * Dispatch SEVERAL pending transfers in one transaction — the source facility's side
+   * of a batch assignment.
+   *
+   * The store picks one commodity off the shelf once and splits it across the
+   * facilities that asked for it, so the natural unit of work is a commodity, not a
+   * request. Each item still carries its own quantity and its own lot allocation.
+   *
+   * ALL-OR-NOTHING, and that matters more here than it does for assignment: this
+   * debits the lot ledger and the store's stock. A half-finished batch would leave the
+   * shelf and the records disagreeing, with no way to tell which lines moved.
+   *
+   * `carrier` applies to every item unless the item overrides it. For a State Office
+   * Store the approving officer IS the carrier — the office drives the stock out to the
+   * facilities — so the caller passes one name for the whole run.
+   */
+  static async dispatchBatch({ items, approved_by, carrier }) {
+    if (!Array.isArray(items) || items.length === 0) {
+      const e = new Error('Select at least one transfer to dispatch'); e.status = 400; throw e
+    }
+    return withTransaction(async exec => {
+      const dispatched = []
+      for (const item of items) {
+        // Locked for the duration: two storekeepers dispatching the same request would
+        // otherwise both pass the stock guard and debit the ledger twice.
+        const { rows } = await exec('select * from stock_transfer_log where id = $1 for update', [item.id])
+        const transfer = rows[0]
+        if (!transfer) { const e = new Error(`Transfer ${item.id} no longer exists`); e.status = 409; throw e }
+        if (transfer.status !== 'pending') {
+          const e = new Error('One of the selected transfers is no longer pending — refresh and try again')
+          e.status = 409; throw e
+        }
+        if (!transfer.sending_facility_id) {
+          const e = new Error('One of the selected transfers has no source facility assigned')
+          e.status = 409; throw e
+        }
+        dispatched.push(await this._dispatchOne(exec, transfer, {
+          approved_by,
+          carrier: item.carrier ?? carrier,
+          quantity: item.quantity,
+          lots: item.lots,
+        }))
+      }
+      return dispatched
     })
   }
 

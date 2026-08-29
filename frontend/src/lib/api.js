@@ -137,6 +137,9 @@ export const api = {
     // Assign ONE source to several pending requests at once, all-or-nothing.
     // body: { sending_facility_id, sending_facility_name, reviewed_by, items:[{id, quantity}] }
     assignBatch:     (body)     => patch('/transfers/assign-batch', body),
+    // Dispatch several pending transfers in one transaction (source facility side).
+    // body: { approved_by, carrier, items:[{ id, quantity, lots?, carrier? }] }
+    dispatchBatch:   (body)     => patch('/transfers/dispatch-batch', body),
     accept:          (id, body) => patch(`/transfers/${id}/accept`, body),
     dispute:         (id, body) => patch(`/transfers/${id}/dispute`, body),
     cancel:          (id, body) => patch(`/transfers/${id}/cancel`, body),

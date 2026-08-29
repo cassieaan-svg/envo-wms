@@ -236,6 +236,38 @@ router.patch('/:id/dispatch', async (req, res) => {
 
 /** PATCH /api/transfers/:id/assign - admin assigns a source facility */
 /**
+ * PATCH /api/transfers/dispatch-batch — dispatch several pending transfers at once.
+ * Body: { approved_by, carrier, items: [{ id, quantity, lots?, carrier? }] }
+ *
+ * MUST stay above '/:id'.
+ */
+router.patch('/dispatch-batch', async (req, res) => {
+  try {
+    const { approved_by, carrier, items } = req.body || {}
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, error: 'Select at least one transfer', code: 'MISSING_FIELDS' })
+    }
+    // Per-row write access, checked before anything moves — same reasoning as
+    // assign-batch: a bulk endpoint must not reach past the caller's own facility.
+    for (const item of items) {
+      const transfer = await TransferService.getTransferById(item.id)
+      if (!transfer) {
+        return res.status(404).json({ success: false, error: `Transfer ${item.id} not found`, code: 'TRANSFER_NOT_FOUND' })
+      }
+      if (!(await mayWriteTransfer(req, transfer))) {
+        return res.status(403).json({ success: false, error: 'Not authorized for one of the selected transfers', code: 'FORBIDDEN' })
+      }
+    }
+    const dispatched = await TransferService.dispatchBatch({ items, approved_by, carrier })
+    res.json({ success: true, data: dispatched, count: dispatched.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message, code: 'DISPATCH_ERROR' })
+    console.error('Error dispatching transfers in batch:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'DISPATCH_ERROR' })
+  }
+})
+
+/**
  * PATCH /api/transfers/assign-batch — assign one source to several pending requests.
  * Body: { sending_facility_id, sending_facility_name?, reviewed_by, items: [{ id, quantity }] }
  *
