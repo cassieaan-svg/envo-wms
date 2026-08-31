@@ -24,6 +24,21 @@ export function isStateOfficeName(name) {
   return /state office store/i.test(name || '')
 }
 
+// A facility is a cluster store when its name reads "… Cluster Lab Store" (the naming
+// convention set by createClusterStores.mjs — cluster-tier, no LGA).
+export function isClusterStoreName(name) {
+  return /cluster lab store/i.test(name || '')
+}
+
+// A HUB store — state office or cluster store. Neither dispenses to patients: both hold
+// stock and push it down to the facilities they serve. A cluster store is the state
+// office one level down and handles the SAME categories, so this is deliberately ONE
+// list rather than two identical ones that could drift apart.
+export function isHubStoreName(name) {
+  return isStateOfficeName(name) || isClusterStoreName(name)
+}
+export const HUB_STORE_CATEGORIES = STATE_OFFICE_CATEGORIES
+
 // Per-facility grants of INDIVIDUAL commodities, on top of that facility's category
 // list. Deliberately by commodity NAME and keyed by ONE facility, because the request
 // this exists for cannot be expressed as a category:

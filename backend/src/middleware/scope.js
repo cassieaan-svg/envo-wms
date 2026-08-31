@@ -1,5 +1,5 @@
 import { query } from '../db.js'
-import { categoriesForSection, isStateOfficeName, STATE_OFFICE_CATEGORIES,
+import { categoriesForSection, isHubStoreName, HUB_STORE_CATEGORIES,
          extraCommoditiesForFacility, allowsCommodity } from '../constants/sections.js'
 
 // Facility + section scoping for the API layer.
@@ -74,12 +74,13 @@ export function attachScope(req, res, next) {
     ['overall_admin', 'state_admin'].includes(accessLevel)
   const section = bothSections ? null : (meta.commodity_section || null)
 
-  // Section include-list. A State Office Store handles a bespoke set (lab consumables
-  // + general consumables), which REPLACES its normal section list — not RTKs or
-  // reagents. Null-section admins already see everything.
+  // Section include-list. A hub store — state office or cluster store — handles a
+  // bespoke set (lab consumables + general consumables) which REPLACES its normal
+  // section list, so it sees neither RTKs nor reagents. Null-section admins already
+  // see everything.
   let sectionCategories = categoriesForSection(section) // null = all, or [categories]
-  if (sectionCategories && isStateOfficeName(meta.facility_name)) {
-    sectionCategories = [...STATE_OFFICE_CATEGORIES]
+  if (sectionCategories && isHubStoreName(meta.facility_name)) {
+    sectionCategories = [...HUB_STORE_CATEGORIES]
   }
   // Individually-granted commodities that fall outside those categories (see
   // FACILITY_EXTRA_COMMODITIES). Empty for every facility without an explicit grant,

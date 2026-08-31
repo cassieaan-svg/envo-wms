@@ -39,8 +39,9 @@ export async function hydrateSession(user) {
   const amcWindows = {}
   ;(amcRows || []).forEach(r => { amcWindows[r.facility_id] = { months: r.months || [] } })
 
-  // Restrict to the account's section, plus General Consumables for a State Office
-  // Store. Admins (no section) keep the full catalogue. allowedCats null = all.
+  // Restrict to the account's section, or to the hub-store set (lab + general
+  // consumables) for a State Office / Cluster Lab Store. Admins (no section) keep the
+  // full catalogue. allowedCats null = all.
   const allowedCats = allowedCategoriesFor(commoditySection, meta.facility_name)
   let allCommodities = comms || []
   if (allowedCats) {

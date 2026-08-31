@@ -261,6 +261,21 @@ export const STATE_OFFICE_CATEGORIES = ['Lab consumables', GENERAL_CONSUMABLES]
 // A facility is a per-state office store when its name reads "… State Office Store".
 export const isStateOfficeName = (name) => /state office store/i.test(name || '')
 
+// A facility is a cluster store when its name reads "… Cluster Lab Store".
+export const isClusterStoreName = (name) => /cluster lab store/i.test(name || '')
+
+// A HUB store — a state office or a cluster store. Neither dispenses to patients:
+// both exist to hold stock and push it down to the facilities they serve, filling many
+// requests for the same commodity at once and carrying it out themselves. That is what
+// the batch dispatch flow and the approver-is-carrier rule are for. An ordinary
+// facility is not one of these, however much stock it holds.
+export const isHubStore = (name) => isStateOfficeName(name) || isClusterStoreName(name)
+
+// A cluster store is the state office one level down and handles the SAME categories,
+// so this is deliberately ONE list rather than two identical ones that could drift.
+// Mirror of the backend copy in constants/sections.js — keep the two in sync.
+export const HUB_STORE_CATEGORIES = STATE_OFFICE_CATEGORIES
+
 // Which bucket a facility falls into in the State -> LGA -> Facility pickers.
 // Most facilities have an LGA. Two kinds legitimately do not: a State Office Store
 // (serves the whole state) and a cluster store (serves a whole cluster), so they get
@@ -268,12 +283,12 @@ export const isStateOfficeName = (name) => /state office store/i.test(name || ''
 export const facilityGroupLabel = (f) =>
   f?.lga || (f?.cluster ? `${f.cluster} Cluster` : 'State Office')
 
-// The categories a section-pinned account may see. A State Office Store gets its
-// bespoke set; everyone else gets their section's list. Returns null (= all) when
-// there is no section restriction (admins).
+// The categories a section-pinned account may see. A hub store (state office or
+// cluster store) gets its bespoke set; everyone else gets their section's list.
+// Returns null (= all) when there is no section restriction (admins).
 export function allowedCategoriesFor(commoditySection, facilityName) {
   if (!commoditySection) return null
-  if (isStateOfficeName(facilityName)) return [...STATE_OFFICE_CATEGORIES]
+  if (isHubStore(facilityName)) return [...HUB_STORE_CATEGORIES]
   return [...(SECTION_CATEGORIES[commoditySection] || [])]
 }
 
