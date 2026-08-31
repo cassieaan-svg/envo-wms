@@ -12,7 +12,7 @@ import { BatchSplitPicker } from '../../components/ui/BatchSplitPicker'
 import { BatchDispatchPanel } from '../../components/BatchDispatchPanel'
 import { Badge } from '../../components/ui/Badge'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
-import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf, explicitReviewerName, isStateOfficeName, facilityGroupLabel } from '../../utils/helpers'
+import { fmtDate, ymdLagos, SECTION_CATEGORIES, transferReason, expiredDispatchWarning, reviewerNameOf, explicitReviewerName, isHubStore, facilityGroupLabel } from '../../utils/helpers'
 import { TransferLotInfo, hasExpiredLot, earliestExpiredExpiry } from '../../components/TransferLotInfo'
 
 const inputCls = "w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
@@ -1123,12 +1123,13 @@ export function Transfers() {
             </Card>
           )}
 
-          {/* Batch dispatch, grouped by commodity — STATE OFFICE STORE ONLY.
-              It is the store that receives bulk assignments (65 pending across 17
-              commodities at Lagos, against 4-6 at a busy facility) and the only one
-              that carries stock out itself, so the approver-is-carrier rule below
-              holds. An ordinary facility keeps the per-transfer dispatch flow. */}
-          {reqSub === 'pending' && isStateOfficeName(currentFacility?.name) && (
+          {/* Batch dispatch, grouped by commodity — HUB STORES ONLY (state office and
+              cluster stores). These are the stores that receive bulk assignments (65
+              pending across 17 commodities at Lagos, against 4-6 at a busy facility;
+              Southern cluster serves 40 facilities) and that carry stock out
+              themselves, so the approver-is-carrier rule below holds. An ordinary
+              facility keeps the per-transfer dispatch flow. */}
+          {reqSub === 'pending' && isHubStore(currentFacility?.name) && (
             <BatchDispatchPanel
               facilityId={fid}
               facilityName={currentFacility?.name}
@@ -1143,10 +1144,10 @@ export function Transfers() {
               <CardHeader>
                 <CardTitle>
                   <button type="button"
-                    onClick={() => setPendingOpen(o => !(o ?? !isStateOfficeName(currentFacility?.name)))}
+                    onClick={() => setPendingOpen(o => !(o ?? !isHubStore(currentFacility?.name)))}
                     className="flex items-center gap-2 text-left hover:opacity-80">
                     <span className="text-gray-500 text-xs">
-                      {(pendingOpen ?? !isStateOfficeName(currentFacility?.name)) ? '▾' : '▸'}
+                      {(pendingOpen ?? !isHubStore(currentFacility?.name)) ? '▾' : '▸'}
                     </span>
                     Pending transfers — action required
                     {pending.length > 0 && <span className="text-gray-500 font-normal"> ({pending.length})</span>}
@@ -1154,7 +1155,7 @@ export function Transfers() {
                 </CardTitle>
                 <button onClick={loadPending} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
               </CardHeader>
-              {!(pendingOpen ?? !isStateOfficeName(currentFacility?.name)) ? null
+              {!(pendingOpen ?? !isHubStore(currentFacility?.name)) ? null
                 : loadingP ? <LoadingState /> : pending.length === 0 ? <EmptyState message="No pending transfers" /> : (
                 pending.map(t => {
                   const isSender        = fid === t.sending_facility_id

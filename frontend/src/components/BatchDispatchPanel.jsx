@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import { Button } from './ui/Button'
 import { toast } from './ui/Toast'
-import { isStateOfficeName } from '../utils/helpers'
+import { isHubStore } from '../utils/helpers'
 
 // The source facility's side of a batch assignment, grouped BY COMMODITY.
 //
@@ -88,9 +88,10 @@ function allocate(lots, rows, manual = {}) {
 }
 
 export function BatchDispatchPanel({ facilityId, facilityName, tasks, onDone }) {
-  // For a State Office Store the approving officer IS the carrier — the office drives
-  // the stock out to the facilities — so one name covers the whole run.
-  const stateOffice = isStateOfficeName(facilityName)
+  // At a hub store — state office or cluster store — the approving officer IS the
+  // carrier: the store drives the stock out to the facilities it serves, so one name
+  // covers the whole run. Elsewhere the carrier is a separate person and is named.
+  const selfCarries = isHubStore(facilityName)
 
   const [openComm, setOpenComm] = useState(null)
   const [qty, setQty] = useState({})            // transferId -> quantity to send
@@ -172,7 +173,7 @@ export function BatchDispatchPanel({ facilityId, facilityName, tasks, onDone }) 
 
   async function send() {
     if (!approvedBy.trim()) { toast('Approved by is required', 'red'); return }
-    if (!stateOffice && !carrier.trim()) { toast('Carrier is required', 'red'); return }
+    if (!selfCarries && !carrier.trim()) { toast('Carrier is required', 'red'); return }
     const items = groupRows
       .filter(r => Number(r.qty) > 0)
       .map(r => ({
@@ -200,7 +201,7 @@ export function BatchDispatchPanel({ facilityId, facilityName, tasks, onDone }) 
       await api.transfers.dispatchBatch({
         approved_by: approvedBy.trim(),
         // State office: the approver carries it. Otherwise the named carrier.
-        carrier: stateOffice ? approvedBy.trim() : carrier.trim(),
+        carrier: selfCarries ? approvedBy.trim() : carrier.trim(),
         items,
       })
       toast(`${items.length} dispatch${items.length === 1 ? '' : 'es'} sent`, 'green')
@@ -353,18 +354,18 @@ export function BatchDispatchPanel({ facilityId, facilityName, tasks, onDone }) 
                 <div className="flex flex-wrap gap-2 items-end mt-3">
                   <div className="w-full sm:w-56">
                     <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">
-                      {stateOffice ? 'Approved & carried by *' : 'Approved by *'}
+                      {selfCarries ? 'Approved & carried by *' : 'Approved by *'}
                     </label>
                     <input value={approvedBy} onChange={e => setApprovedBy(e.target.value)}
                       placeholder="Store officer's name"
                       className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder:text-gray-600 focus:outline-none focus:border-blue-500" />
-                    {stateOffice && (
+                    {selfCarries && (
                       <p className="text-[11px] text-gray-500 mt-1">
-                        The state office carries the stock, so the approving officer is recorded as the carrier.
+                        This store carries the stock out, so the approving officer is recorded as the carrier.
                       </p>
                     )}
                   </div>
-                  {!stateOffice && (
+                  {!selfCarries && (
                     <div className="w-full sm:w-56">
                       <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Carrier *</label>
                       <input value={carrier} onChange={e => setCarrier(e.target.value)}
