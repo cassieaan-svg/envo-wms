@@ -29,6 +29,14 @@ export function Reports({ embedded = false } = {}) {
   const sunday = new Date(monday); sunday.setDate(monday.getDate()+6)
   const wFrom0 = monday.toISOString().split('T')[0]
   const wTo0   = sunday.toISOString().split('T')[0]
+  // The last day of the week that starts on `from` (inclusive, so +6 days). Built in
+  // UTC so it cannot slide a day across the timezone offset.
+  const weekEnd = (from) => {
+    const d = new Date(`${from}T00:00:00Z`)
+    if (isNaN(d)) return from
+    d.setUTCDate(d.getUTCDate() + 6)
+    return d.toISOString().slice(0, 10)
+  }
   const month0 = now.toISOString().slice(0,7)
 
   const [wFrom, setWFrom]     = useState(wFrom0)
@@ -98,9 +106,18 @@ export function Reports({ embedded = false } = {}) {
   // crowd it, so drop them. CRRF already counts external transfers only.
   const notInternalForAdmin = row => !(isAdmin && row.activity === 'Transfer' && !row.external)
 
+  // A "week" is the seven days from the chosen start. The two inputs were free, so
+  // any span could be loaded and still be titled Weekly — a five-week range exported
+  // as "All Weekly Report" reads as one week's activity to whoever opens the file.
+  // Clamp here and say so, rather than mislabel the result.
   async function loadWeekly() {
     setFeedPage(0)
-    setRange({ from: wFrom, to: wTo, label: `${wFrom} to ${wTo}` })
+    const end = weekEnd(wFrom)
+    if (wTo !== end) {
+      setWTo(end)
+      toast(`A week runs ${wFrom} to ${end} — end date adjusted`, 'amber')
+    }
+    setRange({ from: wFrom, to: end, label: `${wFrom} to ${end}` })
   }
 
   async function loadMonthly() {
@@ -315,11 +332,15 @@ export function Reports({ embedded = false } = {}) {
             <>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Week from</label>
-                <input type="date" value={wFrom} onChange={e => setWFrom(e.target.value)} className={inputCls} />
+                <input type="date" value={wFrom}
+                  onChange={e => { setWFrom(e.target.value); setWTo(weekEnd(e.target.value)) }}
+                  className={inputCls} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">To</label>
-                <input type="date" value={wTo} onChange={e => setWTo(e.target.value)} className={inputCls} />
+                {/* Derived from the start date: a weekly report covers exactly seven days. */}
+                <input type="date" value={wTo} readOnly disabled
+                  className={`${inputCls} opacity-70 cursor-not-allowed`} />
               </div>
             </>
           ) : (
