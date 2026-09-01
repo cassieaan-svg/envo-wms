@@ -7,7 +7,7 @@ import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { BatchBreakdownModal } from '../../components/BatchBreakdownModal'
-import { getMOS, getStockStatus, fmtStockQty, SECTION_CATEGORIES, resolveAmcWindow, loadConsumptionAmcMap } from '../../utils/helpers'
+import { getMOS, getStockStatus, fmtStockQty, SECTION_CATEGORIES, allowedCategoriesFor, resolveAmcWindow, loadConsumptionAmcMap } from '../../utils/helpers'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
 export function Stock() {
@@ -117,6 +117,13 @@ export function Stock() {
       return (a.commodities?.name||'').localeCompare(b.commodities?.name||'')
     })
 
+  // Category options come from the rows the account can actually see, NOT a fixed
+  // lab list: a hub store (state office / cluster store) handles lab consumables and
+  // general consumables, so a hardcoded RTKs/reagents/consumables trio offered it two
+  // categories it never holds while hiding General Consumables entirely. Matches how
+  // Dashboard and the pharmacy Stock page already build theirs.
+  const availableCats = [...new Set(rows.map(r => r.commodities?.category).filter(Boolean))].sort()
+
   // Group by category if sorting by category
   const byCategory = {}
   if (sortBy === 'category') {
@@ -129,7 +136,8 @@ export function Stock() {
 
   // Order categories by the canonical section sequence (e.g. RTKs before
   // Lab reagents before Lab consumables), with any unknown category last.
-  const catOrder = SECTION_CATEGORIES[commoditySection] || []
+  const catOrder = allowedCategoriesFor(commoditySection, store.currentFacility?.name)
+    || SECTION_CATEGORIES[commoditySection] || []
   const orderedCats = Object.keys(byCategory).sort((a, b) => {
     const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
@@ -203,7 +211,7 @@ export function Stock() {
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search commodity…"
             className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-blue-500 flex-1 min-w-[200px] max-w-xs" />
           {[
-            [catFilter, setCat, 'All categories', [['','All categories'],['RTKs','RTKs'],['Lab reagents','Lab reagents'],['Lab consumables','Lab consumables']]],
+            [catFilter, setCat, 'All categories', [['','All categories'], ...availableCats.map(c => [c, c])]],
             [stsFilter, setSts, 'All statuses',   [['','All statuses'],['ok','Optimal'],['low','Low stock'],['out','Out of stock'],['over','Overstock']]],
             [sortBy, setSortBy, '', [['category','Sort by category'],['name','Sort by name'],['qty','Sort by qty'],['mos','Sort by MOS']]],
           ].map(([val, setter, , opts], i) => (
