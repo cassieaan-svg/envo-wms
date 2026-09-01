@@ -4,24 +4,43 @@
 // Idempotent (upsert by email); random password written to a gitignored
 // *_logins*.csv. Matches the shape of the existing DSD accounts.
 //
-//   node scripts/addDsdAccount.mjs [outfile.csv]
+//   node scripts/addDsdAccount.mjs --facility "<hub name>" --site "<spoke name>" \
+//                                  --username <login> [--type "<dsd model>"] [--out file.csv]
 //
-// Edit the Config block for a different site/facility.
+// Every flag is optional and falls back to the Config block below, so the original
+// no-argument form still reproduces the NIMR account it was written for.
 
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { pool } from '../src/db.js'
 
-// ── Config ────────────────────────────────────────────────────────────────────
-const FACILITY_NAME = 'Nigerian Institute of Medical Research (NIMR)'
-const DSD_SITE_NAME = 'Fast Track'   // the DSD site this login represents
-const DSD_TYPE      = 'Fast Track'   // the DSD model (tags this login's dispatches)
-const USERNAME      = 'nimr.fasttrack'
-const SECTION       = 'pharmacy'      // DSD is pharmacy
+// ── Config (defaults; override with the flags above) ──────────────────────────
+const DEFAULTS = {
+  facility: 'Nigerian Institute of Medical Research (NIMR)',
+  site:     'Fast Track',       // the DSD site this login represents
+  type:     'Fast Track',       // the DSD model (tags this login's dispatches)
+  username: 'nimr.fasttrack',
+  section:  'pharmacy',         // DSD is pharmacy
+  out:      'scripts/dsd_account_logins.csv',
+}
 // ──────────────────────────────────────────────────────────────────────────────
 
-const OUT = process.argv[2] || 'scripts/dsd_account_logins.csv'
+// --flag value pairs; anything unset falls back to DEFAULTS.
+const argv = process.argv.slice(2)
+const flag = (name) => {
+  const i = argv.indexOf(`--${name}`)
+  return i !== -1 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : undefined
+}
+const FACILITY_NAME = flag('facility') ?? DEFAULTS.facility
+const DSD_SITE_NAME = flag('site')     ?? DEFAULTS.site
+const DSD_TYPE      = flag('type')     ?? DEFAULTS.type
+const USERNAME      = flag('username') ?? DEFAULTS.username
+const SECTION       = flag('section')  ?? DEFAULTS.section
+const DRY           = argv.includes('--dry-run')
+
+// Positional outfile kept for the original `addDsdAccount.mjs out.csv` form.
+const OUT = flag('out') ?? argv.find(a => !a.startsWith('--') && a.endsWith('.csv')) ?? DEFAULTS.out
 const CHARS = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
 function makePassword() {
   let pw
@@ -35,6 +54,37 @@ async function main() {
   if (!fac) throw new Error(`Facility not found: "${FACILITY_NAME}" — check the exact stored name.`)
 
   const email = `${USERNAME}@envo.ng`
+
+  // Re-running is meant to reset one site's password, not to quietly repoint an
+  // existing login at a different spoke — so say what is already there first.
+  const existing = (await pool.query(
+    `select raw_user_meta_data->>'dsd_site_name' site,
+            raw_user_meta_data->>'facility_name' facility
+     from users where email = $1`, [email])).rows[0]
+  if (existing && existing.site !== DSD_SITE_NAME) {
+    throw new Error(
+      `${email} already exists for site "${existing.site}" at ${existing.facility}. ` +
+      `Refusing to repoint it at "${DSD_SITE_NAME}" — pick a different --username.`)
+  }
+
+  const siblings = (await pool.query(
+    `select distinct raw_user_meta_data->>'dsd_site_name' site from users
+     where raw_user_meta_data->>'facility_id' = $1
+       and raw_user_meta_data->>'facility_role' = 'dsd'
+       and raw_user_meta_data->>'dsd_site_name' is not null
+     order by 1`, [fac.id])).rows.map(r => r.site)
+
+  if (DRY) {
+    console.log(`Would ${existing ? 'UPDATE' : 'create'} DSD login "${USERNAME}"`)
+    console.log(`  hub    : ${fac.name} (${fac.state})`)
+    console.log(`  site   : ${DSD_SITE_NAME}`)
+    console.log(`  model  : ${DSD_TYPE}`)
+    console.log(`  section: ${SECTION}`)
+    console.log(`  spokes already at this hub: ${siblings.join(', ') || '(none)'}`)
+    await pool.end()
+    return
+  }
+
   const password = makePassword()
   const hash = await bcrypt.hash(password, 10)
   const meta = {
