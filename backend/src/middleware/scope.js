@@ -30,8 +30,12 @@ import { categoriesForSection, isHubStoreName, HUB_STORE_CATEGORIES,
 // state_admin reads.
 const READ_ADMIN_LEVELS = {
   stock:          ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
-  dsd_stock:      'public',                                                  // RLS read USING (true)
-  sdp_stock:      'public',
+  // DSD/SDP site stock reads were ported as 'public' because the old RLS said
+  // USING (true). That is stock held at a facility, so it belongs to the same tier
+  // as `stock` — leaving it public let an Akwa Ibom admin pull Lagos and Cross River
+  // site balances (visible in the all-facilities CRRF export, which reads all three).
+  dsd_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
+  sdp_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
   transfers:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
   dispense_log:   ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
   intake_log:     ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],

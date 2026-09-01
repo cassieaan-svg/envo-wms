@@ -293,11 +293,13 @@ router.get('/dsd', async (req, res) => {
     if (facility_id && !validators.isUUID(facility_id)) {
       return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     }
-    // dsd_stock read is public (RLS USING true); a facility_ids / state / lga
-    // view-filter just narrows the result set. No per-facility authz needed here.
-    let facilityIds = facility_ids ? String(facility_ids).split(',').map(s => s.trim()).filter(Boolean) : undefined
-    const loc = await locationFacilityIds(req)
-    if (loc) facilityIds = facilityIds ? facilityIds.filter(id => loc.includes(id)) : loc
+    // Site stock is stock held at a facility, so it is scoped like `stock`: start from
+    // the caller's token scope and INTERSECT any client view-filter, so a narrowed
+    // admin cannot widen their reach by passing ids outside it.
+    if (facility_id && !(await enforceFacilityRead(req, res, facility_id, 'dsd_stock'))) return
+    const facilityIds = facility_id
+      ? undefined
+      : await resolveListFacilityIds(req, 'dsd_stock', facility_ids)
 
     const stock = await StockService.getDsdStock(facility_id || null, {
       dsdSiteName: dsd_site_name,
@@ -335,10 +337,11 @@ router.get('/sdp', async (req, res) => {
     if (facility_id && !validators.isUUID(facility_id)) {
       return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
     }
-    // sdp_stock read is public (RLS USING true); facility_ids / state / lga narrows.
-    let facilityIds = facility_ids ? String(facility_ids).split(',').map(s => s.trim()).filter(Boolean) : undefined
-    const loc = await locationFacilityIds(req)
-    if (loc) facilityIds = facilityIds ? facilityIds.filter(id => loc.includes(id)) : loc
+    // Scoped like `stock` — see the DSD route above.
+    if (facility_id && !(await enforceFacilityRead(req, res, facility_id, 'sdp_stock'))) return
+    const facilityIds = facility_id
+      ? undefined
+      : await resolveListFacilityIds(req, 'sdp_stock', facility_ids)
 
     const stock = await StockService.getSdpStock(facility_id || null, {
       sdpName: sdp_name,
