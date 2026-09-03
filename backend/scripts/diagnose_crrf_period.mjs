@@ -49,6 +49,7 @@ if (!FACILITY || !COMMODITY || !period) {
 }
 
 const LAGOS_DAY = (col) => `(${col} at time zone 'utc' at time zone 'Africa/Lagos')::date`
+const fmtDate = v => (v ? new Date(v).toISOString().slice(0, 10) : '')
 
 async function main() {
   const { rows: [f] } = await pool.query(`select id, name, state from facilities where name = $1`, [FACILITY])
@@ -98,24 +99,37 @@ async function main() {
       from stock_adjustment_log where facility_id=$1 and commodity_id=$2
         and ${LAGOS_DAY('adjusted_at')} ${cmp[0]} $3 and ${LAGOS_DAY('adjusted_at')} ${cmp[1]} $4`,
       [f.id, c.id, lo, hi])
-    const trans = await pool.query(`
-      select count(*)::int n,
-             coalesce(sum(case when receiving_facility_id=$1 then quantity else -quantity end),0)::int net
+    const transRows = (await pool.query(`
+      select id, sending_facility_id, receiving_facility_id, quantity, resolved_at, notes,
+             (select name from facilities where id = sending_facility_id)   as sender,
+             (select name from facilities where id = receiving_facility_id) as receiver
       from stock_transfer_log
       where commodity_id=$2 and status='accepted'
         and sending_facility_id is not null and receiving_facility_id is not null
         and sending_facility_id <> receiving_facility_id
         and (sending_facility_id=$1 or receiving_facility_id=$1)
         and ${LAGOS_DAY('resolved_at')} ${cmp[0]} $3 and ${LAGOS_DAY('resolved_at')} ${cmp[1]} $4`,
-      [f.id, c.id, lo, hi])
+      [f.id, c.id, lo, hi])).rows
+    const tNet = transRows.reduce((s, r) => s + (r.receiving_facility_id === f.id ? r.quantity : -r.quantity), 0)
 
-    const i = intake.rows[0], d = disp.rows[0], a = adj.rows[0], t = trans.rows[0]
-    const net = Number(i.q) - Number(d.q) + Number(a.net) + Number(t.net)
+    const i = intake.rows[0], d = disp.rows[0], a = adj.rows[0]
+    const net = Number(i.q) - Number(d.q) + Number(a.net) + tNet
     console.log(`${label} (${lo} .. ${hi}):`)
     console.log(`  intake      ${String(i.n).padStart(5)} rows   +${i.q}`)
     console.log(`  dispense    ${String(d.n).padStart(5)} rows   -${d.q}`)
     console.log(`  adjustment  ${String(a.n).padStart(5)} rows   +${a.inc} / -${a.dec}  net ${a.net >= 0 ? '+' : ''}${a.net}  [${a.reasons || '-'}]`)
-    console.log(`  transfer    ${String(t.n).padStart(5)} rows   net ${t.net >= 0 ? '+' : ''}${t.net}`)
+    console.log(`  transfer    ${String(transRows.length).padStart(5)} rows   net ${tNet >= 0 ? '+' : ''}${tNet}`)
+    // These are "external" by the rewind's own definition (sending <> receiving,
+    // both non-null) — printed in full because that definition has been wrong
+    // before (see the day-boundary and pagination bugs already found here), and an
+    // internal DSD/SDP dispatch recording a real, non-null OTHER facility id would
+    // silently pass this filter as if it were a genuine cross-facility move.
+    if (transRows.length) {
+      console.log(`    ${'id8'.padEnd(10)}${'date'.padEnd(12)}${'qty'.padStart(6)}  sender -> receiver`)
+      for (const r of transRows) {
+        console.log(`    ${r.id.slice(0, 8).padEnd(10)}${fmtDate(r.resolved_at).padEnd(12)}${String(r.quantity).padStart(6)}  ${r.sender || r.sending_facility_id} -> ${r.receiver || r.receiving_facility_id}  ${(r.notes || '').slice(0, 40)}`)
+      }
+    }
     console.log(`  => net movement this window: ${net >= 0 ? '+' : ''}${net}\n`)
     return net
   }
