@@ -43,10 +43,11 @@ const flag = (name) => {
 const FAC = flag('facility')
 const COMM = flag('commodity')
 const BIN = flag('bin') || 'store'
+const SITE = flag('site')
 const csvPath = flag('csv')
 
-if (!FAC || !COMM || !['store', 'dispensary'].includes(BIN)) {
-  console.error('Usage: node scripts/explain_bin_ledger.mjs --facility "<partial name>" --commodity "<partial name>" [--bin store|dispensary] [--csv out.csv]')
+if (!FAC || !COMM || !['store', 'dispensary', 'dsd', 'sdp'].includes(BIN) || (['dsd', 'sdp'].includes(BIN) && !SITE)) {
+  console.error('Usage: node scripts/explain_bin_ledger.mjs --facility "<partial name>" --commodity "<partial name>" [--bin store|dispensary|dsd|sdp] [--site "<exact DSD/SDP site name>"] [--csv out.csv]')
   process.exitCode = 1
 } else {
   main()
@@ -102,18 +103,64 @@ async function dispensaryRows(p) {
   ]
 }
 
+async function siteRows(facilityId, commodityId, tag, site) {
+  const rx = (notes, t) => new RegExp(`\\[${t}:\\s*([^\\]]+)\\]`, 'i').exec(notes || '')?.[1]?.trim()
+  const tagMatches = (notes) => { const v = rx(notes, tag); return v != null && v.toLowerCase() === site.trim().toLowerCase() }
+  const returnSite = notes => /Returned from [^:]*:\s*([^—]+)/i.exec(notes || '')?.[1]?.trim() || null
+
+  const p = [facilityId, commodityId]
+  const internal = (await query(
+    `select id, quantity, status, resolved_at, initiated_at, resolved_by, notes
+       from stock_transfer_log
+      where commodity_id=$2 and sending_facility_id=$1
+        and (receiving_facility_id is null or receiving_facility_id=$1)`, p)).rows
+    .filter(r => r.status === 'accepted' && tagMatches(r.notes))
+
+  const dispenses = (await query(
+    `select id, dispensed_at t, quantity, dispensed_to, dispensed_by, notes
+       from dispense_log where facility_id=$1 and commodity_id=$2`, p)).rows
+    .filter(r => tagMatches(r.notes))
+
+  const returned = (await query(
+    `select id, adjusted_at t, quantity, reference_number, adjusted_by, notes
+       from stock_adjustment_log
+      where facility_id=$1 and commodity_id=$2 and reason in ('Returned from DSD','Returned from SDP')`, p)).rows
+    .filter(r => { const rs = returnSite(r.notes); return rs && rs.toLowerCase() === site.trim().toLowerCase() })
+
+  const adj = (await query(
+    `select id, adjusted_at t, quantity, adjustment_type, coalesce(reason,'') reason, adjusted_by, notes
+       from stock_adjustment_log
+      where facility_id=$1 and commodity_id=$2 and location_type=$3
+        and lower(btrim(coalesce(site_name,''))) = lower(btrim($4))`, [...p, tag.toLowerCase(), site])).rows
+
+  return [
+    ...internal.map(r => ({ id: r.id, t: r.resolved_at || r.initiated_at, kind: `TRANSFER IN (from store, ${tag}:${site})`,
+      delta: r.quantity, ref: r.status, who: r.resolved_by || '', notes: r.notes || '' })),
+    ...dispenses.map(r => ({ id: r.id, t: r.t, kind: 'DISPENSE', delta: -r.quantity, ref: r.dispensed_to || '', who: r.dispensed_by || '', notes: r.notes || '' })),
+    ...returned.map(r => ({ id: r.id, t: r.t, kind: 'RETURNED TO STORE', delta: -r.quantity,
+      ref: r.reference_number || '', who: r.adjusted_by || '', notes: r.notes || '' })),
+    ...adj.map(r => ({ id: r.id, t: r.t, kind: `ADJ (${r.adjustment_type})`, delta: r.adjustment_type === 'Decrease' ? -r.quantity : r.quantity,
+      ref: r.reason, who: r.adjusted_by || '', notes: r.notes || '' })),
+  ]
+}
+
 async function main() {
   try {
+    const table = BIN === 'dsd' ? 'dsd_stock' : BIN === 'sdp' ? 'sdp_stock' : 'stock'
+    const siteCol = BIN === 'dsd' ? 'dsd_site_name' : BIN === 'sdp' ? 'sdp_name' : null
+    const siteCond = siteCol ? ` and lower(btrim(${siteCol})) = lower(btrim($3))` : ` and location_type = $3`
+    const params = siteCol ? [`%${FAC}%`, `%${COMM}%`, SITE] : [`%${FAC}%`, `%${COMM}%`, BIN]
+
     const bins = (await query(`
       select s.facility_id, s.commodity_id, f.name facility, cm.name commodity, s.quantity soh
-        from stock s
+        from ${table} s
         join facilities  f  on f.id = s.facility_id
         join commodities cm on cm.id = s.commodity_id
-       where s.location_type = $3
-         and f.name ilike $1 and cm.name ilike $2`,
-      [`%${FAC}%`, `%${COMM}%`, BIN])).rows
+       where f.name ilike $1 and cm.name ilike $2${siteCond}`,
+      params)).rows
 
-    if (!bins.length) { console.log(`\nNo matching ${BIN} bin — check the facility/commodity spelling (and that this facility has a ${BIN} bin at all).`); return }
+    const label = siteCol ? `${BIN}:${SITE}` : BIN
+    if (!bins.length) { console.log(`\nNo matching ${label} bin — check the facility/commodity/site spelling (site names must match exactly, unlike facility/commodity).`); return }
     if (bins.length > 1) {
       console.log(`\n${bins.length} matches — narrow --facility/--commodity to one:\n`)
       console.table(bins.map(b => ({ facility: b.facility, commodity: b.commodity, SOH: b.soh })))
@@ -122,13 +169,16 @@ async function main() {
 
     const b = bins[0]
     const p = [b.facility_id, b.commodity_id]
-    const rows = (BIN === 'dispensary' ? await dispensaryRows(p) : await storeRows(p))
-      .sort((x, y) => new Date(x.t) - new Date(y.t))
+    const rows = (
+      BIN === 'dispensary' ? await dispensaryRows(p)
+      : (BIN === 'dsd' || BIN === 'sdp') ? await siteRows(b.facility_id, b.commodity_id, BIN.toUpperCase(), SITE)
+      : await storeRows(p)
+    ).sort((x, y) => new Date(x.t) - new Date(y.t))
 
     const recordNet = rows.reduce((s, r) => s + r.delta, 0)
     const opening = b.soh - recordNet
 
-    console.log(`\n${b.facility} — ${b.commodity}  [${BIN} bin]   SOH ${b.soh}, record net ${recordNet}, implied opening ${opening}`)
+    console.log(`\n${b.facility} — ${b.commodity}  [${label} bin]   SOH ${b.soh}, record net ${recordNet}, implied opening ${opening}`)
     console.log(`(${rows.length} records, ${rows[0] ? d(rows[0].t) : '-'} .. ${rows.length ? d(rows[rows.length - 1].t) : '-'})\n`)
 
     let run = 0
