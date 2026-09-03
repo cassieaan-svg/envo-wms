@@ -6,7 +6,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { NON_CRRF_ADJ_REASONS, isGhscPsmSupplier, netStockChange } from '../../utils/reports'
-import { todayLagos } from '../../utils/helpers'
+import { todayLagos, ymdLagos } from '../../utils/helpers'
 import { CRRF_TEMPLATES } from '../../utils/crrfTemplates'
 import { CRRF_ALIASES } from '../../utils/crrfAliases'
 
@@ -125,22 +125,50 @@ export function CRRF() {
     // that period's label.
     const today = todayLagos()
     const wide = { from: from + 'T00:00:00', to: today + 'T23:59:59' }
+
+    // Every log endpoint defaults to limit=1000. The period-to-close-of-period range
+    // used before this stayed well under that; period-start-to-TODAY does not for a
+    // busy facility over several months (NIMR, a national DSD hub, is exactly this
+    // shape). Past 1000 rows the rest are silently dropped in whatever order the
+    // database returns them — not necessarily the oldest — which can drop recent
+    // movements from the rewind and produce a Beginning Balance with no relation to
+    // the real one. Page through all four, the same way fetchReportRows does.
+    const fetchAllPaged = async (listFn, params) => {
+      const PAGE = 1000
+      let all = []
+      for (let offset = 0; ; offset += PAGE) {
+        let data
+        try { data = await listFn({ ...params, limit: PAGE, offset }) } catch { break }
+        if (!data || !data.length) break
+        all = all.concat(data)
+        if (data.length < PAGE) break
+      }
+      return all
+    }
+
     const [intakeRes, dispRes, adjRes, stockRes, dsdRes, sdpRes, transferRes] = await Promise.all([
-      api.intake.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
-      api.dispense.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
-      api.adjustments.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
+      fetchAllPaged(api.intake.history,      { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
+      fetchAllPaged(api.dispense.history,     { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
+      fetchAllPaged(api.adjustments.history,  { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
       // TOTAL SOH as it stands right now: store + dispensary (/api/stock) plus the
       // facility's DSD and SDP site stock, so internal store↔site moves net out.
+      // One row per commodity per bin — bounded by the catalogue, not by activity —
+      // so this stays under the limit and needs no paging.
       api.stock.list({ facility_ids: [fid], commodity_ids: commIds }).catch(() => []),
       api.stock.dsd.list({ facility_id: fid }).catch(() => []),
       api.stock.sdp.list({ facility_id: fid }).catch(() => []),
       // section already scopes transfers; date_field/resolved_at uses plain dates.
-      api.transfers.list({ facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to: today, section: sec2 }).catch(() => []),
+      fetchAllPaged(api.transfers.list, { facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to: today, section: sec2 }),
     ])
 
     // Split every movement into "inside the period" (the CRRF's columns) and "after
     // it" (only needed to rewind today's stock back to the period end).
-    const dayOf = v => String(v || '').slice(0, 10)
+    //
+    // dayOf MUST convert to Lagos before taking the calendar day, not slice the raw
+    // ISO string: a dispense at 00:30 Lagos on 1 Mar is 23:30 UTC on 28 Feb, and a
+    // naive slice puts it a day and a period early — the same class of bug ymdLagos
+    // exists to prevent everywhere else this codebase buckets by day.
+    const dayOf = v => ymdLagos(v) || ''
     const inPeriod  = d => d >= from && d <= to
     const afterEnd  = d => d > to
     // Same date field precedence the report normalizers use, so a row lands in the
