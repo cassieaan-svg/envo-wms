@@ -3,8 +3,14 @@
 //
 // These assert the SEEDED DATA matches docs/authorization/permission-catalogue.md
 // exactly — not authorization behavior, because nothing reads these tables yet.
-// user_roles and user_permissions must stay empty: this phase seeds definitions
-// and role→permission mappings only, never a user assignment.
+// This phase seeds definitions and role→permission mappings only, never a user
+// assignment — user_permissions must stay empty for that reason.
+//
+// user_roles is DELIBERATELY NOT asserted empty here. It was empty as of this
+// phase, but Phase 2D (20260903_acl_seed_user_roles.sql) legitimately populates
+// it afterward — see aclUserRoleMigration.test.js for those assertions. A stale
+// "user_roles = 0" check here would fail after every subsequent, correct run of
+// this suite; don't reintroduce it.
 //
 // INTEGRATION test: requires 20260903_acl_foundation.sql AND
 // 20260903_acl_seed_roles_permissions.sql applied to the local `envo` database.
@@ -159,10 +165,10 @@ test('every SEEDED role holds only permissions that exist in the approved 24', a
 // 4. This is a mapping seed, not a user migration
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('user_roles and user_permissions remain completely empty', async () => {
-  const { rows: ur } = await query('select count(*)::int n from user_roles')
+test('user_permissions remains completely empty', async () => {
+  // NOT checking user_roles here — see the file header. This phase (2C) never
+  // populates it; whether it is later populated is Phase 2D's own concern.
   const { rows: up } = await query('select count(*)::int n from user_permissions')
-  assert.equal(ur[0].n, 0, 'no user was assigned a role in this phase')
   assert.equal(up[0].n, 0, 'no user was granted or denied a direct permission in this phase')
 })
 
