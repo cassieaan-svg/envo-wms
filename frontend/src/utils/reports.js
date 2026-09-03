@@ -14,6 +14,42 @@ export const NON_CRRF_ADJ_REASONS = [
   'Returned from SDP',
 ]
 
+// "Quantity Received" on the CRRF counts GHSC-PSM deliveries ONLY, not every intake.
+// supplier_source is free text, so match rather than compare: the same supplier is
+// entered as GHSC-PSM, GHSC/PSM, GHSCPSM, psm and (once) the typo GHSC/PSC.
+//
+// NOTE this deliberately breaks the form's arithmetic: roughly 90% of intakes name
+// some other source (baseline stock, state office, stock taking), and that stock is
+// real. A + B − C ± adj will therefore NOT equal E whenever a facility received
+// anything outside GHSC-PSM. Beginning and Ending Balance are each computed from the
+// stock ledger instead of being derived from B, so the gap shows up as a gap rather
+// than being silently absorbed into the opening balance.
+export const isGhscPsmSupplier = (s) => /ghsc|psm/i.test(String(s || ''))
+
+// The NET change in total stock on hand that a set of movement rows represents.
+// This is a STOCK question, not a CRRF-presentation one, so it counts everything that
+// actually moved stock — including the physical count corrections and site returns the
+// CRRF columns exclude. Leaving those out would make a rewound balance drift.
+//
+// Internal moves (store↔dispensary, store→DSD/SDP) are omitted because SOH here is the
+// facility total across all bins: those shuffle stock between bins without changing it.
+export function netStockChange({ intakes = [], dispenses = [], adjustments = [], transfers = [] }, facilityId) {
+  let net = 0
+  for (const r of intakes)   net += r.quantity || 0
+  for (const r of dispenses) net -= r.quantity || 0
+  for (const r of adjustments) {
+    net += (r.adjustment_type === 'Decrease' ? -1 : 1) * (r.quantity || 0)
+  }
+  for (const r of transfers) {
+    // External redistribution only — see above.
+    if (!r.sending_facility_id || !r.receiving_facility_id) continue
+    if (r.sending_facility_id === r.receiving_facility_id) continue
+    if (r.receiving_facility_id === facilityId)   net += r.quantity || 0
+    else if (r.sending_facility_id === facilityId) net -= r.quantity || 0
+  }
+  return net
+}
+
 export const REPORT_CATEGORIES = [
   { key: 'all', label: 'All' },
   { key: 'dispense', label: 'Consumption' },

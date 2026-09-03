@@ -5,7 +5,8 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { NON_CRRF_ADJ_REASONS } from '../../utils/reports'
+import { NON_CRRF_ADJ_REASONS, isGhscPsmSupplier, netStockChange } from '../../utils/reports'
+import { todayLagos } from '../../utils/helpers'
 import { CRRF_TEMPLATES } from '../../utils/crrfTemplates'
 import { CRRF_ALIASES } from '../../utils/crrfAliases'
 
@@ -117,29 +118,61 @@ export function CRRF() {
     const LOSS_REASONS = ['Expired', 'Damaged', 'Lost / Stolen']
 
     const sec2 = commoditySection || undefined
-    const range = { from: from + 'T00:00:00', to: to + 'T23:59:59' }
+    // Load movements from the period start up to TODAY, not just the period, so the
+    // balances can be rewound. Stock is only ever known as of now, so the balance on
+    // any past date has to be reconstructed by unwinding everything that happened
+    // since — a report for a closed period is otherwise just today's stock wearing
+    // that period's label.
+    const today = todayLagos()
+    const wide = { from: from + 'T00:00:00', to: today + 'T23:59:59' }
     const [intakeRes, dispRes, adjRes, stockRes, dsdRes, sdpRes, transferRes] = await Promise.all([
-      api.intake.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
-      api.dispense.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
-      api.adjustments.history({ facility_id: fid, commodity_ids: commIds, ...range, section: sec2 }).catch(() => []),
-      // Ending balance = TOTAL SOH: store + dispensary (/api/stock) plus the
+      api.intake.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
+      api.dispense.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
+      api.adjustments.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
+      // TOTAL SOH as it stands right now: store + dispensary (/api/stock) plus the
       // facility's DSD and SDP site stock, so internal store↔site moves net out.
       api.stock.list({ facility_ids: [fid], commodity_ids: commIds }).catch(() => []),
       api.stock.dsd.list({ facility_id: fid }).catch(() => []),
       api.stock.sdp.list({ facility_id: fid }).catch(() => []),
       // section already scopes transfers; date_field/resolved_at uses plain dates.
-      api.transfers.list({ facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to, section: sec2 }).catch(() => []),
+      api.transfers.list({ facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to: today, section: sec2 }).catch(() => []),
     ])
+
+    // Split every movement into "inside the period" (the CRRF's columns) and "after
+    // it" (only needed to rewind today's stock back to the period end).
+    const dayOf = v => String(v || '').slice(0, 10)
+    const inPeriod  = d => d >= from && d <= to
+    const afterEnd  = d => d > to
+    // Same date field precedence the report normalizers use, so a row lands in the
+    // same period here as it does everywhere else.
+    const bucket = (list, ...dateFields) => {
+      const within = [], after = []
+      for (const r of list || []) {
+        const d = dayOf(dateFields.map(f => r[f]).find(Boolean))
+        if (inPeriod(d)) within.push(r)
+        else if (afterEnd(d)) after.push(r)
+      }
+      return { within, after }
+    }
+    const bIntake   = bucket(intakeRes,   'received_at',  'created_at')
+    const bDisp     = bucket(dispRes,     'dispensed_at', 'created_at')
+    const bAdj      = bucket(adjRes,      'adjusted_at',  'created_at')
+    const bTransfer = bucket(transferRes, 'resolved_at',  'initiated_at')
 
     // Build per-commodity aggregates
     const agg = {}
     store.allCommodities.forEach(c => {
-      agg[c.id] = { commodity: c.name, category: c.category || '', unit: c.unit || '', received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0, soh: 0 }
+      agg[c.id] = { id: c.id, commodity: c.name, category: c.category || '', unit: c.unit || '', received: 0, dispensed: 0, adjPos: 0, adjNeg: 0, losses: 0, soh: 0 }
     })
 
-    ;(intakeRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].received += r.quantity })
-    ;(dispRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
-    ;(adjRes || []).forEach(r => {
+    // ── The CRRF's own columns: movements INSIDE the period only ────────────────
+    // Quantity Received counts GHSC-PSM deliveries only, so this column no longer
+    // accounts for all the stock that arrived (see isGhscPsmSupplier).
+    ;(bIntake.within).forEach(r => {
+      if (agg[r.commodity_id] && isGhscPsmSupplier(r.supplier_source)) agg[r.commodity_id].received += r.quantity
+    })
+    ;(bDisp.within).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
+    ;(bAdj.within).forEach(r => {
       if (!agg[r.commodity_id]) return
       // Reasons that aren't a real inflow/outflow of the facility's inventory
       // (count reconciliations and internal store↔site redistributions) are excluded.
@@ -148,10 +181,7 @@ export function CRRF() {
       else if (LOSS_REASONS.includes(r.reason))      agg[r.commodity_id].losses  += r.quantity
       else                                           agg[r.commodity_id].adjNeg  += r.quantity
     })
-    ;(stockRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
-    ;(dsdRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
-    ;(sdpRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
-    ;(transferRes || []).forEach(r => {
+    ;(bTransfer.within).forEach(r => {
       if (!agg[r.commodity_id]) return
       // Only EXTERNAL redistribution (facility → another facility) affects the
       // CRRF positive/negative adjustment. Internal moves (Store→Dispensary,
@@ -162,13 +192,46 @@ export function CRRF() {
       else if (r.sending_facility_id === fid)  agg[r.commodity_id].adjNeg += r.quantity
     })
 
+    // Current total SOH per commodity — the one balance we actually know.
+    ;(stockRes || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
+    ;(dsdRes   || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
+    ;(sdpRes   || []).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].soh += r.quantity })
+
+    // ── The balances: rewound from today's stock ────────────────────────────────
+    // Ending   = today's SOH minus everything that moved AFTER the period closed.
+    // Beginning = that, minus everything that moved DURING the period.
+    // For Mar–Apr: Ending is the balance at the close of 30 Apr, Beginning is the
+    // balance on the morning of 1 Mar, before that day's activity.
+    //
+    // Both use netStockChange, which counts EVERY movement — including the count
+    // corrections and site returns the columns above exclude. Those shifted real
+    // stock, so a rewind that ignored them would drift.
+    const byCommodity = (list) => {
+      const m = {}
+      for (const r of list) (m[r.commodity_id] ||= []).push(r)
+      return m
+    }
+    const periodMoves = {
+      intakes: byCommodity(bIntake.within), dispenses: byCommodity(bDisp.within),
+      adjustments: byCommodity(bAdj.within), transfers: byCommodity(bTransfer.within),
+    }
+    const laterMoves = {
+      intakes: byCommodity(bIntake.after), dispenses: byCommodity(bDisp.after),
+      adjustments: byCommodity(bAdj.after), transfers: byCommodity(bTransfer.after),
+    }
+    const netFor = (moves, id) => netStockChange({
+      intakes: moves.intakes[id] || [], dispenses: moves.dispenses[id] || [],
+      adjustments: moves.adjustments[id] || [], transfers: moves.transfers[id] || [],
+    }, fid)
+
     // Only include commodities that have any activity or current stock
     const result = Object.values(agg)
       .filter(r => r.received || r.dispensed || r.adjPos || r.adjNeg || r.losses || r.soh)
       .sort((a, b) => (a.category.localeCompare(b.category)) || a.commodity.localeCompare(b.commodity))
       .map((r, i) => {
-        const E = r.soh
-        const A = E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses
+        const id = r.id
+        const E = r.soh - netFor(laterMoves, id)
+        const A = E - netFor(periodMoves, id)
         const F = r.dispensed * 2
         const G = Math.max(0, F - E)
         return { ...r, sno: i + 1, A, E, F, G }
@@ -180,7 +243,8 @@ export function CRRF() {
     // CRRF, which prints the whole template list. Flag active commodities that
     // don't map to any pharmacy template row (naming mismatches to reconcile).
     const full = Object.values(agg).map(r => {
-      const E = r.soh, A = E - r.received + r.dispensed - r.adjPos + r.adjNeg + r.losses
+      const E = r.soh - netFor(laterMoves, r.id)
+      const A = E - netFor(periodMoves, r.id)
       const F = r.dispensed * 2, G = Math.max(0, F - E)
       return { ...r, A, E, F, G }
     })
