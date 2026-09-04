@@ -14,6 +14,20 @@ export const NON_CRRF_ADJ_REASONS = [
   'Returned from SDP',
 ]
 
+// The subset of NON_CRRF_ADJ_REASONS that the Beginning/Ending Balance rewind (see
+// netStockChange below) ALSO excludes — narrower than the display exclusion above.
+// A Physical count correction genuinely changes what the facility believes it holds
+// (the system catching up to a real count), so the rewind still needs it or it drifts
+// from actual current stock. "Returned from Dispensary/DSD/SDP" does not: an
+// adjustment mutates exactly one bin (see logService.recordAdjustment), so crediting
+// the store this way was never paired with a real debit anywhere else — it isn't a
+// genuine change in the facility's total, just one bin's number moving on its own.
+export const INTRA_FACILITY_ADJ_REASONS = [
+  'Returned from Dispensary',
+  'Returned from DSD',
+  'Returned from SDP',
+]
+
 // "Quantity Received" on the CRRF counts GHSC-PSM deliveries ONLY, not every intake.
 // supplier_source is free text, so match rather than compare: the same supplier is
 // entered as GHSC-PSM, GHSC/PSM, GHSCPSM, psm and (once) the typo GHSC/PSC.

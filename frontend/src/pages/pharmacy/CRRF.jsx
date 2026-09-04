@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { NON_CRRF_ADJ_REASONS, isGhscPsmSupplier, netStockChange } from '../../utils/reports'
+import { NON_CRRF_ADJ_REASONS, INTRA_FACILITY_ADJ_REASONS, isGhscPsmSupplier, netStockChange } from '../../utils/reports'
 import { todayLagos, ymdLagos } from '../../utils/helpers'
 import { CRRF_TEMPLATES } from '../../utils/crrfTemplates'
 import { CRRF_ALIASES } from '../../utils/crrfAliases'
@@ -231,9 +231,16 @@ export function CRRF() {
     // For Mar–Apr: Ending is the balance at the close of 30 Apr, Beginning is the
     // balance on the morning of 1 Mar, before that day's activity.
     //
-    // Both use netStockChange, which counts EVERY movement — including the count
-    // corrections and site returns the columns above exclude. Those shifted real
-    // stock, so a rewind that ignored them would drift.
+    // Both use netStockChange. Adjustments feed it EXCLUDING "Returned from
+    // Dispensary/DSD/SDP" only (INTRA_FACILITY_ADJ_REASONS) — narrower than what the
+    // columns above exclude. An adjustment mutates exactly one bin (see
+    // logService.recordAdjustment), so a "Returned from" entry only ever credited the
+    // store; nothing anywhere was ever really debited for it, so it isn't a genuine
+    // change in the facility's total. A Physical count correction IS real — it's the
+    // system catching up to an actual count — so it still counts here, even though it
+    // doesn't print as its own CRRF line. External transfers and every other
+    // adjustment reason (Expired, Damaged, Lost/Stolen, Other, …) still count too.
+    const realAdj = list => list.filter(r => !INTRA_FACILITY_ADJ_REASONS.includes(r.reason))
     const byCommodity = (list) => {
       const m = {}
       for (const r of list) (m[r.commodity_id] ||= []).push(r)
@@ -241,11 +248,11 @@ export function CRRF() {
     }
     const periodMoves = {
       intakes: byCommodity(bIntake.within), dispenses: byCommodity(bDisp.within),
-      adjustments: byCommodity(bAdj.within), transfers: byCommodity(bTransfer.within),
+      adjustments: byCommodity(realAdj(bAdj.within)), transfers: byCommodity(bTransfer.within),
     }
     const laterMoves = {
       intakes: byCommodity(bIntake.after), dispenses: byCommodity(bDisp.after),
-      adjustments: byCommodity(bAdj.after), transfers: byCommodity(bTransfer.after),
+      adjustments: byCommodity(realAdj(bAdj.after)), transfers: byCommodity(bTransfer.after),
     }
     const netFor = (moves, id) => netStockChange({
       intakes: moves.intakes[id] || [], dispenses: moves.dispenses[id] || [],
