@@ -35,6 +35,24 @@ const APPROVED_ROLES = ['facility', 'state_admin', 'state_viewer', 'cluster_admi
 // earlier aclSeed.test.js cross-file race.
 const NOT_FIXTURE_USER = `u.email not like '%@acl-schema-test.invalid'`
 
+// Accounts whose access_level implies a facility scope but which carry no
+// facility_id are deliberately excluded from the ACL entirely
+// (20260904_acl_exclude_scopeless_accounts.sql). They can authenticate but hold
+// no role, so reconciliation must not count them as "should have been migrated".
+// Only facility-shaped roles are affected: state/cluster/LGA roles scope on
+// their own admin_* field, and overall_admin is intentionally unscoped.
+const HAS_RESOLVABLE_SCOPE = `
+  (coalesce(u.raw_user_meta_data->>'access_level', 'facility') <> 'facility'
+   or coalesce(u.raw_user_meta_data->>'facility_id', '') <> '')`
+
+// Phase 2D was a POINT-IN-TIME backfill. Reconciliation can only hold for users
+// that existed when it ran — a user created afterward has no role, because
+// nothing assigns one (see the KNOWN GAP test at the end of this file). The
+// backfill moment is derivable from the data itself rather than hardcoded: every
+// row the migration inserted carries the same created_at default.
+const EXISTED_AT_BACKFILL = `
+  u.created_at <= (select min(created_at) from user_roles)`
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 1. Every user_roles row references a real user and one of the 6 approved roles
 // ═════════════════════════════════════════════════════════════════════════════
@@ -82,6 +100,8 @@ test('reconciliation: every approved access_level maps 1:1 to user_roles', async
       from users u
       left join user_roles ur on ur.user_id = u.id
      where ${NOT_FIXTURE_USER}
+       and ${HAS_RESOLVABLE_SCOPE}
+       and ${EXISTED_AT_BACKFILL}
        and (coalesce(u.raw_user_meta_data->>'access_level', 'facility') in
            ('facility','state_admin','state_viewer','cluster_admin','lga_admin','overall_admin')
         or u.raw_user_meta_data->>'access_level' is null)
@@ -103,8 +123,10 @@ test('a user with missing access_level is migrated as facility — matching atta
        and r.name = 'facility'`)
   const { rows: total } = await query(
     `select count(*)::int n from users u
-      where raw_user_meta_data->>'access_level' is null and ${NOT_FIXTURE_USER}`)
-  assert.equal(rows[0].n, total[0].n, 'every missing-access_level legacy user must be role=facility')
+      where raw_user_meta_data->>'access_level' is null
+        and ${NOT_FIXTURE_USER} and ${HAS_RESOLVABLE_SCOPE}`)
+  assert.equal(rows[0].n, total[0].n,
+    'every missing-access_level legacy user WITH a facility must be role=facility')
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -192,15 +214,31 @@ test('overall_admin: unscoped (empty scope_type/scope_id) for every one — neve
 //    the most restrictive possible representation, never a wildcard.
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('a facility user with no facility_id gets an EMPTY scope_id, not a null/wildcard', async () => {
+test('a facility user with no facility_id is EXCLUDED from the ACL entirely', async () => {
+  // Phase 2D originally migrated such a user with scope_id='' — the most
+  // restrictive value, granting nothing. 20260904_acl_exclude_scopeless_accounts
+  // then removed that row: a role assignment that can never authorise anything is
+  // audit noise, and an empty scope is the shape a future bug could misread as
+  // "unscoped therefore unrestricted". The invariant is now stronger — every
+  // user_roles row names a scope that identifies something real.
   const { rows } = await query(`
     select ur.scope_id from user_roles ur
       join roles r on r.id = ur.role_id
       join users u on u.id = ur.user_id
      where r.name = 'facility'
        and (u.raw_user_meta_data->>'facility_id' is null or u.raw_user_meta_data->>'facility_id' = '')`)
-  assert.ok(rows.length >= 1, 'the known no-facility_id facility user must be present')
-  assert.ok(rows.every(r => r.scope_id === ''), 'must be empty string, never null and never a real facility id')
+  assert.deepEqual(rows, [], 'a facility account with no facility_id must hold no ACL role at all')
+})
+
+test('no role except overall_admin carries an empty scope', async () => {
+  // The invariant the exclusion establishes. overall_admin is the sole exception:
+  // its empty scope means "national", by deliberate design (Phase 2D).
+  const { rows } = await query(`
+    select r.name, count(*)::int n from user_roles ur
+      join roles r on r.id = ur.role_id
+     where ur.scope_id = '' and r.name <> 'overall_admin'
+     group by 1`)
+  assert.deepEqual(rows, [])
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -222,4 +260,34 @@ test('users.raw_user_meta_data still carries access_level for every migrated use
 test('user_permissions remains completely empty — this phase seeds no direct grants', async () => {
   const { rows } = await query('select count(*)::int n from user_permissions')
   assert.equal(rows[0].n, 0)
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 8. KNOWN GAP — users created AFTER the backfill hold no ACL role
+//
+// Phase 2D was a one-shot migration. No provisioning script (addFacility.mjs,
+// addDsdAccount.mjs, createClusterStores.mjs, create_state_offices.mjs, …)
+// writes a user_roles row, and no runtime code creates one either. So every
+// account created after the backfill has no ACL identity at all.
+//
+// Harmless today — nothing reads user_roles. At cutover it would deny those
+// users everything. Asserted here so the gap stays visible and cannot be
+// silently "fixed" by a migration re-run that hides the underlying cause:
+// provisioning must assign roles, or the backfill must become repeatable.
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('KNOWN GAP: accounts created after the backfill have no ACL role', async () => {
+  const { rows } = await query(`
+    select count(*)::int n from users u
+     where u.created_at > (select min(created_at) from user_roles)
+       and u.email not like '%@acl-schema-test.invalid'
+       and not exists (select 1 from user_roles ur where ur.user_id = u.id)`)
+  // Not asserting a specific count — it grows with every account provisioned.
+  // The assertion is that this query is the RIGHT way to measure the gap, and
+  // that it is reported rather than hidden.
+  assert.ok(rows[0].n >= 0)
+  if (rows[0].n > 0) {
+    console.warn(`\n[known gap] ${rows[0].n} account(s) created since the Phase 2D backfill hold no ACL role. ` +
+      `Provisioning does not assign roles; this must be closed before cutover.\n`)
+  }
 })

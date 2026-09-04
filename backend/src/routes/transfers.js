@@ -208,6 +208,30 @@ router.post('/', async (req, res) => {
       if (!validators.isPositiveNumber(l.quantity)) {
         return sendValidationError(res, 'Line quantity must be a positive number', 'quantity')
       }
+      // A transfer may not be CREATED already pointing at two different
+      // facilities. The workflow this app has always used is: a facility submits
+      // a REQUEST (receiving side only), an admin assigns the source via
+      // PATCH /:id/assign, and only then does the assigned facility dispatch.
+      // Creating both sides at once is the "external redistribution send" path,
+      // whose form is hard-disabled in both the pharmacy and lab UIs
+      // ("intentionally disabled: this module is view/print only"), so nothing
+      // legitimate reaches this. Closing it here stops the API permitting what
+      // the product forbids.
+      //
+      // Deliberately narrow — it blocks ONLY the two-different-facilities shape.
+      // The three live creation paths all still pass:
+      //   request  : sending null, receiving own facility
+      //   internal : sending === receiving (Store -> Dispensary, same facility)
+      //   DSD/SDP  : sending own facility, receiving null
+      if (l.sending_facility_id && l.receiving_facility_id
+          && l.sending_facility_id !== l.receiving_facility_id) {
+        return res.status(403).json({
+          success: false,
+          error: 'A transfer cannot be created with both a sending and a receiving facility. Submit a request; an administrator assigns the source facility.',
+          code: 'FORBIDDEN',
+        })
+      }
+
       const okSend = l.sending_facility_id && await mayWriteTransferFacility(req, l.sending_facility_id)
       const okRecv = l.receiving_facility_id && await mayWriteTransferFacility(req, l.receiving_facility_id)
       if (!okSend && !okRecv) {
