@@ -81,8 +81,23 @@ export function RecordStock() {
     const qty = parseInt(qtyRef.current?.value || 0)
     if (isNaN(qty) || qty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
     const comm = store.allCommodities.find(c => c.id === commId)
-    if (items.some(i => i.commodityId === commId)) {
-      setMsg({ type:'error', text:`${comm?.name || 'Commodity'} is already in the list — remove it first to change the quantity.` }); return
+    // A commodity may now be staged more than once — one line per batch — so a single
+    // consumption can draw from several batches. The rules that keep that sane:
+    //   • the same batch can't be staged twice for a commodity;
+    //   • an automatic (FEFO) line and explicit batch lines can't be mixed for one
+    //     commodity — FEFO already spans every batch, so combining them double-counts.
+    const bKey = pickerBatch?.key || null   // null = FEFO / no specific batch
+    const staged = items.filter(i => i.commodityId === commId)
+    if (staged.length) {
+      if (!bKey) {
+        setMsg({ type:'error', text:`${comm?.name} is already staged. To draw from another batch, pick a specific batch from the dropdown.` }); return
+      }
+      if (staged.some(i => !i.batch)) {
+        setMsg({ type:'error', text:`${comm?.name} is staged on automatic (FEFO). Remove that line first, then add specific batches.` }); return
+      }
+      if (staged.some(i => i.batch?.key === bKey)) {
+        setMsg({ type:'error', text:`Batch ${pickerBatch.batch_number || '(no batch)'} of ${comm?.name} is already staged.` }); return
+      }
     }
     const avail = await resolveStock(commId)
     // Zero is a valid "nothing consumed today" record: skip the stock, insufficiency
@@ -94,16 +109,20 @@ export function RecordStock() {
       if (avail < qty) {
         setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
       }
+      // With a specific batch chosen, the quantity can't exceed what that batch holds.
+      if (pickerBatch && qty > pickerBatch.remaining) {
+        setMsg({ type:'error', text:`Only ${pickerBatch.remaining} left in batch ${pickerBatch.batch_number || '(no batch)'}. Add a second line from another batch for the rest.` }); return
+      }
       if (pickerBatch?.expired) {
         setMsg({ type:'error', text:'This batch is expired — move it back to store (Returned from Dispensary) and adjust it out before deducting it.' }); return
       }
     }
-    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail, batch: (qty > 0 && !isDSD) ? pickerBatch : null }])
+    setItems(prev => [...prev, { key: `${commId}|${bKey || 'fefo'}`, commodityId: commId, quantity: qty, comm, avail, batch: (qty > 0 && !isDSD) ? pickerBatch : null }])
     setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'
   }
 
-  function removeItem(commodityId) {
-    setItems(prev => prev.filter(i => i.commodityId !== commodityId))
+  function removeItem(key) {
+    setItems(prev => prev.filter(i => i.key !== key))
   }
 
   async function handleSubmit(e) {
@@ -281,7 +300,7 @@ export function RecordStock() {
                   const packSize = getCommodityPackSize(it.comm)
                   const dispUnit = getCommodityDispenseUnit(it.comm)
                   return (
-                    <div key={it.commodityId} className="flex items-center justify-between px-4 py-2.5 gap-3">
+                    <div key={it.key} className="flex items-center justify-between px-4 py-2.5 gap-3">
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-gray-100 truncate">{it.comm?.name || '—'}</div>
                         <div className="text-xs text-gray-500">
@@ -292,7 +311,7 @@ export function RecordStock() {
                           )}
                         </div>
                       </div>
-                      <button type="button" onClick={() => removeItem(it.commodityId)}
+                      <button type="button" onClick={() => removeItem(it.key)}
                         className="text-xs text-gray-500 hover:text-red-400 border border-white/10 rounded px-2 py-1 transition-colors shrink-0">
                         Remove
                       </button>
