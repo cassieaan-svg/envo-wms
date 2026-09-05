@@ -191,7 +191,11 @@ export function EditModal({ record, onClose, onSave }) {
               <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Reason</label>
               <select value={reason} onChange={e=>setReason(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                 <option>Expired</option><option>Damaged</option><option>Lost / Stolen</option>
-                <option>Physical count correction</option><option>Returned to store</option><option>Other</option>
+                <option>Physical count correction</option><option>Returned to store</option>
+                {/* 'Other' is retired: offered only when this record already uses it, so
+                    editing an old 'Other' row doesn't silently blank its reason. It
+                    can't be chosen for any other record. */}
+                {record.reason === 'Other' && <option>Other</option>}
               </select>
             </div>
             <div>
