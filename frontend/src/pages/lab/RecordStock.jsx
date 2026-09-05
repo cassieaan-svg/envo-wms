@@ -154,7 +154,11 @@ export function RecordStock() {
       }
     }
     setItems(prev => [...prev, { key: `${commId}|${bKey || 'fefo'}`, commodityId: commId, quantity: qty, comm, avail, batch: qty > 0 ? pickerBatch : null }])
-    setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'
+    // Keep the commodity selected when a specific batch was added, so more batches of
+    // the SAME commodity can be added straight away (the transfers-style "+ Add batch"
+    // flow). A FEFO / no-batch add moves on to the next commodity, as before.
+    if (pickerBatch) { setPickerBatch(null) } else { setCommId(''); setPickerBatch(null) }
+    if (qtyRef.current) qtyRef.current.value = '1'
   }
 
   function removeItem(key) {
@@ -350,13 +354,22 @@ export function RecordStock() {
                     ⚠ This batch expired{pickerBatch.expiry_date ? ` on ${fmtDate(pickerBatch.expiry_date)}` : ''}. Move it back to store and adjust it out before deducting — expired stock can’t be dispensed.
                   </div>
                 )}
+                {/* Batches already added for this commodity — so it's clear you can keep
+                    picking more, the way the transfers screen splits across batches. */}
+                {items.filter(i => i.commodityId === commId && i.batch).length > 0 && (
+                  <div className="mt-2 text-xs text-gray-500">
+                    Added for this commodity: {items.filter(i => i.commodityId === commId && i.batch)
+                      .map(i => `${i.batch.batch_number || '(no batch)'} × ${i.quantity}`).join(', ')}
+                    . Pick another batch to add more, or choose a different commodity.
+                  </div>
+                )}
               </div>
             )}
 
             {/* Add-to-list */}
             <div className="flex justify-end">
               <Button type="button" variant="default" size="md" onClick={addItem}>
-                + Add commodity
+                {pickerBatch ? '+ Add batch' : '+ Add commodity'}
               </Button>
             </div>
 
