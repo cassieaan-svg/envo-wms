@@ -73,9 +73,19 @@ router.post('/', async (req, res) => {
       return sendValidationError(res, 'Quantity must be a positive number', 'quantity')
     }
 
-    // Validate received_at if provided
+    // Validate received_at if provided. Past dates are allowed (a delivery can be
+    // recorded after the fact), but not future ones — you can't receive stock that
+    // hasn't arrived. Compared on the Lagos calendar day so a late-evening entry
+    // isn't wrongly rejected as "tomorrow" in UTC.
     if (received_at && !validators.isValidDate(received_at)) {
       return sendValidationError(res, 'received_at must be a valid date', 'received_at')
+    }
+    if (received_at) {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' })
+      const day = new Date(received_at).toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' })
+      if (day > today) {
+        return sendValidationError(res, 'received_at cannot be in the future', 'received_at')
+      }
     }
 
     // Validate expiry_date: correct format AND a plausible year (rejects a fumbled

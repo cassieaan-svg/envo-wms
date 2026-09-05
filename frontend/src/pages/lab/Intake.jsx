@@ -94,6 +94,8 @@ export function Intake() {
     if (!batch)      { setMsg({type:'error',text:'Batch / lot number is required.'}); return }
     if (!expiry)     { setMsg({type:'error',text:'Expiry date is required.'}); return }
     if (!isPlausibleExpiry(expiry)) { setMsg({type:'error',text:'Expiry date must be in the future — you can\'t receive already-expired stock.'}); return }
+    if (!receivedDate) { setMsg({type:'error',text:'Date received is required.'}); return }
+    if (receivedDate > todayLagos()) { setMsg({type:'error',text:'Date received can\'t be in the future.'}); return }
     if (!receivedBy) { setMsg({type:'error',text:'Received by is required.'}); return }
     if (!fid)        { setMsg({type:'error',text:'No facility assigned.'}); return }
 
@@ -214,7 +216,11 @@ export function Intake() {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Date received *</label>
-                <input type="text" value={receivedDate} readOnly disabled className={inputCls}/>
+                {/* Editable, so a delivery can be recorded on the day it actually
+                    arrived. max = today: no future receipts. entryTimestamp() stamps a
+                    same-day entry with the real time and a back-dated one at local noon. */}
+                <input type="date" value={receivedDate} max={todayLagos()}
+                  onChange={e=>setRecDate(e.target.value)} required className={inputCls}/>
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
