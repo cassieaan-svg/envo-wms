@@ -58,3 +58,6 @@ db/_migration/*
 # Never commit these; they exist only to be handed to the site and then deleted.
 DSD_Sites_*.csv
 DSD_Sites_*.xlsx
+
+# Undo files written by move_intake_date.mjs (runtime, contain row ids)
+backend/scripts/move_intake_*.undo.json
