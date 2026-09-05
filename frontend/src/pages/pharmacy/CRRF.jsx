@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { NON_CRRF_ADJ_REASONS, INTRA_FACILITY_ADJ_REASONS, isGhscPsmSupplier, netStockChange } from '../../utils/reports'
+import { NON_CRRF_ADJ_REASONS, INTRA_FACILITY_ADJ_REASONS, classifyIntakeSupplier, netStockChange } from '../../utils/reports'
 import { todayLagos, ymdLagos } from '../../utils/helpers'
 import { CRRF_TEMPLATES } from '../../utils/crrfTemplates'
 import { CRRF_ALIASES } from '../../utils/crrfAliases'
@@ -194,10 +194,16 @@ export function CRRF() {
     })
 
     // ── The CRRF's own columns: movements INSIDE the period only ────────────────
-    // Quantity Received counts GHSC-PSM deliveries only, so this column no longer
-    // accounts for all the stock that arrived (see isGhscPsmSupplier).
+    // Intake splits by supplier (see classifyIntakeSupplier): GHSC-PSM is Quantity
+    // Received (col B); another named source (state office, CHAI, …) is a positive
+    // adjustment (Adj+); baseline/stock-take is the OPENING balance, so it feeds
+    // neither column here — it is handled in the rewind below as pre-period stock.
     ;(bIntake.within).forEach(r => {
-      if (agg[r.commodity_id] && isGhscPsmSupplier(r.supplier_source)) agg[r.commodity_id].received += r.quantity
+      if (!agg[r.commodity_id]) return
+      const cls = classifyIntakeSupplier(r.supplier_source)
+      if (cls === 'ghsc')       agg[r.commodity_id].received += r.quantity
+      else if (cls === 'other') agg[r.commodity_id].adjPos   += r.quantity
+      // 'baseline' → opening balance, not a period movement
     })
     ;(bDisp.within).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
     ;(bAdj.within).forEach(r => {
@@ -241,17 +247,23 @@ export function CRRF() {
     // doesn't print as its own CRRF line. External transfers and every other
     // adjustment reason (Expired, Damaged, Lost/Stolen, Other, …) still count too.
     const realAdj = list => list.filter(r => !INTRA_FACILITY_ADJ_REASONS.includes(r.reason))
+    // Baseline/stock-take intake is the OPENING balance, not a period receipt. Excluding
+    // it from the movement means the rewind leaves it sitting in the opening balance
+    // (column A) instead of counting it as stock that "arrived" during the period —
+    // which is what was driving the beginning balance negative. Same result as dating
+    // it before the period, without mutating the data.
+    const realIntake = list => list.filter(r => classifyIntakeSupplier(r.supplier_source) !== 'baseline')
     const byCommodity = (list) => {
       const m = {}
       for (const r of list) (m[r.commodity_id] ||= []).push(r)
       return m
     }
     const periodMoves = {
-      intakes: byCommodity(bIntake.within), dispenses: byCommodity(bDisp.within),
+      intakes: byCommodity(realIntake(bIntake.within)), dispenses: byCommodity(bDisp.within),
       adjustments: byCommodity(realAdj(bAdj.within)), transfers: byCommodity(bTransfer.within),
     }
     const laterMoves = {
-      intakes: byCommodity(bIntake.after), dispenses: byCommodity(bDisp.after),
+      intakes: byCommodity(realIntake(bIntake.after)), dispenses: byCommodity(bDisp.after),
       adjustments: byCommodity(realAdj(bAdj.after)), transfers: byCommodity(bTransfer.after),
     }
     const netFor = (moves, id) => netStockChange({
