@@ -192,8 +192,11 @@ router.get('/', async (req, res) => {
 router.get('/summary', async (req, res) => {
   try {
     const { facility_id, facility_ids, from, to, commodity_ids, section,
-            group_by, commodity_id, category, tz } = req.query
+            group_by, commodity_id, category, tz, supplier } = req.query
     const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+    if (supplier && !['ghsc', 'other'].includes(String(supplier))) {
+      return sendValidationError(res, "supplier must be 'ghsc' or 'other'", 'supplier')
+    }
 
     const groupBy = group_by ? String(group_by) : 'commodity'
     if (!INTAKE_GROUP_BY_KEYS.includes(groupBy)) {
@@ -223,6 +226,7 @@ router.get('/summary', async (req, res) => {
     const base = {
       from, to, commodityIds, categories: tokenCats, commodityNames: grants, section,
       groupBy, commodityId: commodity_id || null, category: category || null, tz: tz || null,
+      supplier: supplier || null,
     }
     let rows
     if (facility_id) {
