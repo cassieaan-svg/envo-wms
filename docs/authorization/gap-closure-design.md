@@ -48,6 +48,12 @@ user_role_scopes (
 )
 ```
 
+**Terminology note.** *Department* (Pharmacy, Lab) is the organizational concept. It is not
+itself a third dimension: it is enforced *within* the commodity dimension as
+`scope_type='section'`, which resolves to that department's category set. Department also
+serves as a key for feature configuration — see `authorization-model.md` §6. Two usages, one
+concept, deliberately.
+
 **Resolution rule — the whole model in three lines:**
 - Within a dimension, rows are **OR**ed (any match satisfies that dimension)
 - Across dimensions, they are **AND**ed (every dimension present must be satisfied)
@@ -74,7 +80,7 @@ load-bearing for authorization.)
 
 ### Migration path for the scope change
 
-`user_roles` already holds 7,567 rows. This is additive and reversible:
+`user_roles` already holds 7,566 rows. This is additive and reversible:
 
 1. Create `user_role_scopes`; leave `user_roles.scope_type`/`scope_id` in place, untouched.
 2. Backfill `geography` rows from the existing pair (1:1, no interpretation needed).

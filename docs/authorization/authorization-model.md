@@ -115,10 +115,23 @@ The team has explicitly deferred choosing between **category / department / unit
 
 ### Recommendation
 
-Make this a **first-class scope dimension**, alongside geography. It is not a permission (a
-pharmacy user and a lab user hold *identical* permission sets — only their category filter
-differs), and it is not configuration (it describes who the user *is*, not whether a feature is
-switched on).
+Make this a **first-class authorization concept**. It is not a permission (a pharmacy user and
+a lab user hold *identical* permission sets — only their category filter differs), and it is
+not itself configuration (it describes who the user *is*, not whether a feature is switched
+on).
+
+**Where it lives — stated precisely, because department appears in two places for two
+different reasons:**
+
+| Use | Layer | Mechanism |
+|---|---|---|
+| Filtering which commodity records a user may touch | Scope | Enforced *within* the commodity dimension as `scope_type='section'`, resolving to that department's category set (§16) |
+| Keying which workflows are switched off where | Configuration | `feature_config` keyed on facility × department (§7) |
+
+Department is therefore **not a third scope dimension**. The dimensions remain **geography**
+and **commodity**; department is a granularity within the latter, and independently a
+configuration key. This is intentional, and it is why the same word appears in both §7 and §16
+without conflict.
 
 On naming: the recommended canonical term is **department**, because that is the word the
 business itself used throughout the original requirement, and because *category* is already
