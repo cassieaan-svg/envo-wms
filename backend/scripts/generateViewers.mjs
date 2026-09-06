@@ -21,6 +21,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pool } from '../src/db.js'
+import { syncAcl } from '../src/services/aclProvisioning.js'
 
 const OUT = process.argv[2] || path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), 'viewer_logins.csv')
 const SECTIONS = ['pharmacy', 'lab']
@@ -99,6 +100,11 @@ async function main() {
   const byRole = accounts.reduce((m, a) => (m[a.role] = (m[a.role] || 0) + 1, m), {})
   console.log(`Provisioned ${accounts.length} accounts:`, byRole)
   console.log(`Credentials written to: ${OUT}`)
+
+  // Give the new accounts their ACL role and scope. No-ops where the ACL tables
+  // are absent (production, today) and never throws.
+  await syncAcl()
+
   await pool.end()
 }
 

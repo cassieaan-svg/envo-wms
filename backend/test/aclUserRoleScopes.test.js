@@ -71,10 +71,18 @@ test('no scope row has an empty scope_id', async () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 test('geography rows reconcile exactly with user_roles scoped assignments', async () => {
+  // Both sides exclude fixture accounts. Sibling suites create and sync users
+  // under reserved .invalid domains concurrently — `node --test` runs test FILES
+  // in parallel — so a whole-table count can catch a fixture that holds a
+  // user_roles row a moment before its user_role_scopes rows land, or vice
+  // versa. Counting only real accounts makes the reconciliation independent of
+  // whatever another suite is doing at that instant.
   const { rows } = await query(`
     select
-      (select count(*)::int from user_roles where scope_type <> '' and scope_id <> '') expected,
-      (select count(*)::int from user_role_scopes where dimension = 'geography') actual`)
+      (select count(*)::int from user_roles ur join users u on u.id = ur.user_id
+        where ur.scope_type <> '' and ur.scope_id <> '' and u.email not like '%.invalid') expected,
+      (select count(*)::int from user_role_scopes urs join users u on u.id = urs.user_id
+        where urs.dimension = 'geography' and u.email not like '%.invalid') actual`)
   assert.equal(rows[0].actual, rows[0].expected)
 })
 

@@ -26,6 +26,7 @@ import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { pool } from '../src/db.js'
+import { syncAcl } from '../src/services/aclProvisioning.js'
 
 const argv = process.argv.slice(2)
 const DRY = argv.includes('--dry-run')
@@ -125,6 +126,10 @@ async function main() {
   fs.writeFileSync(OUT, rows.map(r => r.map(csvCell).join(',')).join('\r\n'))
   console.log(`\n${planned.length} cluster store(s) and store-manager login(s) created/updated.`)
   console.log(`Credentials written to: ${OUT}`)
+
+  // Give the new accounts their ACL role and scope. No-ops where the ACL tables
+  // are absent (production, today) and never throws.
+  await syncAcl()
 }
 
 main()

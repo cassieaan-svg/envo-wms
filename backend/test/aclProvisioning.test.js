@@ -1,0 +1,168 @@
+// New accounts must receive an ACL role and scope.
+//
+// Phase 2D was a point-in-time backfill; nothing assigned roles to accounts
+// created afterward, which would have denied those users everything at cutover.
+// syncAcl() closes that by re-running the three idempotent backfill migrations —
+// one copy of the derivation rules, not a second implementation.
+//
+// SAFETY: every fixture lives under the reserved @acl-schema-test.invalid domain
+// and is removed in `finally`. No real user, role or scope row is modified.
+//
+//   npm test --prefix backend
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { query, pool } from '../src/db.js'
+import { syncAcl } from '../src/services/aclProvisioning.js'
+
+test.after(async () => { await pool.end() })
+
+const EMAIL = 'provisioning-sync@acl-schema-test.invalid'
+const cleanup = () => query(`delete from users where email = $1`, [EMAIL])
+
+// Creates a user exactly the way the provisioning scripts do — a `users` row and
+// nothing else.
+async function provisionUser(meta) {
+  await cleanup()
+  const { rows } = await query(
+    `insert into users (id, email, encrypted_password, raw_user_meta_data)
+     values (gen_random_uuid(), $1, 'x', $2::jsonb) returning id`,
+    [EMAIL, JSON.stringify(meta)])
+  return rows[0].id
+}
+
+const roleOf = async (userId) => {
+  const { rows } = await query(
+    `select r.name from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = $1`,
+    [userId])
+  return rows[0]?.name ?? null
+}
+
+const scopesOf = async (userId) => {
+  const { rows } = await query(
+    `select dimension, scope_type, scope_id from user_role_scopes
+      where user_id = $1 order by dimension, scope_type`, [userId])
+  return rows
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 1. The gap itself
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('a newly provisioned account has NO ACL identity until synced', async () => {
+  const { rows: f } = await query(`select id from facilities limit 1`)
+  const id = await provisionUser({ access_level: 'facility', commodity_section: 'pharmacy', facility_id: f[0].id })
+  try {
+    assert.equal(await roleOf(id), null, 'provisioning alone assigns no role — this is the gap')
+    assert.deepEqual(await scopesOf(id), [])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('syncAcl gives a new facility account its role and BOTH scope dimensions', async () => {
+  const { rows: f } = await query(`select id from facilities where state is not null limit 1`)
+  const id = await provisionUser({ access_level: 'facility', commodity_section: 'pharmacy', facility_id: f[0].id })
+  try {
+    const result = await syncAcl({ quiet: true })
+    assert.equal(result.synced, true)
+    assert.equal(await roleOf(id), 'facility')
+    assert.deepEqual(await scopesOf(id), [
+      { dimension: 'commodity', scope_type: 'section', scope_id: 'pharmacy' },
+      { dimension: 'geography', scope_type: 'facility', scope_id: f[0].id },
+    ])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('an admin account gets its own geography scope and no commodity scope', async () => {
+  const { rows: s } = await query(`select distinct state from facilities where state is not null limit 1`)
+  const id = await provisionUser({ access_level: 'state_admin', admin_state: s[0].state, commodity_section: 'lab' })
+  try {
+    await syncAcl({ quiet: true })
+    assert.equal(await roleOf(id), 'state_admin')
+    // state_admin is never section-pinned — attachScope ignores commodity_section
+    // for it, so the section set above must NOT produce a commodity row.
+    assert.deepEqual(await scopesOf(id), [
+      { dimension: 'geography', scope_type: 'state', scope_id: s[0].state },
+    ])
+  } finally {
+    await cleanup()
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 2. Eligibility — the same rules the backfill applies
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('an unrecognised access_level is still never assigned a role', async () => {
+  const id = await provisionUser({ access_level: 'hq_tools', commodity_section: 'tools' })
+  try {
+    await syncAcl({ quiet: true })
+    assert.equal(await roleOf(id), null, 'hq_tools is not one of the six approved levels')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('a facility account with no facility_id is still excluded', async () => {
+  const id = await provisionUser({ access_level: 'facility', commodity_section: 'pharmacy' })
+  try {
+    await syncAcl({ quiet: true })
+    assert.equal(await roleOf(id), null, 'nothing to scope it to — deliberately excluded')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('a missing access_level defaults to facility, matching attachScope', async () => {
+  const { rows: f } = await query(`select id from facilities limit 1`)
+  const id = await provisionUser({ commodity_section: 'lab', facility_id: f[0].id })
+  try {
+    await syncAcl({ quiet: true })
+    assert.equal(await roleOf(id), 'facility')
+  } finally {
+    await cleanup()
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 3. Idempotency and safety
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('syncing twice changes nothing the second time', async () => {
+  const { rows: f } = await query(`select id from facilities limit 1`)
+  const id = await provisionUser({ access_level: 'facility', commodity_section: 'lab', facility_id: f[0].id })
+  try {
+    const first = await syncAcl({ quiet: true })
+    assert.equal(first.assigned, 1)
+    const scopesAfterFirst = await scopesOf(id)
+
+    const second = await syncAcl({ quiet: true })
+    assert.equal(second.assigned, 0, 'a second run must assign nobody')
+    assert.deepEqual(await scopesOf(id), scopesAfterFirst, 'and must not duplicate scope rows')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('syncing does not disturb existing users', async () => {
+  const before = await query(
+    `select (select count(*)::int from user_roles) roles,
+            (select count(*)::int from user_role_scopes) scopes`)
+  await syncAcl({ quiet: true })
+  const after = await query(
+    `select (select count(*)::int from user_roles) roles,
+            (select count(*)::int from user_role_scopes) scopes`)
+  assert.deepEqual(after.rows[0], before.rows[0], 'a no-op sync must be exactly that')
+})
+
+test('syncAcl reports rather than throws when it cannot run', async () => {
+  // The property that lets a provisioning script call this unconditionally: on a
+  // database without the ACL tables (production today) it must return quietly,
+  // not fail a run that has already created the user.
+  const result = await syncAcl({ quiet: true })
+  assert.equal(typeof result.synced, 'boolean')
+  assert.ok(!('error' in result), 'never surfaces an exception to the caller')
+})
