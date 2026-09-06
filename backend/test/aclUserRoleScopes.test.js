@@ -1,0 +1,273 @@
+// Phase 2G — multi-dimensional scope: user_role_scopes backfill and resolution.
+//
+// Scope is now a SET over two dimensions (geography, commodity): OR within a
+// dimension, AND across dimensions, a dimension with no rows is unconstrained.
+// This suite tests the backfilled DATA and the resolver's handling of it.
+//
+// Still shadow-only: nothing reads this table in the request path, and scope.js
+// remains authoritative. Read-only except the clearly-marked fixture section.
+//
+//   npm test --prefix backend
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { query, pool } from '../src/db.js'
+import { AclResolver } from '../src/services/aclResolver.js'
+import { SECTION_CATEGORIES } from '../src/constants/sections.js'
+
+test.after(async () => { await pool.end() })
+
+const NOT_FIXTURE = `u.email not like '%@acl-schema-test.invalid'`
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 1. Structural integrity of the backfill
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('every scope row references a real user and a real role', async () => {
+  const { rows } = await query(`
+    select count(*)::int n from user_role_scopes urs
+     where not exists (select 1 from users u where u.id = urs.user_id)
+        or not exists (select 1 from roles r where r.id = urs.role_id)`)
+  assert.equal(rows[0].n, 0)
+})
+
+test('no scope row references a non-existent role assignment', async () => {
+  // The composite FK to user_roles cannot be declared — that table's primary key
+  // is four columns, and a two-column unique constraint would forbid a user
+  // holding one role at two scopes (which aclFoundation.test.js asserts is
+  // allowed). This test is what enforces the pair instead. See the migration.
+  const { rows } = await query(`
+    select count(*)::int n from user_role_scopes urs
+     where not exists (
+       select 1 from user_roles ur
+        where ur.user_id = urs.user_id and ur.role_id = urs.role_id)`)
+  assert.equal(rows[0].n, 0, 'every (user_id, role_id) must match a real assignment')
+})
+
+test('only the two declared dimensions exist, with valid scope_types', async () => {
+  const { rows } = await query(
+    `select distinct dimension, scope_type from user_role_scopes order by 1,2`)
+  const valid = {
+    geography: ['cluster', 'facility', 'lga', 'state'],
+    commodity: ['category', 'commodity', 'section'],
+  }
+  for (const r of rows) {
+    assert.ok(valid[r.dimension], `unexpected dimension: ${r.dimension}`)
+    assert.ok(valid[r.dimension].includes(r.scope_type),
+      `${r.dimension}/${r.scope_type} is not a declared scope_type`)
+  }
+})
+
+test('no scope row has an empty scope_id', async () => {
+  // An empty scope_id would be indistinguishable from "unconstrained" once read
+  // as a row, inverting its meaning. overall_admin's unconstrained state is
+  // represented by the ABSENCE of rows, never by an empty one.
+  const { rows } = await query(`select count(*)::int n from user_role_scopes where scope_id = ''`)
+  assert.equal(rows[0].n, 0)
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 2. Geography backfill reconciles 1:1 with user_roles
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('geography rows reconcile exactly with user_roles scoped assignments', async () => {
+  const { rows } = await query(`
+    select
+      (select count(*)::int from user_roles where scope_type <> '' and scope_id <> '') expected,
+      (select count(*)::int from user_role_scopes where dimension = 'geography') actual`)
+  assert.equal(rows[0].actual, rows[0].expected)
+})
+
+test('every geography row matches its user_roles pair exactly', async () => {
+  const { rows } = await query(`
+    select count(*)::int n from user_role_scopes urs
+      join user_roles ur on ur.user_id = urs.user_id and ur.role_id = urs.role_id
+     where urs.dimension = 'geography'
+       and (urs.scope_type <> ur.scope_type or urs.scope_id <> ur.scope_id)`)
+  assert.equal(rows[0].n, 0, 'the backfill must be a verbatim copy, not a reinterpretation')
+})
+
+test('overall_admin has NO geography rows — unconstrained is the absence of rows', async () => {
+  const { rows } = await query(`
+    select count(*)::int n from user_role_scopes urs
+      join roles r on r.id = urs.role_id
+     where r.name = 'overall_admin' and urs.dimension = 'geography'`)
+  assert.equal(rows[0].n, 0)
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 3. Commodity backfill mirrors attachScope's own rules
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('overall_admin and state_admin have NO commodity rows, even when they carry a section', async () => {
+  // attachScope: bothSections is true for these two roles regardless of the
+  // commodity_section on the account. Four such users DO carry one; it is
+  // deliberately ignored, because the legacy code ignores it.
+  const { rows } = await query(`
+    select count(*)::int n from user_role_scopes urs
+      join roles r on r.id = urs.role_id
+     where r.name in ('overall_admin', 'state_admin') and urs.dimension = 'commodity'`)
+  assert.equal(rows[0].n, 0)
+
+  const { rows: carrying } = await query(`
+    select count(*)::int n from user_roles ur
+      join users u on u.id = ur.user_id
+      join roles r on r.id = ur.role_id
+     where r.name in ('overall_admin','state_admin')
+       and coalesce(u.raw_user_meta_data->>'commodity_section','') <> ''`)
+  assert.ok(carrying[0].n > 0,
+    'the point of this test is that such users exist and are still given no commodity scope')
+})
+
+test('a section-pinned user has exactly one section row matching their metadata', async () => {
+  const { rows } = await query(`
+    select count(*)::int n from user_roles ur
+      join users u on u.id = ur.user_id
+      join roles r on r.id = ur.role_id
+      join user_role_scopes urs
+        on urs.user_id = ur.user_id and urs.role_id = ur.role_id
+       and urs.dimension = 'commodity' and urs.scope_type = 'section'
+      left join facilities f on f.id::text = ur.scope_id
+     where r.name not in ('overall_admin','state_admin')
+       and ${NOT_FIXTURE}
+       and (f.name is null or f.name !~* 'state office store|cluster lab store')
+       and urs.scope_id <> u.raw_user_meta_data->>'commodity_section'`)
+  assert.equal(rows[0].n, 0, 'section rows must copy commodity_section verbatim')
+})
+
+test('hub stores REPLACE their section with the hub category set, never extend it', async () => {
+  const { rows: sections } = await query(`
+    select count(*)::int n from user_role_scopes urs
+      join user_roles ur on ur.user_id = urs.user_id
+      join facilities f on f.id::text = ur.scope_id
+     where urs.dimension = 'commodity' and urs.scope_type = 'section'
+       and f.name ~* 'state office store|cluster lab store'`)
+  assert.equal(sections[0].n, 0, 'a hub store must not keep a section row')
+
+  const { rows: cats } = await query(`
+    select f.name, array_agg(urs.scope_id order by urs.scope_id) cats
+      from user_role_scopes urs
+      join user_roles ur on ur.user_id = urs.user_id
+      join facilities f on f.id::text = ur.scope_id
+     where urs.dimension = 'commodity' and urs.scope_type = 'category'
+       and f.name ~* 'state office store|cluster lab store'
+     group by 1`)
+  assert.ok(cats.length > 0, 'hub stores must exist in this database')
+  for (const r of cats) {
+    assert.deepEqual(r.cats, ['General Consumables', 'Lab consumables'], r.name)
+  }
+})
+
+test('the Alere Determine exception is a commodity row, not a hardcoded name', async () => {
+  const { rows } = await query(`
+    select f.name facility, c.name commodity
+      from user_role_scopes urs
+      join user_roles ur on ur.user_id = urs.user_id
+      join facilities f on f.id::text = ur.scope_id
+      join commodities c on c.id::text = urs.scope_id
+     where urs.dimension = 'commodity' and urs.scope_type = 'commodity'`)
+  assert.equal(rows.length, 1, 'exactly one individual-commodity grant exists today')
+  assert.equal(rows[0].commodity, 'Alere Determine')
+  assert.match(rows[0].facility, /akwa ibom state office store/i)
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 4. Resolver behaviour over the new dimensions
+// ═════════════════════════════════════════════════════════════════════════════
+
+async function userWith(sql) {
+  const { rows } = await query(sql)
+  if (!rows.length) throw new Error('fixture user not found')
+  return rows[0]
+}
+
+test('a pharmacy facility user resolves a pharmacy commodity and not a lab one', async () => {
+  const u = await userWith(`
+    select u.id, ur.scope_id facility from user_roles ur
+      join users u on u.id = ur.user_id join roles r on r.id = ur.role_id
+      left join facilities f on f.id::text = ur.scope_id
+     where r.name='facility' and u.raw_user_meta_data->>'commodity_section'='pharmacy'
+       and (f.name is null or f.name !~* 'state office store|cluster lab store')
+       and u.email not like '%@acl-schema-test.invalid' limit 1`)
+  const pharm = await userWith(`select id from commodities where category = 'Pharmacy drugs' limit 1`)
+  const lab = await userWith(`select id from commodities where category = 'RTKs' limit 1`)
+
+  assert.equal(await AclResolver.commodityCovers(u.id, pharm.id), true)
+  assert.equal(await AclResolver.commodityCovers(u.id, lab.id), false)
+})
+
+test('both dimensions must pass — right facility with wrong commodity is denied', async () => {
+  const u = await userWith(`
+    select u.id, ur.scope_id facility from user_roles ur
+      join users u on u.id = ur.user_id join roles r on r.id = ur.role_id
+      left join facilities f on f.id::text = ur.scope_id
+     where r.name='facility' and u.raw_user_meta_data->>'commodity_section'='pharmacy'
+       and (f.name is null or f.name !~* 'state office store|cluster lab store')
+       and u.email not like '%@acl-schema-test.invalid' limit 1`)
+  const lab = await userWith(`select id from commodities where category = 'RTKs' limit 1`)
+  const pharm = await userWith(`select id from commodities where category = 'Pharmacy drugs' limit 1`)
+
+  const ok = await AclResolver.can(u.id, 'stock.read', { facilityId: u.facility, commodityId: pharm.id })
+  assert.equal(ok.decision, true, 'own facility + own section must pass')
+
+  const denied = await AclResolver.can(u.id, 'stock.read', { facilityId: u.facility, commodityId: lab.id })
+  assert.equal(denied.decision, false, 'own facility but wrong section must be denied')
+  assert.equal(denied.reason, 'commodity outside scope')
+})
+
+test('an unconstrained role (state_admin) resolves any commodity', async () => {
+  const u = await userWith(`
+    select u.id from user_roles ur join users u on u.id=ur.user_id
+      join roles r on r.id=ur.role_id where r.name='state_admin' limit 1`)
+  const { rows: some } = await query(`select id from commodities limit 5`)
+  for (const c of some) {
+    assert.equal(await AclResolver.commodityCovers(u.id, c.id), true)
+  }
+})
+
+test('the Akwa Ibom hub resolves its granted commodity despite it being outside its categories', async () => {
+  // Alere Determine is an RTK; the hub's category rows are Lab consumables and
+  // General Consumables. The individual grant is what lets it through — proving
+  // OR-within-dimension works and the exception is genuinely additive.
+  const u = await userWith(`
+    select u.id from user_roles ur join users u on u.id = ur.user_id
+      join facilities f on f.id::text = ur.scope_id
+     where lower(btrim(f.name)) = 'akwa ibom state office store' limit 1`)
+  const alere = await userWith(`select id, category from commodities where name = 'Alere Determine'`)
+  assert.equal(alere.category, 'RTKs', 'precondition: the grant is outside the hub category set')
+
+  assert.equal(await AclResolver.commodityCovers(u.id, alere.id), true, 'the grant must apply')
+
+  const otherRtk = await query(
+    `select id from commodities where category='RTKs' and name <> 'Alere Determine' limit 1`)
+  if (otherRtk.rows.length) {
+    assert.equal(await AclResolver.commodityCovers(u.id, otherRtk.rows[0].id), false,
+      'the grant must be for that ONE commodity, not the whole RTKs category')
+  }
+})
+
+test('an unrecognised section resolves to DENY, diverging from legacy fail-open', async () => {
+  // Three live accounts carry commodity_section='tools'. categoriesForSection
+  // returns null for an unknown value, which legacy treats as "sees everything".
+  // The new model denies instead. This is a deliberate divergence from a
+  // documented fail-open defect, not an implementation gap.
+  const u = await query(`
+    select u.id from user_roles ur join users u on u.id = ur.user_id
+      join roles r on r.id = ur.role_id
+     where r.name not in ('overall_admin','state_admin')
+       and u.raw_user_meta_data->>'commodity_section' = 'tools' limit 1`)
+  if (!u.rows.length) return // no such account in this database
+  const { rows: any } = await query(`select id from commodities limit 1`)
+  assert.equal(await AclResolver.commodityCovers(u.rows[0].id, any[0].id), false,
+    "an unknown section must deny, not fall through to 'sees everything'")
+  assert.equal(SECTION_CATEGORIES['tools'], undefined,
+    'precondition: tools is genuinely not a declared section')
+})
+
+test('an unknown commodity id denies', async () => {
+  const u = await userWith(`
+    select u.id from user_roles ur join users u on u.id=ur.user_id
+      join roles r on r.id=ur.role_id where r.name='facility'
+      and u.email not like '%@acl-schema-test.invalid' limit 1`)
+  assert.equal(await AclResolver.commodityCovers(u.id, '00000000-0000-0000-0000-000000000000'), false)
+})

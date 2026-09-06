@@ -1,4 +1,5 @@
 import { query } from '../db.js'
+import { SECTION_CATEGORIES } from '../constants/sections.js'
 
 // Phase 2E — ACL resolver, SHADOW MODE ONLY.
 //
@@ -108,6 +109,73 @@ export class AclResolver {
     return rows
   }
 
+  // ── Phase 2G: multi-dimensional scope ──────────────────────────────────────
+  //
+  // Scope is a SET of rows over two dimensions (user_role_scopes):
+  //   geography  — facility | state | cluster | lga
+  //   commodity  — section  | category | commodity
+  //
+  // Resolution: OR within a dimension, AND across dimensions, a dimension with
+  // NO rows is unconstrained on that dimension. That last rule is what makes
+  // overall_admin (no rows at all) national, and what makes state_admin — never
+  // section-pinned in attachScope — see every category.
+  //
+  // Nothing here reads user_roles.scope_type/scope_id. Those columns remain in
+  // place, untouched, until a later phase retires them.
+
+  static async getScopeRows(userId, dimension) {
+    const { rows } = await query(
+      `select scope_type, scope_id from user_role_scopes
+        where user_id = $1 and dimension = $2`,
+      [userId, dimension])
+    return rows
+  }
+
+  // Is `facilityId` inside the user's geography scope? No geography rows means
+  // unconstrained — NOT "denied" — because that is how an unscoped role
+  // (overall_admin) is represented.
+  static async geographyCovers(userId, facilityId) {
+    const rows = await this.getScopeRows(userId, 'geography')
+    if (rows.length === 0) return true
+    if (!facilityId) return false
+    for (const r of rows) {
+      if (await this.facilityInScope(r.scope_type, r.scope_id, facilityId)) return true
+    }
+    return false
+  }
+
+  // Is `commodityId` inside the user's commodity scope? No commodity rows means
+  // unconstrained, matching attachScope giving overall_admin/state_admin a null
+  // section.
+  //
+  // A `section` row resolves through SECTION_CATEGORIES. An UNRECOGNISED section
+  // (three live accounts carry commodity_section='tools') resolves to NO
+  // categories and therefore DENIES. Legacy fails open here — categoriesForSection
+  // returns null for an unknown value, which downstream means "sees everything".
+  // That is a documented defect; reproducing it would bake a fail-open into the
+  // new model, so this deliberately diverges and the shadow comparison records
+  // the mismatch rather than hiding it.
+  static async commodityCovers(userId, commodityId) {
+    const rows = await this.getScopeRows(userId, 'commodity')
+    if (rows.length === 0) return true
+    if (!commodityId) return false
+
+    const { rows: found } = await query(
+      `select category from commodities where id = $1`, [commodityId])
+    if (!found.length) return false // unknown commodity denies
+    const category = found[0].category
+
+    for (const r of rows) {
+      if (r.scope_type === 'commodity' && r.scope_id === commodityId) return true
+      if (r.scope_type === 'category' && r.scope_id === category) return true
+      if (r.scope_type === 'section') {
+        const cats = SECTION_CATEGORIES[r.scope_id]
+        if (Array.isArray(cats) && cats.includes(category)) return true
+      }
+    }
+    return false
+  }
+
   // Does `roleName` carry `permissionKey` via role_permissions? Unknown role or
   // unknown permission both resolve to false — never throws, never guesses.
   static async roleHasPermission(roleName, permissionKey) {
@@ -164,26 +232,46 @@ export class AclResolver {
       ? { scope_type: grant.scope_type, scope_id: grant.scope_id }
       : assignment
 
+    // GEOGRAPHY. A direct grant carries its own scope, so it is evaluated against
+    // that pair directly. A role-based grant reads the multi-dimensional scope
+    // set (Phase 2G) — never user_roles.scope_type/scope_id, which are now
+    // vestigial for resolution purposes.
+    const geoCovers = async (facilityId) => grant
+      ? this.facilityInScope(grant.scope_type, grant.scope_id, facilityId)
+      : this.geographyCovers(userId, facilityId)
+
+    let geoOk, reason
     if (TRANSFER_PERMISSIONS.has(permissionKey)) {
       const { sendingFacilityId, receivingFacilityId } = context
-      const sendOk = await this.facilityInScope(effectiveScope.scope_type, effectiveScope.scope_id, sendingFacilityId)
-      const recvOk = await this.facilityInScope(effectiveScope.scope_type, effectiveScope.scope_id, receivingFacilityId)
-      return { decision: sendOk || recvOk, reason: 'transfer party scope', role: assignment?.role ?? null }
+      geoOk = (await geoCovers(sendingFacilityId)) || (await geoCovers(receivingFacilityId))
+      reason = 'transfer party scope'
+    } else {
+      // A write permission that is NOT in the cross-facility set is forced to
+      // facility-only scope even for a role whose assignment says 'state' —
+      // reproducing WRITE_ADMIN_LEVELS' per-table narrowing, which
+      // role_permissions itself cannot express (see file header).
+      const widest = grant ? grant.scope_type : (assignment?.scope_type ?? '')
+      if (permissionKey.endsWith('.write') && widest !== 'facility' && widest !== ''
+          && !CROSS_FACILITY_WRITE_PERMISSIONS.has(permissionKey)) {
+        // No facility-level fallback exists for an admin's own facility (admins
+        // typically carry no facility_id at all) — this must deny, not widen.
+        return { decision: false, reason: 'write not eligible for this role\'s cross-facility scope', role: assignment?.role ?? null }
+      }
+      geoOk = await geoCovers(context.facilityId)
+      reason = geoOk ? 'facility scope match' : 'facility outside scope'
+    }
+    if (!geoOk) return { decision: false, reason, role: assignment?.role ?? null }
+
+    // COMMODITY. Checked only when the caller names a commodity — mirroring
+    // legacy, where enforceCommoditySection is a separate guard invoked only
+    // where a commodity is actually in play. Both dimensions must pass (AND).
+    if (context.commodityId) {
+      const commodityOk = await this.commodityCovers(userId, context.commodityId)
+      if (!commodityOk) {
+        return { decision: false, reason: 'commodity outside scope', role: assignment?.role ?? null }
+      }
     }
 
-    // Single-facility permission. A write permission that is NOT in the
-    // cross-facility set is forced to facility-only scope even for a role whose
-    // assignment says 'state' — reproducing WRITE_ADMIN_LEVELS' per-table
-    // narrowing, which role_permissions itself cannot express (see file header).
-    let scopeType = effectiveScope.scope_type
-    let scopeId = effectiveScope.scope_id
-    if (permissionKey.endsWith('.write') && scopeType !== 'facility' && scopeType !== ''
-        && !CROSS_FACILITY_WRITE_PERMISSIONS.has(permissionKey)) {
-      // No facility-level fallback exists for an admin's own facility (admins
-      // typically carry no facility_id at all) — this must deny, not widen.
-      return { decision: false, reason: 'write not eligible for this role\'s cross-facility scope', role: assignment?.role ?? null }
-    }
-    const covered = await this.facilityInScope(scopeType, scopeId, context.facilityId)
-    return { decision: covered, reason: covered ? 'facility scope match' : 'facility outside scope', role: assignment?.role ?? null }
+    return { decision: true, reason, role: assignment?.role ?? null }
   }
 }
