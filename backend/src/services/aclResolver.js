@@ -43,17 +43,18 @@ import { FEATURE_BY_PERMISSION } from '../constants/features.js'
 //                special case grafted on — it is the natural generalization of
 //                the same scope check to two candidates instead of one.
 //
-// A GENUINE SCHEMA GAP, reported rather than patched around: WRITE_ADMIN_LEVELS
-// in scope.js grants state_admin cross-facility write on stock/dsd_stock/
-// sdp_stock/amc_settings/transfer, but NEVER on dispense_log/intake_log/
-// adjustment_log (an admin isn't the one physically dispensing or receiving —
-// see scope.js:48-53). Phase 2A/2C's approved catalogue gives state_admin ALL
-// 24 permissions as one flat grant; role_permissions has no column that could
-// express "this permission, for this role, narrows across facilities; that one
-// doesn't." That distinction currently lives ONLY in application code — on
-// both the legacy side (WRITE_ADMIN_LEVELS) and, of necessity, here. This
-// resolver reproduces it via CROSS_FACILITY_WRITE_PERMISSIONS below, but the
-// ACL SCHEMA itself cannot yet express it. See the Phase 2E report, Scope Gap.
+// PER-GRANT SCOPE NARROWING — the schema gap Phase 2E reported, now closed.
+// WRITE_ADMIN_LEVELS in scope.js grants state_admin cross-facility write on
+// stock/dsd_stock/sdp_stock/amc_settings/transfer, but NEVER on
+// dispense_log/intake_log/adjustment_log (an admin isn't the one physically
+// dispensing or receiving — see scope.js:48-53). That distinction used to live
+// only in application code, mirrored here by a CROSS_FACILITY_WRITE_PERMISSIONS
+// constant, because role_permissions had no way to express "this grant does not
+// widen across facilities".
+//
+// role_permissions.scope_mode now carries it as data ('inherit' by default,
+// 'own_facility_only' on the three log writes), so the constant is gone and the
+// rule is configurable rather than compiled in.
 //
 // Deliberately NOT represented here — see Step 13 of the phase brief. These are
 // legacy special cases the shadow comparison is meant to SURFACE, not absorb:
@@ -78,12 +79,6 @@ const UNSCOPED_PERMISSIONS = new Set([
 
 // Permissions using the two-candidate (sending/receiving) transfer scope shape.
 const TRANSFER_PERMISSIONS = new Set(['transfer.read', 'transfer.write'])
-
-// Exactly WRITE_ADMIN_LEVELS' cross-facility grants, restricted to state_admin
-// (the only role that table ever names) — see the schema-gap note above.
-const CROSS_FACILITY_WRITE_PERMISSIONS = new Set([
-  'stock.write', 'dsd_stock.write', 'sdp_stock.write', 'amc_settings.write', 'transfer.write',
-])
 
 export class AclResolver {
   // The user's single ACL role assignment (Phase 2D migrated exactly one per
@@ -211,6 +206,23 @@ export class AclResolver {
     return rows.length > 0
   }
 
+  // The scope_mode recorded on a role's grant of a permission.
+  //
+  //   'inherit'           use the role assignment's own scope
+  //   'own_facility_only' never widen past the actor's own facility
+  //
+  // Returns null when no such grant exists. A null is NOT treated as 'inherit'
+  // by the caller — a missing grant means the permission was held some other
+  // way (a direct user_permissions grant), which carries its own scope.
+  static async getScopeMode(roleName, permissionKey) {
+    const { rows } = await query(
+      `select rp.scope_mode from role_permissions rp
+         join roles r on r.id = rp.role_id
+        where r.name = $1 and rp.permission_key = $2`,
+      [roleName, permissionKey])
+    return rows[0]?.scope_mode ?? null
+  }
+
   // Does `roleName` carry `permissionKey` via role_permissions? Unknown role or
   // unknown permission both resolve to false — never throws, never guesses.
   static async roleHasPermission(roleName, permissionKey) {
@@ -291,17 +303,32 @@ export class AclResolver {
       geoOk = (await geoCovers(sendingFacilityId)) || (await geoCovers(receivingFacilityId))
       reason = 'transfer party scope'
     } else {
-      // A write permission that is NOT in the cross-facility set is forced to
-      // facility-only scope even for a role whose assignment says 'state' —
-      // reproducing WRITE_ADMIN_LEVELS' per-table narrowing, which
-      // role_permissions itself cannot express (see file header).
-      const widest = grant ? grant.scope_type : (assignment?.scope_type ?? '')
-      if (permissionKey.endsWith('.write') && widest !== 'facility' && widest !== ''
-          && !CROSS_FACILITY_WRITE_PERMISSIONS.has(permissionKey)) {
-        // No facility-level fallback exists for an admin's own facility (admins
-        // typically carry no facility_id at all) — this must deny, not widen.
-        return { decision: false, reason: 'write not eligible for this role\'s cross-facility scope', role: assignment?.role ?? null }
+      // PER-GRANT SCOPE NARROWING (role_permissions.scope_mode). Replaces the
+      // CROSS_FACILITY_WRITE_PERMISSIONS constant this resolver carried while
+      // the schema could not express the rule.
+      //
+      // A direct user_permissions grant carries its own scope and has no
+      // role_permissions row, so it is treated as 'inherit'.
+      const scopeMode = grant
+        ? 'inherit'
+        : await this.getScopeMode(assignment.role, permissionKey)
+
+      if (scopeMode === 'own_facility_only') {
+        // This grant never widens, whatever the role's assignment says. The
+        // actor must be scoped to a specific facility — an admin scoped to a
+        // state or cluster has no own-facility to fall back on, so this denies
+        // rather than widening. Fail closed.
+        const widest = assignment?.scope_type ?? ''
+        if (widest !== 'facility') {
+          return { decision: false, reason: 'grant is own-facility-only and this role has no facility scope', role: assignment?.role ?? null }
+        }
+      } else if (scopeMode !== 'inherit') {
+        // Unrecognised (or missing) scope_mode. The CHECK constraint should make
+        // this unreachable, but a value the resolver does not understand must
+        // never be treated as permissive.
+        return { decision: false, reason: `unrecognised scope_mode: ${scopeMode}`, role: assignment?.role ?? null }
       }
+
       geoOk = await geoCovers(context.facilityId)
       reason = geoOk ? 'facility scope match' : 'facility outside scope'
     }
