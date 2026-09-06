@@ -12,9 +12,16 @@ const router = express.Router()
 /**
  * GET /api/commodities - List all commodities (ordered category -> name)
  */
+const isCatalogueManager = req => req.scope?.accessLevel === 'overall_admin' || req.scope?.isAdmin === true
+
 router.get('/', async (req, res) => {
   try {
-    const commodities = await CommodityService.getCommodities()
+    const { module, active, q } = req.query
+    const commodities = await CommodityService.getCommodities({
+      module: module || undefined,
+      activeOnly: active === 'true' || active === '1',
+      q: q || undefined,
+    })
 
     res.json({
       success: true,
@@ -30,6 +37,47 @@ router.get('/', async (req, res) => {
       code: 'FETCH_ERROR'
     })
   }
+})
+
+router.get('/modules', async (_req, res) => {
+  try { res.json({ success: true, data: await CommodityService.getModules() }) }
+  catch (err) { res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' }) }
+})
+
+router.get('/categories', async (req, res) => {
+  try { res.json({ success: true, data: await CommodityService.getCategories(req.query.module || null) }) }
+  catch (err) { res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' }) }
+})
+
+router.post('/categories', async (req, res) => {
+  try {
+    if (!isCatalogueManager(req)) return res.status(403).json({ success: false, error: 'Catalogue manager access required', code: 'FORBIDDEN' })
+    const { module, name, code, parent_id, sort_order } = req.body || {}
+    if (!module || !name || !String(name).trim()) return sendValidationError(res, 'module and name are required', 'name')
+    if (parent_id && !validators.isUUID(parent_id)) return sendValidationError(res, 'Invalid parent_id', 'parent_id')
+    const category = await CommodityService.createCategory({ module, name: String(name).trim(), code, parentId: parent_id, sortOrder: sort_order })
+    res.status(201).json({ success: true, data: category, timestamp: new Date().toISOString() })
+  } catch (err) { res.status(400).json({ success: false, error: err.message, code: 'CREATE_ERROR' }) }
+})
+
+router.post('/', async (req, res) => {
+  try {
+    if (!isCatalogueManager(req)) return res.status(403).json({ success: false, error: 'Catalogue manager access required', code: 'FORBIDDEN' })
+    const { name, item_type, item_code, description, is_active, memberships } = req.body || {}
+    if (!name || !String(name).trim()) return sendValidationError(res, 'name is required', 'name')
+    if (!Array.isArray(memberships) || memberships.length === 0) return sendValidationError(res, 'At least one module membership is required', 'memberships')
+    const seen = new Set()
+    for (const membership of memberships) {
+      if (!membership?.module || seen.has(membership.module)) return sendValidationError(res, 'Each membership must have a unique module', 'memberships')
+      seen.add(membership.module)
+      if (membership.category_id && !validators.isUUID(membership.category_id)) return sendValidationError(res, 'Invalid category_id', 'memberships')
+    }
+    const commodity = await CommodityService.createCommodity({
+      name: String(name).trim(), itemType: item_type || 'commodity', itemCode: item_code,
+      description, isActive: is_active !== false, memberships,
+    })
+    res.status(201).json({ success: true, data: commodity, timestamp: new Date().toISOString() })
+  } catch (err) { res.status(400).json({ success: false, error: err.message, code: 'CREATE_ERROR' }) }
 })
 
 /**
