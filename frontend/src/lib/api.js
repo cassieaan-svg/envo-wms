@@ -169,7 +169,11 @@ export const api = {
 
   facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
   commodities: {
-    list: () => get('/commodities'),
+    list: (params) => get('/commodities', params),
+    modules: () => get('/commodities/modules'),
+    categories: (params) => get('/commodities/categories', params),
+    create: (body) => post('/commodities', body),
+    createCategory: (body) => post('/commodities/categories', body),
     // Ids ever transacted (any intake/dispense, however old) in the given scope.
     // params: { facility_id } | { state, lga } | { facility_ids }
     transacted: (params) => get('/commodities/transacted', params),
