@@ -1,5 +1,6 @@
 import { query } from '../db.js'
 import { SECTION_CATEGORIES } from '../constants/sections.js'
+import { FEATURE_BY_PERMISSION } from '../constants/features.js'
 
 // Phase 2E — ACL resolver, SHADOW MODE ONLY.
 //
@@ -176,6 +177,40 @@ export class AclResolver {
     return false
   }
 
+  // ── Phase 2H: feature configuration ────────────────────────────────────────
+  //
+  // Is `permissionKey` suppressed for this user by a disabled feature?
+  //
+  // DENY-ONLY, structurally. This method returns a boolean meaning "suppressed",
+  // and `can()` uses it solely to turn an allow into a deny. There is no path by
+  // which a feature_config row can turn a deny into an allow — a user without
+  // the permission is already denied before this is consulted. That is what
+  // stops configuration becoming a privilege-escalation surface.
+  //
+  // A user's department comes from their commodity `section` scope row, and
+  // their facility from their geography `facility` row. A user with neither —
+  // an admin with no department, say — cannot match a (facility, department)
+  // row, so no departmental disable applies to them. That follows from having
+  // no wildcards, and is deliberate.
+  static async featureSuppresses(userId, permissionKey) {
+    const feature = FEATURE_BY_PERMISSION[permissionKey]
+    if (!feature) return false // not a gated permission
+
+    const { rows } = await query(
+      `select 1
+         from feature_config fc
+         join user_role_scopes fac
+           on fac.user_id = $1 and fac.dimension = 'geography'
+          and fac.scope_type = 'facility' and fac.scope_id = fc.facility_id::text
+         join user_role_scopes dep
+           on dep.user_id = $1 and dep.dimension = 'commodity'
+          and dep.scope_type = 'section' and dep.scope_id = fc.department
+        where fc.feature = $2 and fc.enabled = false
+        limit 1`,
+      [userId, feature])
+    return rows.length > 0
+  }
+
   // Does `roleName` carry `permissionKey` via role_permissions? Unknown role or
   // unknown permission both resolve to false — never throws, never guesses.
   static async roleHasPermission(roleName, permissionKey) {
@@ -222,7 +257,17 @@ export class AclResolver {
     }
     if (!permissionHeld) return { decision: false, reason: 'role lacks permission', role: assignment?.role ?? null }
 
-    // ── 2. Scope — independent of how the permission was held.
+    // ── 2. Feature configuration — can only suppress, never grant.
+    //
+    // Evaluated after the capability check (a user who lacks the permission is
+    // already denied, so configuration never decides anything for them) and
+    // before scope, purely because it is cheaper: a disabled feature
+    // short-circuits without any facility-membership query.
+    if (await this.featureSuppresses(userId, permissionKey)) {
+      return { decision: false, reason: 'feature disabled for this department', role: assignment?.role ?? null }
+    }
+
+    // ── 3. Scope — independent of how the permission was held.
     if (UNSCOPED_PERMISSIONS.has(permissionKey)) {
       return { decision: true, reason: 'unscoped permission', role: assignment?.role ?? null }
     }
