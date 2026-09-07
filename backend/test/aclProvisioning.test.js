@@ -149,12 +149,22 @@ test('syncing twice changes nothing the second time', async () => {
 
 test('syncing does not disturb existing users', async () => {
   const before = await query(
-    `select (select count(*)::int from user_roles) roles,
-            (select count(*)::int from user_role_scopes) scopes`)
+    // Real accounts only. aclFoundation and aclUserRoleScopes create and drop
+    // their own '.invalid' fixtures concurrently, and a global count would make
+    // this assertion about their timing rather than about syncAcl.
+    `select (select count(*)::int from user_roles ur join users u on u.id = ur.user_id
+              where u.email not like '%.invalid') roles,
+            (select count(*)::int from user_role_scopes s join users u on u.id = s.user_id
+              where u.email not like '%.invalid') scopes`)
   await syncAcl({ quiet: true })
   const after = await query(
-    `select (select count(*)::int from user_roles) roles,
-            (select count(*)::int from user_role_scopes) scopes`)
+    // Real accounts only. aclFoundation and aclUserRoleScopes create and drop
+    // their own '.invalid' fixtures concurrently, and a global count would make
+    // this assertion about their timing rather than about syncAcl.
+    `select (select count(*)::int from user_roles ur join users u on u.id = ur.user_id
+              where u.email not like '%.invalid') roles,
+            (select count(*)::int from user_role_scopes s join users u on u.id = s.user_id
+              where u.email not like '%.invalid') scopes`)
   assert.deepEqual(after.rows[0], before.rows[0], 'a no-op sync must be exactly that')
 })
 

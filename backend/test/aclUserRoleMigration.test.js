@@ -33,7 +33,14 @@ const APPROVED_ROLES = ['facility', 'state_admin', 'state_viewer', 'cluster_admi
 // didn't exist when this migration ran. Every query below that scans the whole
 // `users` table therefore excludes that email domain, the same fix as the
 // earlier aclSeed.test.js cross-file race.
-const NOT_FIXTURE_USER = `u.email not like '%@acl-schema-test.invalid'`
+//
+// Broadened from that one domain to the whole '.invalid' TLD: aclProvisioning
+// and aclUserRoleScopes create fixtures under their own '.invalid' domains, and
+// a provisioning fixture briefly holds a user_roles row whose scope has not yet
+// caught up with the metadata it is being re-synced against. '.invalid' is
+// reserved by RFC 2606 and can never be a real account, so excluding all of it
+// cannot hide a genuine defect.
+const NOT_FIXTURE_USER = `u.email not like '%.invalid'`
 
 // Accounts whose access_level implies a facility scope but which carry no
 // facility_id are deliberately excluded from the ACL entirely
@@ -156,7 +163,8 @@ test('facility role: scope_type=facility, scope_id=raw_user_meta_data.facility_i
       join users u on u.id = ur.user_id
      where r.name = 'facility'
        and ur.scope_type = 'facility'
-       and ur.scope_id <> coalesce(u.raw_user_meta_data->>'facility_id', '')`)
+       and ur.scope_id <> coalesce(u.raw_user_meta_data->>'facility_id', '')
+       and ${NOT_FIXTURE_USER}`)
   assert.equal(rows[0].mismatches, 0)
 })
 
@@ -167,7 +175,8 @@ test('state_admin/state_viewer: scope_type=state, scope_id=raw_user_meta_data.ad
       join users u on u.id = ur.user_id
      where r.name in ('state_admin','state_viewer')
        and (ur.scope_type <> 'state'
-            or ur.scope_id <> coalesce(u.raw_user_meta_data->>'admin_state', ''))`)
+            or ur.scope_id <> coalesce(u.raw_user_meta_data->>'admin_state', ''))
+       and ${NOT_FIXTURE_USER}`)
   assert.equal(rows[0].mismatches, 0)
 })
 
@@ -178,7 +187,8 @@ test('cluster_admin: scope_type=cluster, scope_id=raw_user_meta_data.admin_clust
       join users u on u.id = ur.user_id
      where r.name = 'cluster_admin'
        and (ur.scope_type <> 'cluster'
-            or ur.scope_id <> coalesce(u.raw_user_meta_data->>'admin_cluster', ''))`)
+            or ur.scope_id <> coalesce(u.raw_user_meta_data->>'admin_cluster', ''))
+       and ${NOT_FIXTURE_USER}`)
   assert.equal(rows[0].mismatches, 0)
 })
 
@@ -189,7 +199,8 @@ test('lga_admin: scope_type=lga, scope_id=raw_user_meta_data.admin_lga verbatim'
       join users u on u.id = ur.user_id
      where r.name = 'lga_admin'
        and (ur.scope_type <> 'lga'
-            or ur.scope_id <> coalesce(u.raw_user_meta_data->>'admin_lga', ''))`)
+            or ur.scope_id <> coalesce(u.raw_user_meta_data->>'admin_lga', ''))
+       and ${NOT_FIXTURE_USER}`)
   assert.equal(rows[0].mismatches, 0)
 })
 
@@ -203,8 +214,11 @@ test('overall_admin: unscoped (empty scope_type/scope_id) for every one — neve
   // scope_type — that would silently mean "unconstrained" for a role attachScope
   // always narrows, which would be a real widening of access.
   const { rows: leaked } = await query(`
-    select r.name, count(*)::int n from user_roles ur join roles r on r.id=ur.role_id
+    select r.name, count(*)::int n from user_roles ur
+      join roles r on r.id = ur.role_id
+      join users u on u.id = ur.user_id
      where r.name <> 'overall_admin' and ur.scope_type = ''
+       and ${NOT_FIXTURE_USER}
      group by 1`)
   assert.deepEqual(leaked, [], 'only overall_admin may have an empty scope_type')
 })
@@ -226,7 +240,8 @@ test('a facility user with no facility_id is EXCLUDED from the ACL entirely', as
       join roles r on r.id = ur.role_id
       join users u on u.id = ur.user_id
      where r.name = 'facility'
-       and (u.raw_user_meta_data->>'facility_id' is null or u.raw_user_meta_data->>'facility_id' = '')`)
+       and (u.raw_user_meta_data->>'facility_id' is null or u.raw_user_meta_data->>'facility_id' = '')
+       and ${NOT_FIXTURE_USER}`)
   assert.deepEqual(rows, [], 'a facility account with no facility_id must hold no ACL role at all')
 })
 
@@ -258,7 +273,12 @@ test('users.raw_user_meta_data still carries access_level for every migrated use
 })
 
 test('user_permissions remains completely empty — this phase seeds no direct grants', async () => {
-  const { rows } = await query('select count(*)::int n from user_permissions')
+  // aclFoundation.test.js inserts and deletes a direct grant to prove the table
+  // works, and runs concurrently — so this counts real accounts only.
+  const { rows } = await query(
+    `select count(*)::int n from user_permissions up
+       join users u on u.id = up.user_id
+      where ${NOT_FIXTURE_USER}`)
   assert.equal(rows[0].n, 0)
 })
 

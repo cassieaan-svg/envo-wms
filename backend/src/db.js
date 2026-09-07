@@ -4,6 +4,7 @@ import pg from 'pg'
 import dotenv from 'dotenv'
 import { performance } from 'node:perf_hooks'
 import { DIAG, track, trackQuery } from './diag.js'
+import { observeCounterpartyQuery } from './services/counterpartyProbe.js'
 
 // Resolved from this file, not the working directory. A bare dotenv.config() silently
 // finds nothing when the process is started from the repo root (e.g.
@@ -48,8 +49,17 @@ pool.on('error', err => console.error('[db] idle client error:', err.message))
 // That split is the only way to tell a slow query from a saturated pool: a
 // request queued here has no PostgreSQL session yet, so pg_stat_activity shows
 // nothing at all. Off by default — the plain path is unchanged.
+// Phase 2K counts the pending-transfer counterparty exception from HERE rather
+// than from scope.js, which stays untouched — see counterpartyProbe.js. The
+// observer is a no-op unless ENVO_COUNTERPARTY_PROBE=1, runs after the result is
+// already in hand, and its return value is discarded, so it cannot influence any
+// authorization decision.
 export const query = async (text, params) => {
-  if (!DIAG) return pool.query(text, params)
+  if (!DIAG) {
+    const result = await pool.query(text, params)
+    observeCounterpartyQuery(text, params, result)
+    return result
+  }
   const t0 = performance.now()
   const client = await pool.connect()
   const t1 = performance.now()
@@ -60,6 +70,7 @@ export const query = async (text, params) => {
     track('db', dbMs)
     track('n', 1)
     trackQuery(text, dbMs, t1 - t0)
+    observeCounterpartyQuery(text, params, result)
     return result
   } finally {
     client.release()

@@ -21,6 +21,10 @@ import { AclResolver } from '../src/services/aclResolver.js'
 
 test.after(async () => { await pool.end() })
 
+// Facilities this suite writes feature_config rows for, so the final
+// "left nothing behind" check can scope itself to its own work.
+const touchedFacilities = []
+
 const OWN_FACILITY_ONLY = ['dispense_log.write', 'intake_log.write', 'adjustment_log.write']
 const CROSS_FACILITY_OK = ['stock.write', 'dsd_stock.write', 'sdp_stock.write', 'amc_settings.write']
 
@@ -128,28 +132,48 @@ test('missing facility in the request context fails closed', async () => {
 })
 
 test('an unknown scope_mode fails closed rather than being treated as permissive', async () => {
-  // The CHECK constraint makes this unreachable through normal writes, so it is
-  // forced here to prove the resolver does not fall through to "allow" on a
-  // value it does not understand.
+  // The CHECK constraint makes an unrecognised value unreachable through normal
+  // writes, so it has to be forced somehow to prove the resolver does not fall
+  // through to "allow" on a value it does not understand.
+  //
+  // IT IS FORCED IN MEMORY, NOT IN THE DATABASE. The earlier version of this
+  // test dropped the CHECK constraint and wrote a garbage scope_mode onto the
+  // shared facility/stock.write grant. `node --test` runs test FILES
+  // concurrently against this one database, so for the width of that window
+  // every other suite saw a corrupted authorization rule —
+  // aclShadowComparison read it and reported a false mismatch roughly one run
+  // in twenty.
+  //
+  // Stubbing the lookup instead is both safer and a tighter test: it isolates
+  // the single behaviour under scrutiny — what `can()` does with a scope_mode it
+  // does not recognise — without asserting anything about how such a value could
+  // come to exist. `node --test` gives each file its own process, so the stub is
+  // invisible outside this one, and no shared state is touched at all.
+  //
+  // The database's own refusal to store such a value is covered by the next
+  // test, which relies on the constraint being intact rather than removing it.
   const u = await realUser('facility')
-  const { rows: role } = await query(`select id from roles where name = 'facility'`)
-  await query(`alter table role_permissions drop constraint role_permissions_scope_mode_check`)
-  try {
-    await query(
-      `update role_permissions set scope_mode = 'something_unrecognised'
-        where role_id = $1 and permission_key = 'stock.write'`, [role[0].id])
 
+  const original = AclResolver.getScopeMode
+  // Narrow on purpose: only the pair under test is faked, so anything else the
+  // resolver looks up on the way to the decision still comes from real data.
+  AclResolver.getScopeMode = async function (roleName, permissionKey) {
+    if (roleName === 'facility' && permissionKey === 'stock.write') return 'something_unrecognised'
+    return original.call(this, roleName, permissionKey)
+  }
+  try {
     const res = await AclResolver.can(u.id, 'stock.write', { facilityId: u.scope_id })
     assert.equal(res.decision, false, 'an unrecognised scope_mode must never allow')
     assert.match(res.reason, /unrecognised scope_mode/)
   } finally {
-    await query(
-      `update role_permissions set scope_mode = 'inherit'
-        where role_id = $1 and permission_key = 'stock.write'`, [role[0].id])
-    await query(`alter table role_permissions
-      add constraint role_permissions_scope_mode_check
-      check (scope_mode in ('inherit','own_facility_only'))`)
+    AclResolver.getScopeMode = original
   }
+
+  // The stub is gone and the real grant was never touched: the same call must
+  // now be allowed again. Without this, a restore that silently failed would
+  // leave every later test in this file passing for the wrong reason.
+  const after = await AclResolver.can(u.id, 'stock.write', { facilityId: u.scope_id })
+  assert.equal(after.decision, true, 'the real facility/stock.write grant is untouched')
 })
 
 test('the database rejects an unknown scope_mode outright', async () => {
@@ -196,6 +220,7 @@ test('a disabled feature still suppresses a permission that inherits its scope',
        and (f.name is null or f.name !~* 'state office store|cluster lab store')
      limit 1`)
   const { id, facility_id } = rows[0]
+  touchedFacilities.push(facility_id)
   try {
     assert.equal((await AclResolver.can(id, 'transfer.write',
       { sendingFacilityId: facility_id })).decision, true, 'baseline')
@@ -221,6 +246,11 @@ test('this suite restored the scope_mode data it touched', async () => {
     { scope_mode: 'inherit', n: 101 },
     { scope_mode: 'own_facility_only', n: 6 },
   ])
-  const { rows: fc } = await query(`select count(*)::int n from feature_config`)
-  assert.equal(fc[0].n, 0, 'no feature_config row left behind')
+  // Scoped to the facilities THIS suite writes to. aclFeatureConfig.test.js runs
+  // concurrently against the same table and legitimately has rows in flight; a
+  // global count would make this assertion about that suite instead of this one.
+  const { rows: fc } = await query(
+    `select count(*)::int n from feature_config where facility_id = any($1::uuid[])`,
+    [touchedFacilities])
+  assert.equal(fc[0].n, 0, 'no feature_config row left behind by this suite')
 })
