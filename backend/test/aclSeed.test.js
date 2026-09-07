@@ -52,15 +52,31 @@ const APPROVED_KEYS = [
   'system.diagnostics.read',
 ].sort()
 
+// Phase 2M added three user-administration keys. They are kept SEPARATE from the
+// 24 above rather than folded in, because the two sets answer different questions
+// and several tests below depend on the distinction: APPROVED_KEYS is "what can
+// you do to inventory", USER_ADMIN_KEYS is "what can you do to other users". A
+// read-only tier holding one of the first is normal; holding one of the second
+// would be a governance breach.
+const USER_ADMIN_KEYS = ['user.read', 'user.write', 'user_permission.write'].sort()
+const ALL_KEYS = [...APPROVED_KEYS, ...USER_ADMIN_KEYS].sort()
+
 const APPROVED_ROLES = ['facility', 'state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'overall_admin'].sort()
+
+// Phase 2M added exactly two roles. Four other candidates (Pharmacy/Lab/M&E HQ,
+// section-scoped state readers) turned out to be existing roles plus a scope row,
+// which is what the multi-dimensional scope model is for — so they are
+// deliberately absent here.
+const PHASE_2M_ROLES = ['system_admin', 'essential_admin'].sort()
+const ALL_ROLES = [...APPROVED_ROLES, ...PHASE_2M_ROLES].sort()
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 1. Exactly the approved 24 permissions — no more, no fewer
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('exactly the 24 approved permission keys exist', async () => {
+test('exactly the 27 approved permission keys exist', async () => {
   const { rows } = await query(`select key from permissions where ${NOT_FIXTURE_PERMISSION} order by key`)
-  assert.deepEqual(rows.map(r => r.key), APPROVED_KEYS)
+  assert.deepEqual(rows.map(r => r.key), ALL_KEYS)
 })
 
 test('no unapproved key sneaked in — specifically not the excluded ones', async () => {
@@ -83,9 +99,9 @@ test('every SEEDED permission is active by default', async () => {
 // 2. Exactly the approved 6 roles, all system roles
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('exactly the 6 approved role names exist, all is_system = true', async () => {
+test('exactly the 8 approved role names exist, all is_system = true', async () => {
   const { rows } = await query(`select name, is_system from roles where ${NOT_FIXTURE_ROLE} order by name`)
-  assert.deepEqual(rows.map(r => r.name), APPROVED_ROLES)
+  assert.deepEqual(rows.map(r => r.name), ALL_ROLES)
   assert.ok(rows.every(r => r.is_system === true), 'every seeded role must be a system role')
 })
 
@@ -108,10 +124,11 @@ async function permsFor(role) {
   return rows.map(r => r.permission_key)
 }
 
-test('total mapping count is 107', async () => {
+test('total mapping count is 138', async () => {
   const { rows } = await query(
     `select count(*)::int n from role_permissions where ${NOT_FIXTURE_RP}`)
-  assert.equal(rows[0].n, 107)
+  assert.equal(rows[0].n, 138,
+    '107 before Phase 2M, plus 31: system_admin 3, state_admin 2, essential_admin 26')
 })
 
 test('facility holds every permission except system.diagnostics.read (23)', async () => {
@@ -120,9 +137,12 @@ test('facility holds every permission except system.diagnostics.read (23)', asyn
   assert.deepEqual(perms, APPROVED_KEYS.filter(k => k !== 'system.diagnostics.read'))
 })
 
-test('state_admin holds all 24 — the full read+write set, plus diagnostics', async () => {
+test('state_admin holds all 24 operational keys, plus user administration', async () => {
   const perms = await permsFor('state_admin')
-  assert.deepEqual(perms, APPROVED_KEYS)
+  // Phase 2M's governing rule: user administration requires write capability, so
+  // the roles that manage users are exactly the roles that can write. NOT
+  // user_permission.write — direct grant/deny stays with system_admin alone.
+  assert.deepEqual(perms, [...APPROVED_KEYS, 'user.read', 'user.write'].sort())
 })
 
 test('the four read-only admin tiers hold the identical 15-key set', async () => {
@@ -157,7 +177,7 @@ test('every SEEDED role holds only permissions that exist in the approved 24', a
     `select distinct rp.permission_key from role_permissions rp
        join roles r on r.id = rp.role_id
       where ${NOT_FIXTURE_ROLE.replace('name', 'r.name')}
-        and rp.permission_key <> all($1)`, [APPROVED_KEYS])
+        and rp.permission_key <> all($1)`, [ALL_KEYS])
   assert.deepEqual(rows, [], 'no seeded role maps to a permission outside the approved catalogue')
 })
 
@@ -190,7 +210,7 @@ test('re-inserting an already-seeded permission/role/mapping is a silent no-op',
   const { rows: p } = await query(`select count(*)::int n from permissions where ${NOT_FIXTURE_PERMISSION}`)
   const { rows: r } = await query(`select count(*)::int n from roles where ${NOT_FIXTURE_ROLE}`)
   const { rows: rp } = await query(`select count(*)::int n from role_permissions where ${NOT_FIXTURE_RP}`)
-  assert.equal(p[0].n, 24, 'permission count unchanged after re-insert')
-  assert.equal(r[0].n, 6, 'role count unchanged after re-insert')
-  assert.equal(rp[0].n, 107, 'mapping count unchanged after re-insert')
+  assert.equal(p[0].n, ALL_KEYS.length, 'permission count unchanged after re-insert')
+  assert.equal(r[0].n, ALL_ROLES.length, 'role count unchanged after re-insert')
+  assert.equal(rp[0].n, 138, 'mapping count unchanged after re-insert')
 })

@@ -107,9 +107,10 @@ export class AclResolver {
 
   // ── Phase 2G: multi-dimensional scope ──────────────────────────────────────
   //
-  // Scope is a SET of rows over two dimensions (user_role_scopes):
+  // Scope is a SET of rows over three dimensions (user_role_scopes):
   //   geography  — facility | state | cluster | lga
   //   commodity  — section  | category | commodity
+  //   module     — module                          (Phase 2M)
   //
   // Resolution: OR within a dimension, AND across dimensions, a dimension with
   // NO rows is unconstrained on that dimension. That last rule is what makes
@@ -178,6 +179,35 @@ export class AclResolver {
       }
     }
     return false
+  }
+
+  // ── Phase 2M: module scope ─────────────────────────────────────────────────
+  //
+  // Is `commodityId` inside the user's MODULE scope? No module rows means
+  // unconstrained, the same convention as the other dimensions.
+  //
+  // A SEPARATE DIMENSION, not a scope_type inside `commodity`, and the HQ viewers
+  // are why. Resolution is OR within a dimension and AND across dimensions, so a
+  // module row sitting alongside a section row in one dimension would resolve as
+  // "HIV module OR lab section" — every HIV category, which is the widening this
+  // exists to prevent. As its own dimension it resolves as "HIV module AND lab
+  // section", which is Lab HQ's actual entitlement.
+  //
+  // An unknown commodity denies, matching commodityCovers.
+  static async moduleCovers(userId, commodityId) {
+    const rows = await this.getScopeRows(userId, 'module')
+    if (rows.length === 0) return true
+    if (!commodityId) return false
+
+    const { rows: found } = await query(
+      `select module from commodities where id = $1`, [commodityId])
+    if (!found.length) return false
+    // A commodity with no module is not claimed by any module scope. Denying is
+    // the fail-closed reading; today every row has one.
+    const module = found[0].module
+    if (!module) return false
+
+    return rows.some(r => r.scope_type === 'module' && r.scope_id === module)
   }
 
   // ── Phase 2H: feature configuration ────────────────────────────────────────
@@ -349,6 +379,13 @@ export class AclResolver {
       const commodityOk = await this.commodityCovers(userId, context.commodityId)
       if (!commodityOk) {
         return { decision: false, reason: 'commodity outside scope', role: assignment?.role ?? null }
+      }
+      // MODULE. A third dimension, so it ANDs with the commodity check above
+      // rather than OR-ing with it — see moduleCovers for why that distinction
+      // decides whether Lab HQ sees lab categories or every HIV category.
+      const moduleOk = await this.moduleCovers(userId, context.commodityId)
+      if (!moduleOk) {
+        return { decision: false, reason: 'commodity outside module scope', role: assignment?.role ?? null }
       }
     }
 

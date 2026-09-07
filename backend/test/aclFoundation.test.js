@@ -210,7 +210,25 @@ test('deleting a user cascades their user_roles rows (users table itself untouch
   const cascadeUserId = u[0].id
   try {
     await query(`insert into user_roles (user_id, role_id) values ($1,$2)`, [cascadeUserId, roleId])
-    await query(`delete from users where id = $1`, [cascadeUserId])
+
+    // DELETE retried on deadlock (40P01). aclProvisioning.test.js runs
+    // concurrently and calls syncAcl, which applies four backfill migrations
+    // inside ONE transaction that writes across user_roles and
+    // user_role_scopes — the same tables this delete cascades into. Postgres
+    // resolves the resulting lock cycle by killing one side, and it is
+    // arbitrary which; syncAcl has its own retry, so this side needs one too.
+    //
+    // The deadlock is contention, not corruption: the cascade being tested here
+    // is a schema property that either holds or does not. Retrying establishes
+    // the precondition; the assertion below is untouched.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await query(`delete from users where id = $1`, [cascadeUserId])
+        break
+      } catch (err) {
+        if (err.code !== '40P01' || attempt >= 4) throw err
+      }
+    }
     const { rows } = await query(`select 1 from user_roles where user_id = $1`, [cascadeUserId])
     assert.equal(rows.length, 0, 'user_roles row must not outlive its user')
   } finally {

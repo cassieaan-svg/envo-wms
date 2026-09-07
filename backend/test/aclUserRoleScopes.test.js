@@ -44,12 +44,17 @@ test('no scope row references a non-existent role assignment', async () => {
   assert.equal(rows[0].n, 0, 'every (user_id, role_id) must match a real assignment')
 })
 
-test('only the two declared dimensions exist, with valid scope_types', async () => {
+test('only the three declared dimensions exist, with valid scope_types', async () => {
   const { rows } = await query(
     `select distinct dimension, scope_type from user_role_scopes order by 1,2`)
   const valid = {
     geography: ['cluster', 'facility', 'lga', 'state'],
     commodity: ['category', 'commodity', 'section'],
+    // Phase 2M. Its own dimension, not a commodity scope_type: resolution is OR
+    // within a dimension and AND across them, so a module row sitting beside a
+    // section row would widen Lab HQ to every HIV category instead of narrowing
+    // it to lab.
+    module: ['module'],
   }
   for (const r of rows) {
     assert.ok(valid[r.dimension], `unexpected dimension: ${r.dimension}`)
@@ -107,24 +112,52 @@ test('overall_admin has NO geography rows — unconstrained is the absence of ro
 // 3. Commodity backfill mirrors attachScope's own rules
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('overall_admin and state_admin have NO commodity rows, even when they carry a section', async () => {
-  // attachScope: bothSections is true for these two roles regardless of the
-  // commodity_section on the account. Four such users DO carry one; it is
-  // deliberately ignored, because the legacy code ignores it.
-  const { rows } = await query(`
+test('state_admin has no commodity rows; a section-tagged overall_admin now does', async () => {
+  // ORIGINALLY both roles were given no commodity scope, because attachScope sets
+  // bothSections for them and discards commodity_section — the ACL mirrored the
+  // legacy behaviour. Phase 2M deliberately diverges for overall_admin ONLY.
+  //
+  // The reason: create_hq_viewers.mjs provisions Lab HQ / Pharmacy HQ / M&E HQ as
+  // overall_admin tagged with a section, and describes the tag as being "so the UI
+  // shows only that section's data". That is exactly true — the pin is enforced
+  // nowhere on the server, so a frontend-only field is acting as an access
+  // boundary. Carrying it into a commodity scope row makes it real, and those
+  // accounts get NARROWER than legacy (an intended fix, recorded as its own
+  // shadow-comparison class).
+  //
+  // state_admin is unchanged: it genuinely sees both sections.
+  const { rows: sa } = await query(`
     select count(*)::int n from user_role_scopes urs
       join roles r on r.id = urs.role_id
-     where r.name in ('overall_admin', 'state_admin') and urs.dimension = 'commodity'`)
-  assert.equal(rows[0].n, 0)
+     where r.name = 'state_admin' and urs.dimension = 'commodity'`)
+  assert.equal(sa[0].n, 0, 'state_admin still sees every section')
 
-  const { rows: carrying } = await query(`
-    select count(*)::int n from user_roles ur
-      join users u on u.id = ur.user_id
+  const { rows: tagged } = await query(`
+    select u.raw_user_meta_data->>'commodity_section' section,
+           count(urs.*)::int scoped
+      from user_roles ur
       join roles r on r.id = ur.role_id
-     where r.name in ('overall_admin','state_admin')
-       and coalesce(u.raw_user_meta_data->>'commodity_section','') <> ''`)
-  assert.ok(carrying[0].n > 0,
-    'the point of this test is that such users exist and are still given no commodity scope')
+      join users u on u.id = ur.user_id
+      left join user_role_scopes urs
+        on urs.user_id = ur.user_id and urs.dimension = 'commodity'
+     where r.name = 'overall_admin'
+       and u.raw_user_meta_data->>'commodity_section' in ('pharmacy','lab')
+     group by 1 order by 1`)
+  assert.ok(tagged.length > 0, 'such accounts must exist, or this asserts nothing')
+  for (const t of tagged) {
+    assert.equal(t.scoped, 1, `${t.section} HQ must carry exactly its own section scope`)
+  }
+
+  // An overall_admin with NO tag keeps seeing all sections — the confirmed rule.
+  const { rows: untagged } = await query(`
+    select count(urs.*)::int scoped from user_roles ur
+      join roles r on r.id = ur.role_id
+      join users u on u.id = ur.user_id
+      left join user_role_scopes urs
+        on urs.user_id = ur.user_id and urs.dimension = 'commodity'
+     where r.name = 'overall_admin'
+       and coalesce(u.raw_user_meta_data->>'commodity_section','') = ''`)
+  assert.equal(untagged[0].scoped, 0, 'an untagged overall_admin is not narrowed')
 })
 
 test('a section-pinned user has exactly one section row matching their metadata', async () => {

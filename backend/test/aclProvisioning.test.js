@@ -60,7 +60,7 @@ test('a newly provisioned account has NO ACL identity until synced', async () =>
   }
 })
 
-test('syncAcl gives a new facility account its role and BOTH scope dimensions', async () => {
+test('syncAcl gives a new facility account its role and ALL THREE scope dimensions', async () => {
   const { rows: f } = await query(`select id from facilities where state is not null limit 1`)
   const id = await provisionUser({ access_level: 'facility', commodity_section: 'pharmacy', facility_id: f[0].id })
   try {
@@ -70,6 +70,11 @@ test('syncAcl gives a new facility account its role and BOTH scope dimensions', 
     assert.deepEqual(await scopesOf(id), [
       { dimension: 'commodity', scope_type: 'section', scope_id: 'pharmacy' },
       { dimension: 'geography', scope_type: 'facility', scope_id: f[0].id },
+      // Phase 2M. Without a module row the account would be UNCONSTRAINED on
+      // module — an absent dimension means unconstrained — and would therefore
+      // see Essential Commodities as well as HIV. This assertion is the guard
+      // that the module migration stays wired into syncAcl.
+      { dimension: 'module', scope_type: 'module', scope_id: 'hiv' },
     ])
   } finally {
     await cleanup()
@@ -86,6 +91,10 @@ test('an admin account gets its own geography scope and no commodity scope', asy
     // for it, so the section set above must NOT produce a commodity row.
     assert.deepEqual(await scopesOf(id), [
       { dimension: 'geography', scope_type: 'state', scope_id: s[0].state },
+      // …but it IS confined to the HIV module. No commodity row means every
+      // section; no module row would mean every module, which is a different and
+      // much larger claim.
+      { dimension: 'module', scope_type: 'module', scope_id: 'hiv' },
     ])
   } finally {
     await cleanup()

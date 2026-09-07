@@ -29,6 +29,12 @@ const MIGRATIONS = [
   '20260903_acl_seed_user_roles.sql',
   '20260904_acl_exclude_scopeless_accounts.sql',
   '20260905_acl_user_role_scopes.sql',
+  // Phase 2M. Without this a newly provisioned account gets geography and
+  // commodity scope but NO module row, and an absent dimension means
+  // unconstrained — so the new user would see Essential Commodities as well as
+  // HIV. The backfill is `on conflict do nothing` over user_roles, so re-running
+  // it picks up exactly the accounts that are missing a row.
+  '20260907_acl_module_dimension.sql',
 ]
 
 const MIGRATIONS_DIR = path.resolve(

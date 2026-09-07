@@ -57,6 +57,10 @@ test('the narrowing applies to every role holding those permissions, not just st
        join roles r on r.id = rp.role_id
       where rp.scope_mode = 'own_facility_only' group by 1 order by 1`)
   assert.deepEqual(rows, [
+    // essential_admin (Phase 2M) copied state_admin's grants FROM THE DATA, which
+    // is why it carries the narrowing too — re-listing the keys by hand there
+    // would have silently dropped it.
+    { name: 'essential_admin', n: 3 },
     { name: 'facility', n: 3 },
     { name: 'state_admin', n: 3 },
   ])
@@ -65,7 +69,7 @@ test('the narrowing applies to every role holding those permissions, not just st
 test('scope_mode defaults to inherit, preserving existing behaviour', async () => {
   const { rows } = await query(
     `select count(*)::int n from role_permissions where scope_mode = 'inherit'`)
-  assert.equal(rows[0].n, 101, 'every other grant is untouched')
+  assert.equal(rows[0].n, 129, 'every other grant is untouched (101 + 28 added by Phase 2M)')
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -243,8 +247,8 @@ test('this suite restored the scope_mode data it touched', async () => {
   const { rows } = await query(
     `select scope_mode, count(*)::int n from role_permissions group by 1 order by 1`)
   assert.deepEqual(rows, [
-    { scope_mode: 'inherit', n: 101 },
-    { scope_mode: 'own_facility_only', n: 6 },
+    { scope_mode: 'inherit', n: 129 },
+    { scope_mode: 'own_facility_only', n: 9 },
   ])
   // Scoped to the facilities THIS suite writes to. aclFeatureConfig.test.js runs
   // concurrently against the same table and legitimately has rows in flight; a

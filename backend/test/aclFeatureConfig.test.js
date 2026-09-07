@@ -162,9 +162,13 @@ test('a disabled feature cannot rescue a user who already lacks the permission',
 // ═════════════════════════════════════════════════════════════════════════════
 
 test('an absent row means enabled — the table starts empty and nothing breaks', async () => {
-  const { rows } = await query(`select count(*)::int n from feature_config`)
-  assert.equal(rows[0].n, 0, 'no configuration exists by default')
   const f = await facilityWithBothDepartments()
+  // Scoped to this suite's own facility. aclScopeMode.test.js runs concurrently
+  // and legitimately has a feature_config row in flight for a DIFFERENT facility;
+  // a table-wide count would make this assertion about that suite's timing.
+  const { rows } = await query(
+    `select count(*)::int n from feature_config where facility_id = $1`, [f.facility_id])
+  assert.equal(rows[0].n, 0, 'no configuration exists by default')
   assert.equal((await AclResolver.can(f.pharm, 'transfer.write',
     { sendingFacilityId: f.facility_id })).decision, true)
 })
