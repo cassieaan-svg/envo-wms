@@ -29,6 +29,9 @@ export function BatchSelect({ facilityId, commodityId, locationType, siteName, v
   onSelectRef.current = onSelect
   const onLotsLoadedRef = useRef(onLotsLoaded)
   onLotsLoadedRef.current = onLotsLoaded
+  // Read the latest chosen value inside the load effect without re-running it.
+  const valueRef = useRef(value)
+  valueRef.current = value
 
   useEffect(() => {
     let cancelled = false
@@ -55,7 +58,11 @@ export function BatchSelect({ facilityId, commodityId, locationType, siteName, v
           .sort((a, b) => (a.expired === b.expired) ? 0 : (a.expired ? 1 : -1))
         setOptions(opts)
         onLotsLoadedRef.current?.(lots || [])
-        onSelectRef.current?.(null)   // default to FEFO (automatic)
+        // Default to FEFO (automatic) — but don't clobber a batch already chosen for
+        // this bin (e.g. carried into a split row). Keep it if it's one of these lots;
+        // otherwise (no pick, or a stale pick from a different commodity) reset.
+        const keep = valueRef.current && opts.some(o => o.key === valueRef.current)
+        if (!keep) onSelectRef.current?.(null)
       })
       .catch(() => { if (!cancelled) { setOptions([]); onSelectRef.current?.(null); onLotsLoadedRef.current?.([]) } })
       .finally(() => { if (!cancelled) setLoading(false) })

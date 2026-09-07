@@ -5,8 +5,8 @@ import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
-import { NON_CRRF_ADJ_REASONS, isGhscPsmSupplier, netStockChange } from '../../utils/reports'
-import { todayLagos } from '../../utils/helpers'
+import { NON_CRRF_ADJ_REASONS, INTRA_FACILITY_ADJ_REASONS, classifyIntakeSupplier, netStockChange } from '../../utils/reports'
+import { todayLagos, ymdLagos } from '../../utils/helpers'
 import { CRRF_TEMPLATES } from '../../utils/crrfTemplates'
 import { CRRF_ALIASES } from '../../utils/crrfAliases'
 
@@ -125,22 +125,50 @@ export function CRRF() {
     // that period's label.
     const today = todayLagos()
     const wide = { from: from + 'T00:00:00', to: today + 'T23:59:59' }
+
+    // Every log endpoint defaults to limit=1000. The period-to-close-of-period range
+    // used before this stayed well under that; period-start-to-TODAY does not for a
+    // busy facility over several months (NIMR, a national DSD hub, is exactly this
+    // shape). Past 1000 rows the rest are silently dropped in whatever order the
+    // database returns them — not necessarily the oldest — which can drop recent
+    // movements from the rewind and produce a Beginning Balance with no relation to
+    // the real one. Page through all four, the same way fetchReportRows does.
+    const fetchAllPaged = async (listFn, params) => {
+      const PAGE = 1000
+      let all = []
+      for (let offset = 0; ; offset += PAGE) {
+        let data
+        try { data = await listFn({ ...params, limit: PAGE, offset }) } catch { break }
+        if (!data || !data.length) break
+        all = all.concat(data)
+        if (data.length < PAGE) break
+      }
+      return all
+    }
+
     const [intakeRes, dispRes, adjRes, stockRes, dsdRes, sdpRes, transferRes] = await Promise.all([
-      api.intake.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
-      api.dispense.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
-      api.adjustments.history({ facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }).catch(() => []),
+      fetchAllPaged(api.intake.history,      { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
+      fetchAllPaged(api.dispense.history,     { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
+      fetchAllPaged(api.adjustments.history,  { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
       // TOTAL SOH as it stands right now: store + dispensary (/api/stock) plus the
       // facility's DSD and SDP site stock, so internal store↔site moves net out.
+      // One row per commodity per bin — bounded by the catalogue, not by activity —
+      // so this stays under the limit and needs no paging.
       api.stock.list({ facility_ids: [fid], commodity_ids: commIds }).catch(() => []),
       api.stock.dsd.list({ facility_id: fid }).catch(() => []),
       api.stock.sdp.list({ facility_id: fid }).catch(() => []),
       // section already scopes transfers; date_field/resolved_at uses plain dates.
-      api.transfers.list({ facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to: today, section: sec2 }).catch(() => []),
+      fetchAllPaged(api.transfers.list, { facility_id: fid, status: 'accepted', date_field: 'resolved_at', from, to: today, section: sec2 }),
     ])
 
     // Split every movement into "inside the period" (the CRRF's columns) and "after
     // it" (only needed to rewind today's stock back to the period end).
-    const dayOf = v => String(v || '').slice(0, 10)
+    //
+    // dayOf MUST convert to Lagos before taking the calendar day, not slice the raw
+    // ISO string: a dispense at 00:30 Lagos on 1 Mar is 23:30 UTC on 28 Feb, and a
+    // naive slice puts it a day and a period early — the same class of bug ymdLagos
+    // exists to prevent everywhere else this codebase buckets by day.
+    const dayOf = v => ymdLagos(v) || ''
     const inPeriod  = d => d >= from && d <= to
     const afterEnd  = d => d > to
     // Same date field precedence the report normalizers use, so a row lands in the
@@ -166,10 +194,16 @@ export function CRRF() {
     })
 
     // ── The CRRF's own columns: movements INSIDE the period only ────────────────
-    // Quantity Received counts GHSC-PSM deliveries only, so this column no longer
-    // accounts for all the stock that arrived (see isGhscPsmSupplier).
+    // Intake splits by supplier (see classifyIntakeSupplier): GHSC-PSM is Quantity
+    // Received (col B); another named source (state office, CHAI, …) is a positive
+    // adjustment (Adj+); baseline/stock-take is the OPENING balance, so it feeds
+    // neither column here — it is handled in the rewind below as pre-period stock.
     ;(bIntake.within).forEach(r => {
-      if (agg[r.commodity_id] && isGhscPsmSupplier(r.supplier_source)) agg[r.commodity_id].received += r.quantity
+      if (!agg[r.commodity_id]) return
+      const cls = classifyIntakeSupplier(r.supplier_source)
+      if (cls === 'ghsc')       agg[r.commodity_id].received += r.quantity
+      else if (cls === 'other') agg[r.commodity_id].adjPos   += r.quantity
+      // 'baseline' → opening balance, not a period movement
     })
     ;(bDisp.within).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })
     ;(bAdj.within).forEach(r => {
@@ -203,21 +237,34 @@ export function CRRF() {
     // For Mar–Apr: Ending is the balance at the close of 30 Apr, Beginning is the
     // balance on the morning of 1 Mar, before that day's activity.
     //
-    // Both use netStockChange, which counts EVERY movement — including the count
-    // corrections and site returns the columns above exclude. Those shifted real
-    // stock, so a rewind that ignored them would drift.
+    // Both use netStockChange. Adjustments feed it EXCLUDING "Returned from
+    // Dispensary/DSD/SDP" only (INTRA_FACILITY_ADJ_REASONS) — narrower than what the
+    // columns above exclude. An adjustment mutates exactly one bin (see
+    // logService.recordAdjustment), so a "Returned from" entry only ever credited the
+    // store; nothing anywhere was ever really debited for it, so it isn't a genuine
+    // change in the facility's total. A Physical count correction IS real — it's the
+    // system catching up to an actual count — so it still counts here, even though it
+    // doesn't print as its own CRRF line. External transfers and every other
+    // adjustment reason (Expired, Damaged, Lost/Stolen, Other, …) still count too.
+    const realAdj = list => list.filter(r => !INTRA_FACILITY_ADJ_REASONS.includes(r.reason))
+    // Baseline/stock-take intake is the OPENING balance, not a period receipt. Excluding
+    // it from the movement means the rewind leaves it sitting in the opening balance
+    // (column A) instead of counting it as stock that "arrived" during the period —
+    // which is what was driving the beginning balance negative. Same result as dating
+    // it before the period, without mutating the data.
+    const realIntake = list => list.filter(r => classifyIntakeSupplier(r.supplier_source) !== 'baseline')
     const byCommodity = (list) => {
       const m = {}
       for (const r of list) (m[r.commodity_id] ||= []).push(r)
       return m
     }
     const periodMoves = {
-      intakes: byCommodity(bIntake.within), dispenses: byCommodity(bDisp.within),
-      adjustments: byCommodity(bAdj.within), transfers: byCommodity(bTransfer.within),
+      intakes: byCommodity(realIntake(bIntake.within)), dispenses: byCommodity(bDisp.within),
+      adjustments: byCommodity(realAdj(bAdj.within)), transfers: byCommodity(bTransfer.within),
     }
     const laterMoves = {
-      intakes: byCommodity(bIntake.after), dispenses: byCommodity(bDisp.after),
-      adjustments: byCommodity(bAdj.after), transfers: byCommodity(bTransfer.after),
+      intakes: byCommodity(realIntake(bIntake.after)), dispenses: byCommodity(bDisp.after),
+      adjustments: byCommodity(realAdj(bAdj.after)), transfers: byCommodity(bTransfer.after),
     }
     const netFor = (moves, id) => netStockChange({
       intakes: moves.intakes[id] || [], dispenses: moves.dispenses[id] || [],

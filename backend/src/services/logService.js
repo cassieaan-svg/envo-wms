@@ -303,7 +303,7 @@ async function logSummary({ table, dateField, specs = DISPENSE_GROUP_BY }, facil
   const {
     from, to, facilityIds, commodityIds, categories, commodityNames, section,
     groupBy = 'commodity,month', commodityId = null, category = null, tz = null,
-    adjustmentType = null, reason = null,
+    adjustmentType = null, reason = null, supplier = null,
   } = options
   if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
 
@@ -342,6 +342,13 @@ async function logSummary({ table, dateField, specs = DISPENSE_GROUP_BY }, facil
   if (reason) {
     params.push(reason)
     conds.push(`coalesce(nullif(trim(l.reason), ''), '(not stated)') = $${params.length}`)
+  }
+  // Supplier split — intake only (dispense/adjustment have no supplier_source). Matches
+  // the CRRF's Received rule: GHSC-PSM is the real programme delivery, everything else
+  // ('other') is any non-GHSC source, baseline included. Free text, so matched not compared.
+  if (supplier && table === 'intake_log') {
+    if (supplier === 'ghsc')       conds.push(`l.supplier_source ~* 'ghsc|psm'`)
+    else if (supplier === 'other') conds.push(`(l.supplier_source is null or l.supplier_source !~* 'ghsc|psm')`)
   }
 
   const dimSql = d => DIMENSION_SQL[d]?.sql ?? `l.${d}_id`

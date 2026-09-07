@@ -50,6 +50,10 @@ export function AdminNav() {
       <NavItem page="all-facilities" icon={icons.facilities}>All Facilities</NavItem>
       <NavItem page="alerts" icon={icons.alerts} badge={pendingRequestCount}>Alerts</NavItem>
 
+      {store.isOverallAdmin() && <><NavSection>Configuration</NavSection>
+        <NavItem page="catalogue" icon={icons.stock}>Item Catalogue</NavItem>
+      </>}
+
       <NavSection>Reports</NavSection>
       <NavItem page="log"          icon={icons.log}>Activity Log</NavItem>
       <NavItem page="monitoring"   icon={icons.monitoring}>Monitoring</NavItem>

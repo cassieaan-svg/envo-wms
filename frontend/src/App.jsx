@@ -35,6 +35,7 @@ import { Monitoring as LabMonitoring } from './pages/lab/Monitoring'
 
 // Admin pages
 import { AllFacilities } from './pages/admin/AllFacilities'
+import { Catalogue } from './pages/admin/Catalogue'
 
 // DSD pages
 import { Dispense  as DsdDispense  } from './pages/dsd/Dispense'
@@ -81,6 +82,7 @@ const labMap = {
 const adminMap = {
   dashboard: PharmDashboard, stock: PharmStock, 'all-facilities': AllFacilities,
   alerts: SharedAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
+  catalogue: Catalogue,
 }
 
 // ── Which pages still read the global stock array ────────────────────────────

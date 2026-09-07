@@ -27,11 +27,16 @@ export function RecordStock() {
   // The batch the user chose for the commodity currently in the picker. Facility
   // dispensing only (DSD site stock carries no batch), reported by BatchSelect.
   const [pickerBatch, setPickerBatch] = useState(null)
+  // Batches built up inline for the commodity currently in the picker, before it's
+  // committed to the staged list. The transfers-style flow: pick a commodity once,
+  // add several batches under it, then add the whole commodity in one go.
+  const [pendingBatches, setPendingBatches] = useState([])
   // The bin's raw lots, so we can prompt when any has no expiry recorded.
   const [binLots, setBinLots] = useState([])
   const [lotsRefresh, setLotsRefresh] = useState(0)
   const [showLotEditor, setShowLotEditor] = useState(false)
   const qtyRef                  = useRef(1)
+  const batchBoxRef             = useRef(null)   // wraps the batch dropdown, for the "+ Add batch" cue
   const [items, setItems]       = useState([])   // staged commodities to record together
   const [by, setBy]             = useState('')
   const [date, setDate]         = useState(todayLagos())
@@ -58,6 +63,10 @@ export function RecordStock() {
       .catch(() => setDsdStockRow(null))
   }, [commId, isDSD, fid, dsdSiteName])
 
+  // A different commodity means the inline batches no longer apply — start fresh.
+  // (pickerBatch is left to BatchSelect, which remounts per commodity.)
+  useEffect(() => { setPendingBatches([]) }, [commId])
+
   const selectedComm = store.allCommodities.find(c => c.id === commId)
   const packSize     = getCommodityPackSize(selectedComm)
   const dispUnit     = getCommodityDispenseUnit(selectedComm)
@@ -73,36 +82,88 @@ export function RecordStock() {
     return row ? row.quantity : null
   }
 
-  // Validate the current commodity + quantity and stage it for recording.
+  // Picking a batch adds it straight to the inline list — no separate "add batch"
+  // step. The quantity box is the TOTAL still to consume: the batch takes what it can
+  // (up to what it holds), the remainder stays in the box for the next batch, and the
+  // dropdown resets so you can pick again. Selecting "Select batch" (FEFO) clears.
+  function handleSelectBatch(opt) {
+    setMsg(null)
+    if (!opt) { setPickerBatch(null); return }
+    if (pendingBatches.some(b => b.batch.key === opt.key)) {
+      setMsg({ type:'error', text:`Batch ${opt.batch_number || '(no batch)'} is already added — remove it below to change its quantity.` }); return
+    }
+    if (opt.expired) { setPickerBatch(opt); return }   // let the expired warning show
+    const qty = parseInt(qtyRef.current?.value || 0)
+    if (isNaN(qty) || qty <= 0) { setPickerBatch(opt); setMsg({ type:'error', text:'Enter the quantity to consume first.' }); return }
+    const take = Math.min(qty, opt.remaining)
+    setPendingBatches(prev => [...prev, { key: opt.key, batch: opt, quantity: take }])
+    setPickerBatch(null)
+    if (qtyRef.current) qtyRef.current.value = String(qty - take)   // leftover to allocate
+  }
+
+  function removePendingBatch(key) {
+    // Give the removed batch's quantity back to the box, so it can be re-allocated.
+    const removed = pendingBatches.find(b => b.key === key)
+    if (removed && qtyRef.current) {
+      qtyRef.current.value = String((parseInt(qtyRef.current.value || 0) || 0) + removed.quantity)
+    }
+    setPendingBatches(prev => prev.filter(b => b.key !== key))
+  }
+
+  // Commit the commodity in the picker to the staged list. Gathers the batches added
+  // inline (plus the one still selected, if any) into one grouped entry; with no
+  // specific batch it stages a single automatic (FEFO) line, as before.
   async function addItem() {
     setMsg(null)
     if (!fid)   { setMsg({ type:'error', text:'No facility assigned.' }); return }
     if (!commId){ setMsg({ type:'error', text:'Select a commodity.' }); return }
-    const qty = parseInt(qtyRef.current?.value || 0)
-    if (isNaN(qty) || qty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
     const comm = store.allCommodities.find(c => c.id === commId)
     if (items.some(i => i.commodityId === commId)) {
-      setMsg({ type:'error', text:`${comm?.name || 'Commodity'} is already in the list — remove it first to change the quantity.` }); return
+      setMsg({ type:'error', text:`${comm?.name} is already in the list below — remove it there to change its batches.` }); return
     }
+
+    // Batches for this commodity: the inline list, plus the current selection if one
+    // is picked with a quantity and not already in the list.
+    const batches = [...pendingBatches]
+    const curQty = parseInt(qtyRef.current?.value || 0)
+    if (pickerBatch && curQty > 0 && !batches.some(b => b.batch.key === pickerBatch.key)) {
+      if (pickerBatch.expired) { setMsg({ type:'error', text:'The selected batch is expired — remove it before recording.' }); return }
+      if (curQty > pickerBatch.remaining) { setMsg({ type:'error', text:`Only ${pickerBatch.remaining} left in batch ${pickerBatch.batch_number || '(no batch)'} — use “+ Add batch” to take it, then add another batch for the rest.` }); return }
+      batches.push({ key: pickerBatch.key, batch: pickerBatch, quantity: curQty })
+    }
+
+    if (batches.length && !isDSD) {
+      // Specific-batch path: one staged line per batch, grouped under the commodity.
+      const avail = await resolveStock(commId)
+      const total = batches.reduce((s, b) => s + b.quantity, 0)
+      if (avail == null || avail === 0) { setMsg({ type:'error', text:`No stock for ${comm?.name || 'commodity'}.` }); return }
+      if (avail < total) { setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return }
+      setItems(prev => [...prev, ...batches.map(b => ({
+        key: `${commId}|${b.batch.key}`, commodityId: commId, quantity: b.quantity, comm, avail, batch: b.batch,
+      }))])
+      setCommId(''); setPickerBatch(null); setPendingBatches([])
+      if (qtyRef.current) qtyRef.current.value = '1'
+      return
+    }
+
+    // No specific batch — automatic (FEFO) / DSD / zero-consumption single line.
+    const qty = curQty
+    if (isNaN(qty) || qty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
     const avail = await resolveStock(commId)
-    // Zero is a valid "nothing consumed today" record: skip the stock, insufficiency
-    // and expired-batch checks (nothing leaves stock) and attach no batch.
     if (qty > 0) {
-      if (avail == null || avail === 0) {
-        setMsg({ type:'error', text:`No stock for ${comm?.name || 'commodity'}.` }); return
-      }
-      if (avail < qty) {
-        setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
-      }
-      if (pickerBatch?.expired) {
-        setMsg({ type:'error', text:'This batch is expired — move it back to store (Returned from Dispensary) and adjust it out before deducting it.' }); return
-      }
+      if (avail == null || avail === 0) { setMsg({ type:'error', text:`No stock for ${comm?.name || 'commodity'}.` }); return }
+      if (avail < qty) { setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return }
     }
-    setItems(prev => [...prev, { commodityId: commId, quantity: qty, comm, avail, batch: (qty > 0 && !isDSD) ? pickerBatch : null }])
-    setCommId(''); setPickerBatch(null); if (qtyRef.current) qtyRef.current.value = '1'
+    setItems(prev => [...prev, { key: `${commId}|fefo`, commodityId: commId, quantity: qty, comm, avail, batch: null }])
+    setCommId(''); setPickerBatch(null); setPendingBatches([])
+    if (qtyRef.current) qtyRef.current.value = '1'
   }
 
-  function removeItem(commodityId) {
+  function removeItem(key) {
+    setItems(prev => prev.filter(i => i.key !== key))
+  }
+
+  function removeCommodity(commodityId) {
     setItems(prev => prev.filter(i => i.commodityId !== commodityId))
   }
 
@@ -113,27 +174,40 @@ export function RecordStock() {
     if (!by)    { setMsg({ type:'error', text:'Recorded by is required.' }); return }
     if (date && date > todayLagos()) { setMsg({ type:'error', text:'Date cannot be in the future.' }); return }
 
-    // Record the staged list; if nothing was staged, fall back to the current picker selection.
+    // Record the staged list; if nothing was staged, fall back to the current picker
+    // selection — including any batches added inline but not yet committed.
     let batch = items
     if (batch.length === 0) {
       if (!commId){ setMsg({ type:'error', text:'Add at least one commodity.' }); return }
-      const qty = parseInt(qtyRef.current?.value || 0)
-      if (isNaN(qty) || qty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
       const comm  = store.allCommodities.find(c => c.id === commId)
       const avail = await resolveStock(commId)
-      // Zero consumption skips the stock / expiry checks and attaches no batch.
-      if (qty > 0) {
-        if (avail == null || avail === 0) {
-          setMsg({ type:'error', text:`No stock for ${comm?.name || 'commodity'}.` }); return
-        }
-        if (avail < qty) {
-          setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
-        }
-        if (pickerBatch?.expired) {
-          setMsg({ type:'error', text:'This batch is expired — move it back to store (Returned from Dispensary) and adjust it out before deducting it.' }); return
-        }
+
+      // Gather inline batches plus the current selection, as "+ Add commodity" would.
+      const curQty = parseInt(qtyRef.current?.value || 0)
+      const batches = [...pendingBatches]
+      if (pickerBatch && curQty > 0 && !batches.some(b => b.batch.key === pickerBatch.key)) {
+        batches.push({ key: pickerBatch.key, batch: pickerBatch, quantity: curQty })
       }
-      batch = [{ commodityId: commId, quantity: qty, comm, avail, batch: (qty > 0 && !isDSD) ? pickerBatch : null }]
+      if (batches.length && !isDSD) {
+        const total = batches.reduce((s, b) => s + b.quantity, 0)
+        if (avail == null || avail === 0) { setMsg({ type:'error', text:`No stock for ${comm?.name || 'commodity'}.` }); return }
+        if (avail < total) { setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return }
+        if (batches.some(b => b.batch.expired)) { setMsg({ type:'error', text:'A selected batch is expired — remove it before recording.' }); return }
+        batch = batches.map(b => ({ commodityId: commId, quantity: b.quantity, comm, avail, batch: b.batch }))
+      } else {
+        // Automatic (FEFO) / DSD / zero-consumption single line.
+        const qty = curQty
+        if (isNaN(qty) || qty < 0){ setMsg({ type:'error', text:'Quantity cannot be negative.' }); return }
+        if (qty > 0) {
+          if (avail == null || avail === 0) {
+            setMsg({ type:'error', text:`No stock for ${comm?.name || 'commodity'}.` }); return
+          }
+          if (avail < qty) {
+            setMsg({ type:'error', text:`Insufficient stock for ${comm?.name}. Available: ${avail} ${comm?.unit || 'units'}.` }); return
+          }
+        }
+        batch = [{ commodityId: commId, quantity: qty, comm, avail, batch: null }]
+      }
     }
 
     setSaving(true)
@@ -162,7 +236,7 @@ export function RecordStock() {
 
     toast(`Stock recorded — ${batch.length} item(s)`, 'green')
     setMsg({ type:'success', text:`Stock saved successfully — ${batch.length} record(s).` })
-    setItems([]); setCommId(''); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
+    setItems([]); setCommId(''); setPickerBatch(null); setPendingBatches([]); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
     setDate(todayLagos())
     if (!isDSD) await loadStock()
     loadRecent()
@@ -236,9 +310,16 @@ export function RecordStock() {
             {!isDSD && commId && stockRow && stockRow.quantity > 0 && (
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch to consume</label>
-                <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType="dispensary"
-                  value={pickerBatch?.key} onSelect={setPickerBatch}
-                  onLotsLoaded={setBinLots} refreshToken={lotsRefresh} />
+                <div ref={batchBoxRef}>
+                  <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType="dispensary"
+                    value={pickerBatch?.key} onSelect={handleSelectBatch}
+                    onLotsLoaded={setBinLots} refreshToken={lotsRefresh} />
+                </div>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <button type="button" onClick={() => batchBoxRef.current?.querySelector('select')?.focus()}
+                    className="text-xs font-medium text-blue-400 hover:text-blue-300">+ Add batch</button>
+                  <span className="text-xs text-gray-500">pick a batch to add it — pick another to split across batches</span>
+                </div>
                 {/* Some stock carries no expiry (the ledger seed had no receipt to
                     take one from). Prompt here — this is where it's noticed. */}
                 {binLots.some(l => !l.expiry_date) && (
@@ -261,46 +342,91 @@ export function RecordStock() {
                     ⚠ This batch expired{pickerBatch.expiry_date ? ` on ${fmtDate(pickerBatch.expiry_date)}` : ''}. Move it back to store (adjustment: “Returned from Dispensary”) and adjust it out before deducting — expired stock can’t be dispensed.
                   </div>
                 )}
+                {/* Batches built up inline for this commodity — like the transfers
+                    screen, you add several batches under one commodity before adding
+                    the whole commodity to the list below. */}
+                {pendingBatches.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-white/10 divide-y divide-white/5">
+                    <div className="px-3 py-1.5 text-xs text-gray-500 uppercase tracking-widest">
+                      Batches for {selectedComm?.name}
+                    </div>
+                    {pendingBatches.map(b => (
+                      <div key={b.key} className="flex items-center justify-between px-3 py-2 gap-3">
+                        <div className="text-xs text-gray-300">
+                          {b.quantity} {pluralizeUnit(b.quantity, selectedComm?.unit || 'units')}
+                          <span className="text-gray-500"> · batch {b.batch.batch_number || '(no batch)'}{b.batch.expiry_date ? ` · exp ${fmtDate(b.batch.expiry_date)}` : ''}</span>
+                        </div>
+                        <button type="button" onClick={() => removePendingBatch(b.key)}
+                          className="text-xs text-gray-500 hover:text-red-400 border border-white/10 rounded px-2 py-0.5 transition-colors shrink-0">Remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Add-to-list */}
+            {/* Batches are added by picking them above; this commits the commodity
+                (with its batches, or automatic FEFO when none was picked). */}
             <div className="flex justify-end">
               <Button type="button" variant="default" size="md" onClick={addItem}>
                 + Add commodity
               </Button>
             </div>
 
-            {/* Staged commodities to record together */}
-            {items.length > 0 && (
-              <div className="rounded-lg border border-white/10 divide-y divide-white/5">
-                <div className="px-4 py-2 text-xs text-gray-500 uppercase tracking-widest">
-                  {items.length} commodit{items.length === 1 ? 'y' : 'ies'} to record
-                </div>
-                {items.map(it => {
-                  const packSize = getCommodityPackSize(it.comm)
-                  const dispUnit = getCommodityDispenseUnit(it.comm)
-                  return (
-                    <div key={it.commodityId} className="flex items-center justify-between px-4 py-2.5 gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-gray-100 truncate">{it.comm?.name || '—'}</div>
-                        <div className="text-xs text-gray-500">
-                          {it.quantity} {pluralizeUnit(it.quantity, it.comm?.unit || dispUnit)}
-                          {packSize ? ` = ${(it.quantity * packSize).toLocaleString()} ${dispUnit}` : ''}
-                          {it.batch?.batch_number && (
-                            <span className="text-gray-400"> · batch {it.batch.batch_number}{it.batch.expiry_date ? ` · exp ${fmtDate(it.batch.expiry_date)}` : ''}</span>
-                          )}
+            {/* Staged commodities to record together. Batch lines are grouped under
+                their commodity, so a commodity split across batches shows once. */}
+            {items.length > 0 && (() => {
+              const groups = []
+              items.forEach(it => {
+                let g = groups.find(x => x.commodityId === it.commodityId)
+                if (!g) { g = { commodityId: it.commodityId, comm: it.comm, lines: [] }; groups.push(g) }
+                g.lines.push(it)
+              })
+              return (
+                <div className="rounded-lg border border-white/10 divide-y divide-white/5">
+                  <div className="px-4 py-2 text-xs text-gray-500 uppercase tracking-widest">
+                    {groups.length} commodit{groups.length === 1 ? 'y' : 'ies'} to record
+                  </div>
+                  {groups.map(g => {
+                    const packSize = getCommodityPackSize(g.comm)
+                    const dispUnit = getCommodityDispenseUnit(g.comm)
+                    const total = g.lines.reduce((s, l) => s + l.quantity, 0)
+                    const batched = g.lines.some(l => l.batch)
+                    return (
+                      <div key={g.commodityId} className="px-4 py-2.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-gray-100 truncate">{g.comm?.name || '—'}</div>
+                            <div className="text-xs text-gray-500">
+                              {total} {pluralizeUnit(total, g.comm?.unit || dispUnit)}
+                              {packSize ? ` = ${(total * packSize).toLocaleString()} ${dispUnit}` : ''}
+                              {batched ? ` · ${g.lines.length} batch${g.lines.length === 1 ? '' : 'es'}` : ''}
+                            </div>
+                          </div>
+                          <button type="button" onClick={() => removeCommodity(g.commodityId)}
+                            className="text-xs text-gray-500 hover:text-red-400 border border-white/10 rounded px-2 py-1 transition-colors shrink-0">
+                            Remove
+                          </button>
                         </div>
+                        {batched && (
+                          <div className="mt-1.5 pl-3 border-l border-white/10 space-y-1">
+                            {g.lines.map(l => (
+                              <div key={l.key} className="flex items-center justify-between gap-2 text-xs text-gray-500">
+                                <span>batch {l.batch?.batch_number || '(no batch)'}{l.batch?.expiry_date ? ` · exp ${fmtDate(l.batch.expiry_date)}` : ''} — {l.quantity}</span>
+                                {g.lines.length > 1 && (
+                                  <button type="button" onClick={() => removeItem(l.key)}
+                                    className="text-gray-600 hover:text-red-400 shrink-0">✕</button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <button type="button" onClick={() => removeItem(it.commodityId)}
-                        className="text-xs text-gray-500 hover:text-red-400 border border-white/10 rounded px-2 py-1 transition-colors shrink-0">
-                        Remove
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+                    )
+                  })}
+                </div>
+              )
+            })()}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -329,7 +455,7 @@ export function RecordStock() {
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <Button type="submit" variant="success" size="lg" disabled={saving}>
-                {saving ? 'Saving…' : items.length > 1 ? `Record stock (${items.length} items)` : 'Record stock'}
+                {saving ? 'Saving…' : (() => { const n = new Set(items.map(i => i.commodityId)).size; return n > 1 ? `Record stock (${n} items)` : 'Record stock' })()}
               </Button>
               {!isDSD && (
                 <Button type="button" variant="ghost" size="md" onClick={() => { store.setCurrentReportCategory('dispense'); store.setPendingReportsTab(true); store.setCurrentPage('log') }}>
