@@ -95,7 +95,9 @@ test('every geography row matches its user_roles pair exactly', async () => {
   const { rows } = await query(`
     select count(*)::int n from user_role_scopes urs
       join user_roles ur on ur.user_id = urs.user_id and ur.role_id = urs.role_id
+      join users u on u.id = urs.user_id
      where urs.dimension = 'geography'
+       and u.email not like '%.invalid'
        and (urs.scope_type <> ur.scope_type or urs.scope_id <> ur.scope_id)`)
   assert.equal(rows[0].n, 0, 'the backfill must be a verbatim copy, not a reinterpretation')
 })
@@ -206,7 +208,9 @@ test('the Alere Determine exception is a commodity row, not a hardcoded name', a
       join user_roles ur on ur.user_id = urs.user_id
       join facilities f on f.id::text = ur.scope_id
       join commodities c on c.id::text = urs.scope_id
-     where urs.dimension = 'commodity' and urs.scope_type = 'commodity'`)
+      join users u on u.id = urs.user_id
+     where urs.dimension = 'commodity' and urs.scope_type = 'commodity'
+       and u.email not like '%.invalid'`)
   assert.equal(rows.length, 1, 'exactly one individual-commodity grant exists today')
   assert.equal(rows[0].commodity, 'Alere Determine')
   assert.match(rows[0].facility, /akwa ibom state office store/i)

@@ -12,7 +12,34 @@ const router = express.Router()
 /**
  * GET /api/commodities - List all commodities (ordered category -> name)
  */
-const isCatalogueManager = req => req.scope?.accessLevel === 'overall_admin' || req.scope?.isAdmin === true
+const isCatalogueManager = req =>
+  req.scope?.accessLevel === 'overall_admin' || req.scope?.isAdmin === true ||
+  req.scope?.accessLevel === 'essential_admin'
+
+// The modules a catalogue manager may create items in. The catalogue is ONE
+// shared table across modules, so "may add items" is not the whole question —
+// an essential_admin adding an item to the `hiv` module would be writing another
+// programme's master data through a shared endpoint.
+//
+// null = unrestricted (overall_admin, the national catalogue owner).
+const catalogueModulesFor = req =>
+  req.scope?.accessLevel === 'essential_admin' ? ['essential'] : null
+
+// Reject a create whose module memberships fall outside the caller's remit.
+// Returns true when the request may proceed.
+function enforceCatalogueModules(req, res, modules) {
+  const allowed = catalogueModulesFor(req)
+  if (!allowed) return true
+  const outside = modules.filter(m => !allowed.includes(m))
+  if (outside.length) {
+    res.status(403).json({
+      success: false, code: 'FORBIDDEN',
+      error: `You may only add catalogue items to: ${allowed.join(', ')}.`,
+    })
+    return false
+  }
+  return true
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -54,6 +81,7 @@ router.post('/categories', async (req, res) => {
     if (!isCatalogueManager(req)) return res.status(403).json({ success: false, error: 'Catalogue manager access required', code: 'FORBIDDEN' })
     const { module, name, code, parent_id, sort_order } = req.body || {}
     if (!module || !name || !String(name).trim()) return sendValidationError(res, 'module and name are required', 'name')
+    if (!enforceCatalogueModules(req, res, [module])) return
     if (parent_id && !validators.isUUID(parent_id)) return sendValidationError(res, 'Invalid parent_id', 'parent_id')
     const category = await CommodityService.createCategory({ module, name: String(name).trim(), code, parentId: parent_id, sortOrder: sort_order })
     res.status(201).json({ success: true, data: category, timestamp: new Date().toISOString() })
@@ -72,6 +100,7 @@ router.post('/', async (req, res) => {
       seen.add(membership.module)
       if (membership.category_id && !validators.isUUID(membership.category_id)) return sendValidationError(res, 'Invalid category_id', 'memberships')
     }
+    if (!enforceCatalogueModules(req, res, [...seen])) return
     const commodity = await CommodityService.createCommodity({
       name: String(name).trim(), itemType: item_type || 'commodity', itemCode: item_code,
       description, isActive: is_active !== false, memberships,

@@ -45,7 +45,7 @@ async function facilityUser(section) {
        left join facilities f on f.id::text = ur.scope_id
       where r.name = 'facility' and u.raw_user_meta_data->>'commodity_section' = $1
         and (f.name is null or f.name !~* 'state office store|cluster lab store')
-        and u.email not like '%@acl-schema-test.invalid' limit 1`, [section])
+        and u.email not like '%.invalid' limit 1`, [section])
   if (!rows.length) throw new Error(`no facility user with section ${section}`)
   return rows[0]
 }

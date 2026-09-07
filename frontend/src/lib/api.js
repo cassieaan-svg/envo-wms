@@ -192,4 +192,19 @@ export const api = {
     byRecord: (record_id) => get('/edit-history', { record_id }),
     create:   (body)      => post('/edit-history', body),
   },
+
+  // ACL configuration screens. Every one of these is gated server-side on
+  // req.scope (system_admin, or state_admin within its own state) — the UI's
+  // hidden controls are convenience, never protection.
+  admin: {
+    meta:        ()            => get('/admin/meta'),
+    // getRaw, not get: the envelope carries `total` alongside `data`, and the
+    // list needs it to say how many matched.
+    users:       (params)      => getRaw('/admin/users', params),
+    user:        (id)          => get(`/admin/users/${id}`),
+    setRole:     (id, body)    => put(`/admin/users/${id}/role`, body),
+    setOverride: (id, body)    => put(`/admin/users/${id}/permission`, body),
+    featureConfig:    ()       => get('/admin/feature-config'),
+    setFeatureConfig: (body)   => put('/admin/feature-config', body),
+  },
 }

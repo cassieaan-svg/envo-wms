@@ -101,8 +101,12 @@ test('no duplicate (user_id, role_id, scope_type, scope_id)', async () => {
 })
 
 test('every migrated user has EXACTLY one role assignment', async () => {
-  const { rows } = await query(
-    `select count(*)::int n from (select user_id from user_roles group by 1 having count(*) <> 1) x`)
+  const { rows } = await query(`
+    select count(*)::int n from (
+      select ur.user_id from user_roles ur
+        join users u on u.id = ur.user_id
+       where ${NOT_FIXTURE_USER}
+       group by 1 having count(*) <> 1) x`)
   assert.equal(rows[0].n, 0)
 })
 
@@ -152,15 +156,14 @@ test('a user with missing access_level is migrated as facility — matching atta
 // ═════════════════════════════════════════════════════════════════════════════
 
 test('an unrecognized access_level (hq_tools) receives NO role assignment', async () => {
+  // ONE query, not two. Counting "has no role" and "total" separately leaves a
+  // window in which a concurrent suite changes the population between them, and
+  // the assertion then reports that timing rather than the rule.
   const { rows } = await query(`
-    select u.id from users u
+    select count(*)::int n from users u
      where u.raw_user_meta_data->>'access_level' = 'hq_tools'
-       and not exists (select 1 from user_roles ur where ur.user_id = u.id)`)
-  const { rows: total } = await query(
-    `select count(*)::int n from users where raw_user_meta_data->>'access_level' = 'hq_tools'`)
-  // Every hq_tools user (if any exist in this database) must appear in the
-  // "has no role" list — none may have slipped through with a role.
-  assert.equal(rows.length, total[0].n)
+       and exists (select 1 from user_roles ur where ur.user_id = u.id)`)
+  assert.equal(rows[0].n, 0, 'no hq_tools account may hold a role')
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -264,7 +267,9 @@ test('no role outside the national ones carries an empty scope', async () => {
   const { rows } = await query(`
     select r.name, count(*)::int n from user_roles ur
       join roles r on r.id = ur.role_id
+      join users u on u.id = ur.user_id
      where ur.scope_id = '' and r.name <> all($1)
+       and ${NOT_FIXTURE_USER}
      group by 1`, [UNSCOPED_ROLES])
   assert.deepEqual(rows, [])
 })
@@ -280,6 +285,7 @@ test('users.raw_user_meta_data still carries access_level for every migrated use
       join users u on u.id = ur.user_id
       join roles r on r.id = ur.role_id
      where r.name <> 'facility'
+       and ${NOT_FIXTURE_USER}
        and coalesce(u.raw_user_meta_data->>'access_level','') = ''`)
   assert.equal(rows[0].n, 0,
     'every non-facility role must still trace back to an explicit access_level value in raw_user_meta_data')

@@ -188,7 +188,12 @@ test('every SEEDED role holds only permissions that exist in the approved 24', a
 test('user_permissions remains completely empty', async () => {
   // NOT checking user_roles here — see the file header. This phase (2C) never
   // populates it; whether it is later populated is Phase 2D's own concern.
-  const { rows: up } = await query('select count(*)::int n from user_permissions')
+  // Real accounts only: aclFoundation and aclAdminApi both create and remove
+  // direct grants against '.invalid' fixtures, concurrently with this file.
+  const { rows: up } = await query(
+    `select count(*)::int n from user_permissions up
+       join users u on u.id = up.user_id
+      where u.email not like '%.invalid'`)
   assert.equal(up[0].n, 0, 'no user was granted or denied a direct permission in this phase')
 })
 

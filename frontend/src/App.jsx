@@ -36,7 +36,8 @@ import { Monitoring as LabMonitoring } from './pages/lab/Monitoring'
 // Admin pages
 import { AllFacilities } from './pages/admin/AllFacilities'
 import { Catalogue } from './pages/admin/Catalogue'
-import { UserAccessStaged, FeatureConfigStaged } from './pages/admin/StagedSurface'
+import { UserAccess } from './pages/admin/UserAccess'
+import { FeatureConfig } from './pages/admin/FeatureConfig'
 
 // DSD pages
 import { Dispense  as DsdDispense  } from './pages/dsd/Dispense'
@@ -84,6 +85,12 @@ const adminMap = {
   dashboard: PharmDashboard, stock: PharmStock, 'all-facilities': AllFacilities,
   alerts: SharedAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
   catalogue: Catalogue,
+  // state_admin administers users within its own state (Phase 2M governance:
+  // user administration requires write capability). Every other admin tier that
+  // shares this map is read-only and is refused by the endpoints, so the nav
+  // does not offer these to them.
+  users: UserAccess,
+  features: FeatureConfig,
 }
 
 // The system administrator (Phase 2M.1). Administration and a read-only view of
@@ -91,8 +98,8 @@ const adminMap = {
 // permission and every stock/transfer/log endpoint correctly refuses it. Adding
 // a page here that needs facility scope would render a screen of 403s.
 const systemAdminMap = {
-  users: UserAccessStaged,
-  features: FeatureConfigStaged,
+  users: UserAccess,
+  features: FeatureConfig,
   catalogue: Catalogue,
 }
 

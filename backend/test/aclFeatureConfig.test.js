@@ -35,7 +35,7 @@ async function facilityWithBothDepartments() {
       join roles r on r.id = ur.role_id
       left join facilities f on f.id::text = ur.scope_id
      where r.name = 'facility'
-       and u.email not like '%@acl-schema-test.invalid'
+       and u.email not like '%.invalid'
        and (f.name is null or f.name !~* 'state office store|cluster lab store')
      group by 1
     having max(case when u.raw_user_meta_data->>'commodity_section' = 'pharmacy' then 1 end) = 1
@@ -104,7 +104,14 @@ test('disabling at one facility does not affect the same department elsewhere', 
     select u.id, ur.scope_id facility_id from user_roles ur
       join users u on u.id = ur.user_id join roles r on r.id = ur.role_id
      where r.name = 'facility' and u.raw_user_meta_data->>'commodity_section' = 'pharmacy'
-       and ur.scope_id <> $1 and u.email not like '%@acl-schema-test.invalid' limit 1`,
+       and ur.scope_id <> $1 and u.email not like '%.invalid'
+       -- …and at a facility nobody else is currently configuring.
+       -- aclAdminApi.test.js writes real feature_config rows concurrently, and
+       -- picking a facility that already has one would make this assert on that
+       -- suite's timing rather than on the no-wildcards rule.
+       and not exists (select 1 from feature_config fc
+                        where fc.facility_id::text = ur.scope_id)
+     limit 1`,
     [f.facility_id])
   if (!other.length) return
   try {

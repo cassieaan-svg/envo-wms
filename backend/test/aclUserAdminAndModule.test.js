@@ -60,7 +60,11 @@ test('exactly two roles were added, and both are system roles', async () => {
     { name: 'essential_admin', is_system: true },
     { name: 'system_admin', is_system: true },
   ])
-  const { rows: all } = await query(`select count(*)::int n from roles`)
+  // aclFoundation.test.js creates throwaway roles prefixed 'aclschematest_' and
+  // runs concurrently, so a raw COUNT(*) would report its timing rather than the
+  // seeded vocabulary — the same exclusion aclSeed.test.js applies.
+  const { rows: all } = await query(
+    `select count(*)::int n from roles where name not like 'aclschematest_%'`)
   assert.equal(all[0].n, 8, 'six original plus these two — no others invented')
 })
 
@@ -263,7 +267,9 @@ test('this suite restored the scope rows it touched', async () => {
      where u.email not like '%.invalid' group by 1 order by 1`)
   assert.deepEqual(rows, [
     { dimension: 'commodity', n: 7533 },
-    { dimension: 'geography', n: 7563 },
-    { dimension: 'module', n: 7566 },
+    // +1 geography and +1 module since Phase 2M: the essential_admin account
+    // (Phase 2M.2), which carries a state scope and `module = essential`.
+    { dimension: 'geography', n: 7564 },
+    { dimension: 'module', n: 7567 },
   ])
 })

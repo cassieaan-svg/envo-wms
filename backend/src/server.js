@@ -24,6 +24,7 @@ import commodityRoutes from './routes/commodities.js'
 import amcSettingsRoutes from './routes/amcSettings.js'
 import editHistoryRoutes from './routes/editHistory.js'
 import binCardRoutes from './routes/bincard.js'
+import adminRoutes from './routes/admin.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -117,6 +118,9 @@ app.use('/api/commodities', commodityRoutes)
 app.use('/api/amc-settings', amcSettingsRoutes)
 app.use('/api/edit-history', editHistoryRoutes)
 app.use('/api/bincard', binCardRoutes)
+// ACL configuration screens. Every handler gates on req.scope (system_admin or
+// state_admin); the ACL resolver is not imported here and stays shadow-only.
+app.use('/api/admin', adminRoutes)
 
 // 404 handler
 app.use((req, res) => {

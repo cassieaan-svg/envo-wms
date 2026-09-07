@@ -191,15 +191,27 @@ test('no existing role gained or lost a permission', async () => {
   ])
 })
 
-test('the module backfill did not sweep the system_admin account in', async () => {
-  // The backfill gives every HIV account module=hiv. system_admin is excluded by
-  // name; if that exclusion were dropped it would silently acquire HIV scope.
+test('the module backfill gave HIV scope to neither national nor cross-module roles', async () => {
+  // Both are excluded from the `module = hiv` backfill, but for DIFFERENT reasons,
+  // and this asserts each rather than lumping them together:
+  //
+  //   system_admin     national — unscoped in every dimension (Phase 2M.1)
+  //   essential_admin  another module — given `module = essential` by its own
+  //                    migration (Phase 2M.2). An ABSENT module row would leave it
+  //                    unconstrained, which is exactly the defect that migration
+  //                    closes, so "no rows" is the wrong assertion for it.
   const { rows } = await query(`
-    select count(*)::int n from user_role_scopes s
-      join user_roles ur on ur.user_id = s.user_id
+    select r.name, s.scope_id
+      from user_role_scopes s
+      join user_roles ur on ur.user_id = s.user_id and ur.role_id = s.role_id
       join roles r on r.id = ur.role_id
-     where r.name in ('system_admin', 'essential_admin')`)
-  assert.equal(rows[0].n, 0, 'neither national nor cross-module roles may be given HIV scope')
+     where r.name in ('system_admin', 'essential_admin') and s.dimension = 'module'`)
+
+  assert.equal(rows.filter(r => r.name === 'system_admin').length, 0,
+    'system_admin carries no module row at all')
+  for (const r of rows.filter(r => r.name === 'essential_admin')) {
+    assert.equal(r.scope_id, 'essential', 'essential_admin is confined to its own module, never HIV')
+  }
 })
 
 test('every other account still has exactly one module scope', async () => {

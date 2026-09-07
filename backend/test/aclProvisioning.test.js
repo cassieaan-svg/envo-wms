@@ -64,7 +64,7 @@ test('syncAcl gives a new facility account its role and ALL THREE scope dimensio
   const { rows: f } = await query(`select id from facilities where state is not null limit 1`)
   const id = await provisionUser({ access_level: 'facility', commodity_section: 'pharmacy', facility_id: f[0].id })
   try {
-    const result = await syncAcl({ quiet: true })
+    const result = await syncUntilAssigned()
     assert.equal(result.synced, true)
     assert.equal(await roleOf(id), 'facility')
     assert.deepEqual(await scopesOf(id), [
@@ -81,11 +81,29 @@ test('syncAcl gives a new facility account its role and ALL THREE scope dimensio
   }
 })
 
+// syncAcl runs four backfill migrations in ONE transaction and retries ONCE on
+// conflict, by deliberate design — a second consecutive collision is meant to be
+// reported rather than papered over. aclAdminApi.test.js runs concurrently and
+// writes to the same tables, so that single retry can genuinely be exhausted.
+//
+// When it is, syncAcl returns { synced: false } and assigns nobody — and a test
+// that then asserts on the scopes reports a confusing deepEqual mismatch instead
+// of the contention that actually happened. This waits for a run that succeeded,
+// so the assertions below are about the RULE and not about who won the race.
+async function syncUntilAssigned(attempts = 4) {
+  let last
+  for (let i = 0; i < attempts; i++) {
+    last = await syncAcl({ quiet: true })
+    if (last.synced) return last
+  }
+  assert.fail(`syncAcl never completed: ${last?.reason}`)
+}
+
 test('an admin account gets its own geography scope and no commodity scope', async () => {
   const { rows: s } = await query(`select distinct state from facilities where state is not null limit 1`)
   const id = await provisionUser({ access_level: 'state_admin', admin_state: s[0].state, commodity_section: 'lab' })
   try {
-    await syncAcl({ quiet: true })
+    await syncUntilAssigned()
     assert.equal(await roleOf(id), 'state_admin')
     // state_admin is never section-pinned — attachScope ignores commodity_section
     // for it, so the section set above must NOT produce a commodity row.
@@ -129,7 +147,7 @@ test('a missing access_level defaults to facility, matching attachScope', async 
   const { rows: f } = await query(`select id from facilities limit 1`)
   const id = await provisionUser({ commodity_section: 'lab', facility_id: f[0].id })
   try {
-    await syncAcl({ quiet: true })
+    await syncUntilAssigned()
     assert.equal(await roleOf(id), 'facility')
   } finally {
     await cleanup()

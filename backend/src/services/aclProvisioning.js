@@ -31,6 +31,10 @@ const MIGRATIONS = [
   // apply their exclusions to it. The seed above deliberately ignores any
   // access_level outside the original six, so system_admin needs its own mapping.
   '20260907_acl_system_admin_assignment.sql',
+  // Phase 2M.2. Seeds the module scope as well as the role — an essential_admin
+  // without `module = essential` is UNCONSTRAINED on module and reaches HIV
+  // commodities, so the two can never be separated.
+  '20260907_acl_essential_admin_assignment.sql',
   '20260904_acl_exclude_scopeless_accounts.sql',
   '20260905_acl_user_role_scopes.sql',
   // Phase 2M. Without this a newly provisioned account gets geography and
@@ -67,10 +71,10 @@ export async function syncAcl({ quiet = false } = {}) {
        where not exists (select 1 from user_roles ur where ur.user_id = u.id)
          and coalesce(nullif(u.raw_user_meta_data->>'access_level', ''), 'facility')
              in ('facility','state_admin','state_viewer','cluster_admin','lga_admin','overall_admin',
-                 -- Phase 2M.1. Without this a system_admin account is not counted
-                 -- as "missing a role", so syncAcl returns early and never assigns
-                 -- one — and sync_acl.mjs --check would then flag it forever.
-                 'system_admin')
+                 -- Phase 2M.1/2M.2. Without these an account of either kind is not
+                 -- counted as "missing a role", so syncAcl returns early and never
+                 -- assigns one — and sync_acl.mjs --check would then flag it forever.
+                 'system_admin', 'essential_admin')
          and (coalesce(u.raw_user_meta_data->>'access_level', 'facility') <> 'facility'
               or coalesce(u.raw_user_meta_data->>'facility_id', '') <> '')`
 
