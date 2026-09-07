@@ -120,7 +120,8 @@ test('every real account with a role carries exactly one module scope', async ()
     select count(*)::int n from user_roles ur
       join users u on u.id = ur.user_id
       join roles r on r.id = ur.role_id
-     where u.email not like '%.invalid' and r.name <> 'essential_admin'
+     where u.email not like '%.invalid'
+       and r.name not in ('essential_admin', 'system_admin')
        and not exists (select 1 from user_role_scopes s
                         where s.user_id = ur.user_id and s.dimension = 'module')`)
   assert.equal(rows[0].n, 0, 'an absent module dimension means unconstrained — nobody may be left that way')

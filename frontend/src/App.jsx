@@ -36,6 +36,7 @@ import { Monitoring as LabMonitoring } from './pages/lab/Monitoring'
 // Admin pages
 import { AllFacilities } from './pages/admin/AllFacilities'
 import { Catalogue } from './pages/admin/Catalogue'
+import { UserAccessStaged, FeatureConfigStaged } from './pages/admin/StagedSurface'
 
 // DSD pages
 import { Dispense  as DsdDispense  } from './pages/dsd/Dispense'
@@ -85,6 +86,16 @@ const adminMap = {
   catalogue: Catalogue,
 }
 
+// The system administrator (Phase 2M.1). Administration and a read-only view of
+// the catalogue — nothing operational, because the account holds no operational
+// permission and every stock/transfer/log endpoint correctly refuses it. Adding
+// a page here that needs facility scope would render a screen of 403s.
+const systemAdminMap = {
+  users: UserAccessStaged,
+  features: FeatureConfigStaged,
+  catalogue: Catalogue,
+}
+
 // ── Which pages still read the global stock array ────────────────────────────
 // Derived by auditing actual `store.stockData` reads, NOT by route name — the
 // same page key resolves to different components per role, and several pages
@@ -111,6 +122,10 @@ const STOCK_PAGES = {
   admin: new Set(),
   dsd:   new Set(),
   sdp:   new Set(),
+  // system_admin has no operational pages at all, so it never needs the stock
+  // array. Listed explicitly rather than left to fall through, per the
+  // KEEP IN SYNC note above.
+  system: new Set(),
 }
 
 // Resolve the active role's page set the same way PageRouter picks its map.
@@ -118,7 +133,8 @@ function pageNeedsStockData({ page, section, accessLevel, facilityRole }) {
   const isAdmin = ['overall_admin', 'state_admin', 'lga_admin'].includes(accessLevel)
   const isDSD   = accessLevel === 'facility' && facilityRole === 'dsd'
   const isSDP   = accessLevel === 'facility' && facilityRole === 'sdp'
-  const set = isSDP ? STOCK_PAGES.sdp
+  const set = accessLevel === 'system_admin' ? STOCK_PAGES.system
+            : isSDP ? STOCK_PAGES.sdp
             : isDSD ? STOCK_PAGES.dsd
             : section === 'lab' ? STOCK_PAGES.lab
             : isAdmin ? STOCK_PAGES.admin
@@ -135,11 +151,21 @@ function PageRouter() {
   const isDSD        = accessLevel === 'facility' && facilityRole === 'dsd'
   const isSDP        = accessLevel === 'facility' && facilityRole === 'sdp'
   const isLab        = section === 'lab'
-  const map          = isSDP ? sdpMap : isDSD ? dsdMap : isLab ? labMap : isAdmin ? adminMap : pharmMap
+  // system_admin is checked FIRST and is in none of the other predicates: it has
+  // no section, no facility_role and is absent from the admin list, so it would
+  // otherwise fall through to pharmMap and render operational pages that 403.
+  const isSystemAdmin = accessLevel === 'system_admin'
+  const map          = isSystemAdmin ? systemAdminMap
+                     : isSDP ? sdpMap : isDSD ? dsdMap : isLab ? labMap : isAdmin ? adminMap : pharmMap
   // Daily Report, the standalone Weekly/Monthly page and admin Daily Summary
   // were folded into the Activity Log; route any persisted legacy page there so
   // existing sessions don't land on "Page not found".
-  const PageComponent = map[page] || (['report','reports','dailysummary'].includes(page) ? map['log'] : undefined)
+  // A system_admin lands on 'dashboard' — the store's default, and a page it has
+  // no access to — so send any unknown page to its own home rather than showing
+  // "Page not found" on every first login and after every sign-out.
+  const PageComponent = map[page]
+    || (['report','reports','dailysummary'].includes(page) ? map['log'] : undefined)
+    || (isSystemAdmin ? systemAdminMap.users : undefined)
   if (!PageComponent) return (
     <div className="flex items-center justify-center h-64 text-gray-500 text-sm">Page not found</div>
   )

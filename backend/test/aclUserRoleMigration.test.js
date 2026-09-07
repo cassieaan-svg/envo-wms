@@ -22,7 +22,18 @@ import { query, pool } from '../src/db.js'
 
 test.after(async () => { await pool.end() })
 
-const APPROVED_ROLES = ['facility', 'state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'overall_admin']
+// Phase 2D migrated these six. Phase 2M/2M.1 added two more that a user can hold:
+// system_admin (national, unscoped, user administration only) and essential_admin
+// (a different module). Both are listed here because this file's job is "every
+// user_roles row names a real, approved role" — not "only the original six exist",
+// which aclSeed.test.js asserts separately.
+const APPROVED_ROLES = ['facility', 'state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'overall_admin',
+                        'system_admin', 'essential_admin']
+
+// The roles whose scope is deliberately EMPTY, meaning national/unconstrained.
+// An empty scope on any other role would be a silent widening — that is the
+// invariant, and it is why this list is explicit rather than inferred.
+const UNSCOPED_ROLES = ['overall_admin', 'system_admin']
 
 // aclFoundation.test.js shares this same `users` table and runs CONCURRENTLY —
 // `node --test` runs test FILES in parallel. It creates throwaway users under
@@ -204,11 +215,11 @@ test('lga_admin: scope_type=lga, scope_id=raw_user_meta_data.admin_lga verbatim'
   assert.equal(rows[0].mismatches, 0)
 })
 
-test('overall_admin: unscoped (empty scope_type/scope_id) for every one — never national-by-accident elsewhere', async () => {
+test('the national roles are unscoped for every one — never national-by-accident elsewhere', async () => {
   const { rows } = await query(`
     select count(*)::int n from user_roles ur join roles r on r.id=ur.role_id
-     where r.name = 'overall_admin' and (ur.scope_type <> '' or ur.scope_id <> '')`)
-  assert.equal(rows[0].n, 0, 'overall_admin rows must all be unscoped, matching attachScope never narrowing it')
+     where r.name = any($1) and (ur.scope_type <> '' or ur.scope_id <> '')`, [UNSCOPED_ROLES])
+  assert.equal(rows[0].n, 0, 'overall_admin matches attachScope never narrowing it; system_admin is national by design')
 
   // The inverse check matters just as much: no OTHER role may carry an empty
   // scope_type — that would silently mean "unconstrained" for a role attachScope
@@ -217,10 +228,10 @@ test('overall_admin: unscoped (empty scope_type/scope_id) for every one — neve
     select r.name, count(*)::int n from user_roles ur
       join roles r on r.id = ur.role_id
       join users u on u.id = ur.user_id
-     where r.name <> 'overall_admin' and ur.scope_type = ''
+     where r.name <> all($1) and ur.scope_type = ''
        and ${NOT_FIXTURE_USER}
-     group by 1`)
-  assert.deepEqual(leaked, [], 'only overall_admin may have an empty scope_type')
+     group by 1`, [UNSCOPED_ROLES])
+  assert.deepEqual(leaked, [], 'only the national roles may have an empty scope_type')
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -245,14 +256,16 @@ test('a facility user with no facility_id is EXCLUDED from the ACL entirely', as
   assert.deepEqual(rows, [], 'a facility account with no facility_id must hold no ACL role at all')
 })
 
-test('no role except overall_admin carries an empty scope', async () => {
-  // The invariant the exclusion establishes. overall_admin is the sole exception:
-  // its empty scope means "national", by deliberate design (Phase 2D).
+test('no role outside the national ones carries an empty scope', async () => {
+  // The invariant the exclusion establishes. An empty scope means "national", so
+  // only roles that ARE national may carry one — overall_admin (Phase 2D) and
+  // system_admin (Phase 2M.1). On any other role an empty scope is a widening
+  // waiting to be misread as "unconstrained".
   const { rows } = await query(`
     select r.name, count(*)::int n from user_roles ur
       join roles r on r.id = ur.role_id
-     where ur.scope_id = '' and r.name <> 'overall_admin'
-     group by 1`)
+     where ur.scope_id = '' and r.name <> all($1)
+     group by 1`, [UNSCOPED_ROLES])
   assert.deepEqual(rows, [])
 })
 

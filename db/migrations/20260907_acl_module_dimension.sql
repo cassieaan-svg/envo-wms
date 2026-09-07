@@ -51,9 +51,12 @@ begin
 end $$;
 
 -- ── 2. Backfill: every existing account belongs to the HIV module ───────────
--- essential_admin is deliberately excluded rather than filtered by "no rows yet":
--- the exclusion is the rule, and writing it down keeps a future essential_admin
--- from silently acquiring HIV scope the next time this runs.
+-- essential_admin and system_admin are deliberately excluded rather than filtered
+-- by "no rows yet": the exclusion is the rule, and writing it down keeps a future
+-- account of either kind from silently acquiring HIV scope the next time this
+-- runs. essential_admin belongs to a different module; system_admin is national
+-- and unscoped in every dimension by design (Phase 2M.1) — giving it a module row
+-- to make a screen render is exactly what that decision forbids.
 --
 -- The `not exists` guard is not redundant with `on conflict do nothing`. This
 -- migration is re-run on every provisioning call (aclProvisioning.MIGRATIONS), and
@@ -65,7 +68,7 @@ insert into user_role_scopes (user_id, role_id, dimension, scope_type, scope_id)
 select ur.user_id, ur.role_id, 'module', 'module', 'hiv'
   from user_roles ur
   join roles r on r.id = ur.role_id
- where r.name <> 'essential_admin'
+ where r.name not in ('essential_admin', 'system_admin')
    and not exists (
      select 1 from user_role_scopes s
       where s.user_id = ur.user_id and s.role_id = ur.role_id and s.dimension = 'module')

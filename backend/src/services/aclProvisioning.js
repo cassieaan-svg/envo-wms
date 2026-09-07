@@ -27,6 +27,10 @@ import { fileURLToPath } from 'node:url'
 
 const MIGRATIONS = [
   '20260903_acl_seed_user_roles.sql',
+  // Phase 2M.1. Runs BEFORE the scope backfills so those see the role and can
+  // apply their exclusions to it. The seed above deliberately ignores any
+  // access_level outside the original six, so system_admin needs its own mapping.
+  '20260907_acl_system_admin_assignment.sql',
   '20260904_acl_exclude_scopeless_accounts.sql',
   '20260905_acl_user_role_scopes.sql',
   // Phase 2M. Without this a newly provisioned account gets geography and
@@ -62,7 +66,11 @@ export async function syncAcl({ quiet = false } = {}) {
       select count(*)::int n from users u
        where not exists (select 1 from user_roles ur where ur.user_id = u.id)
          and coalesce(nullif(u.raw_user_meta_data->>'access_level', ''), 'facility')
-             in ('facility','state_admin','state_viewer','cluster_admin','lga_admin','overall_admin')
+             in ('facility','state_admin','state_viewer','cluster_admin','lga_admin','overall_admin',
+                 -- Phase 2M.1. Without this a system_admin account is not counted
+                 -- as "missing a role", so syncAcl returns early and never assigns
+                 -- one — and sync_acl.mjs --check would then flag it forever.
+                 'system_admin')
          and (coalesce(u.raw_user_meta_data->>'access_level', 'facility') <> 'facility'
               or coalesce(u.raw_user_meta_data->>'facility_id', '') <> '')`
 
