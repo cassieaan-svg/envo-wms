@@ -145,8 +145,16 @@ export class AclResolver {
   // section.
   //
   // A `section` row resolves through SECTION_CATEGORIES. An UNRECOGNISED section
-  // (three live accounts carry commodity_section='tools') resolves to NO
-  // categories and therefore DENIES. Legacy fails open here — categoriesForSection
+  // resolves to NO categories and therefore DENIES.
+  //
+  // Three live accounts carry commodity_section='tools', but only ONE of them
+  // actually diverges here (dec.tools@envo.ng, role=facility, one 'tools'
+  // section scope row). Of the other two, hq.tools holds no ACL role at all —
+  // access_level='hq_tools' is unrecognised and was deliberately excluded in
+  // Phase 2D — and state.tools is a state_admin, which attachScope never pins to
+  // a section, so it has no commodity scope row for this method to read.
+  //
+  // Legacy fails open here — categoriesForSection
   // returns null for an unknown value, which downstream means "sees everything".
   // That is a documented defect; reproducing it would bake a fail-open into the
   // new model, so this deliberately diverges and the shadow comparison records
