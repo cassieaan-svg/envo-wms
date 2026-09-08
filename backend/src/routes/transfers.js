@@ -3,8 +3,21 @@ import { validators, sendValidationError } from '../middleware/validation.js'
 import { enforceTransferAccess, enforceTransferWrite, mayWriteTransfer, mayWriteTransferFacility, enforceCommoditySection, ownFacilityId, resolveListFacilityIds, sectionFilter } from '../middleware/scope.js'
 import { narrowGrantsToCategories } from '../constants/sections.js'
 import { TransferService, TRANSFER_IN_GROUP_BY_KEYS } from '../services/transferService.js'
+import { FacilityService } from '../services/facilityService.js'
 
 const router = express.Router()
+
+// The LGA bucket a facility falls into, matching the frontend's facilityGroupLabel:
+// most facilities have an LGA; a cluster store and a state office get their own
+// bucket. Two facilities are "in the same LGA" when they share a state and bucket.
+const lgaBucket = f => f?.lga || (f?.cluster ? `${f.cluster} Cluster` : 'State Office')
+const sameLga = (a, b) => !!a && !!b && a.state === b.state && lgaBucket(a) === lgaBucket(b)
+
+// A "real" LGA — used for the request-source rule, where only facilities genuinely
+// inside the requester's LGA are barred. State-office and cluster hubs have no LGA,
+// so they are never "in" one and stay valid cross-LGA sources.
+const realLga = f => (f && f.lga && String(f.lga).trim()) ? `${f.state}|${String(f.lga).trim()}` : null
+const sameRealLga = (a, b) => { const x = realLga(a), y = realLga(b); return !!x && x === y }
 
 // Auth (authMiddleware) and scope (attachScope) are applied globally to /api in
 // server.js. Transfer access mirrors the RLS stock_transfer_log policies: a caller
@@ -213,6 +226,20 @@ router.post('/', async (req, res) => {
       if (!okSend && !okRecv) {
         return res.status(403).json({ success: false, error: 'Not authorized to create a transfer for another facility', code: 'FORBIDDEN' })
       }
+      // External redistribution (a real facility→facility move, both sides set and
+      // different) is limited to facilities in the SAME LGA — a facility may push
+      // surplus within its LGA, but stock crossing LGA boundaries goes through the
+      // request flow instead. Internal moves (same facility, store→dispensary/DSD/SDP)
+      // and requests (no sending facility yet) are unaffected.
+      if (l.sending_facility_id && l.receiving_facility_id && l.sending_facility_id !== l.receiving_facility_id) {
+        const [sf, rf] = await Promise.all([
+          FacilityService.getFacilityById(l.sending_facility_id),
+          FacilityService.getFacilityById(l.receiving_facility_id),
+        ])
+        if (!sameLga(sf, rf)) {
+          return res.status(403).json({ success: false, error: 'External redistribution is limited to facilities in the same LGA. To move stock across LGAs, use the request flow.', code: 'CROSS_LGA_TRANSFER' })
+        }
+      }
       if (!(await enforceCommoditySection(req, res, l.commodity_id))) return
     }
 
@@ -300,6 +327,18 @@ router.patch('/assign-batch', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Not authorized for that source facility', code: 'FORBIDDEN' })
     }
 
+    // A request is fulfilled from OUTSIDE the requesting facility's LGA (within-LGA
+    // moves go through external redistribution). Reject a source sharing any request's
+    // LGA.
+    const srcFac = await FacilityService.getFacilityById(sending_facility_id)
+    for (const item of items) {
+      const transfer = await TransferService.getTransferById(item.id)
+      const reqFac = await FacilityService.getFacilityById(transfer.receiving_facility_id)
+      if (sameRealLga(reqFac, srcFac)) {
+        return res.status(403).json({ success: false, error: 'A request must be fulfilled from a facility outside the requesting facility\'s LGA.', code: 'SAME_LGA_SOURCE' })
+      }
+    }
+
     const assigned = await TransferService.assignSourceBulk({
       items, sendingFacilityId: sending_facility_id,
       sendingFacilityName: sending_facility_name, reviewedBy: reviewed_by,
@@ -316,6 +355,17 @@ router.patch('/:id/assign', async (req, res) => {
   try {
     if (!req.body?.sending_facility_id) {
       return res.status(400).json({ success: false, error: 'sending_facility_id is required', code: 'MISSING_FIELDS' })
+    }
+    // A request is fulfilled from OUTSIDE the requesting facility's LGA.
+    const transfer = await TransferService.getTransferById(req.params.id)
+    if (transfer) {
+      const [reqFac, srcFac] = await Promise.all([
+        FacilityService.getFacilityById(transfer.receiving_facility_id),
+        FacilityService.getFacilityById(req.body.sending_facility_id),
+      ])
+      if (sameRealLga(reqFac, srcFac)) {
+        return res.status(403).json({ success: false, error: 'A request must be fulfilled from a facility outside the requesting facility\'s LGA.', code: 'SAME_LGA_SOURCE' })
+      }
     }
     await runTransition(req, res, () => TransferService.assignSource(req.params.id, req.body))
   } catch (err) {

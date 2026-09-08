@@ -82,6 +82,7 @@ export function Transfers() {
   const [intHistTo,   setIntHistTo]   = useState(_today)
   const [extHistFrom, setExtHistFrom] = useState(_monthStart)
   const [extHistTo,   setExtHistTo]   = useState(_today)
+  const [lgaScope,    setLgaScope]    = useState('')   // '' | intra | inter — LGA-scope filter for external history
 
   // Pending transfers
   const [pending, setPending] = useState([])
@@ -127,10 +128,11 @@ export function Transfers() {
   const [recFacId, setRecFacId] = useState('')
   const [notes, setNotes] = useState('')
   const [sentBy, setSentBy] = useState('')
-  const [sendExpiry, setSendExpiry] = useState('')
-  const [sendBatch, setSendBatch] = useState('')
   const [sendApprovedBy, setSendApprovedBy] = useState('')
   const [sendCarrier, setSendCarrier] = useState('')
+  // Batch picks for the send, same shape/behaviour as the "Arrange transfer" dispatch:
+  // each row is a lot picked from the sender's store, with a per-batch qty; empty = FEFO.
+  const [sendLots, setSendLots] = useState([{ id: Date.now(), selected: null, qty: 1, fixExpiry: '', fixBatch: '' }])
   const [sending, setSending] = useState(false)
   const [msg, setMsg] = useState(null)
   const [sendHistory, setSendHistory] = useState([])
@@ -222,6 +224,28 @@ export function Transfers() {
   const states = Object.keys(facGroups).sort()
   const lgas = selectedState ? Object.keys(facGroups[selectedState]).sort() : []
   const facilities = selectedState && selectedLga ? facGroups[selectedState][selectedLga].sort((a, b) => a.name.localeCompare(b.name)) : []
+
+  // External redistribution is limited to facilities in the sender's own LGA (same
+  // state + same LGA/cluster bucket), excluding this facility itself.
+  const sameLgaFacilities = myFac
+    ? allFacilities
+        .filter(f => f.id !== fid && (f.state || 'Other') === (myFac.state || 'Other')
+          && facilityGroupLabel(f) === facilityGroupLabel(myFac))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    : []
+
+  // Classify a facility→facility transfer by LGA scope: intra-LGA (both ends share a
+  // real LGA — an external redistribution) vs inter-LGA (a request fulfilled from
+  // another LGA, or from a state-office/cluster hub, which has no LGA).
+  const isIntraLga = t => {
+    const s = allFacilities.find(f => f.id === t.sending_facility_id)
+    const r = allFacilities.find(f => f.id === t.receiving_facility_id)
+    return !!(s && r && s.lga && r.lga && (s.state || '') === (r.state || '')
+      && String(s.lga).trim() === String(r.lga).trim())
+  }
+  const shownSendHistory = lgaScope === 'intra' ? sendHistory.filter(isIntraLga)
+    : lgaScope === 'inter' ? sendHistory.filter(t => !isIntraLga(t))
+    : sendHistory
 
   const accessRestricted = !(canManage || isDispenser || isDSD)
 
@@ -556,32 +580,81 @@ export function Transfers() {
   async function sendTransfer(e) {
     e?.preventDefault(); setMsg(null)
     if (!commId) { setMsg({ type: 'error', text: 'Select a commodity.' }); return }
-    if (qty < 1) { setMsg({ type: 'error', text: 'Quantity must be at least 1.' }); return }
+    const parsedQty = parseInt(qty)
+    if (!parsedQty || parsedQty < 1) { setMsg({ type: 'error', text: 'Quantity must be at least 1.' }); return }
     if (!recFacId) { setMsg({ type: 'error', text: 'Select receiving facility.' }); return }
-    if (!sendExpiry) { setMsg({ type: 'error', text: 'Expiry date is required.' }); return }
-    if (!sendBatch) { setMsg({ type: 'error', text: 'Batch / lot number is required.' }); return }
     if (!sentBy) { setMsg({ type: 'error', text: 'Sent by is required.' }); return }
     if (!sendApprovedBy) { setMsg({ type: 'error', text: 'Record approved by is required.' }); return }
     if (!sendCarrier) { setMsg({ type: 'error', text: 'Carrier is required.' }); return }
     if (!stockRow || stockRow.quantity === 0) { setMsg({ type: 'error', text: 'No stock available.' }); return }
-    if (stockRow.quantity < qty) { setMsg({ type: 'error', text: `Insufficient stock. Available: ${stockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return }
+    if (stockRow.quantity < parsedQty) { setMsg({ type: 'error', text: `Insufficient stock. Available: ${stockRow.quantity} ${selectedComm?.unit || 'units'}.` }); return }
+
+    // Batch picks work exactly like Arrange transfer: pick lots from the sender's store
+    // with per-batch quantities (they must sum to the send quantity), or leave empty to
+    // let the server draw FEFO. A picked lot missing batch/expiry is filled in inline.
+    const pickedLots = (sendLots || []).filter(d => d.selected)
+    for (const l of pickedLots) {
+      if (!l.selected.expiry_date && !String(l.fixExpiry || '').trim()) {
+        setMsg({ type: 'error', text: l.selected.batch_number ? `Batch ${l.selected.batch_number} has no expiry date recorded — enter it to continue` : 'A picked lot has no expiry date recorded — enter it to continue' }); return
+      }
+      if (!l.selected.batch_number && !String(l.fixBatch || '').trim()) {
+        setMsg({ type: 'error', text: 'A picked lot has no batch number recorded — enter it to continue' }); return
+      }
+    }
+    if (pickedLots.length) {
+      const totalPicked = pickedLots.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)
+      if (totalPicked !== parsedQty) { setMsg({ type: 'error', text: `Sum of selected batch quantities (${totalPicked}) must equal quantity to send (${parsedQty}).` }); return }
+    }
+
     setSending(true)
     const recFac = allFacilities.find(f => f.id === recFacId)
     const comm = allCommodities.find(c => c.id === commId)
-    const fullNotes = `[Approved by: ${sendApprovedBy}] [Carrier: ${sendCarrier}] [Expiry: ${sendExpiry}] [Batch: ${sendBatch}]${notes ? ' ' + notes : ''}`
+
+    // Create the transfer as a pending facility→facility move, then dispatch it with the
+    // picked lots. The dispatch path debits the sender's store + lot ledger (create()
+    // alone moves no stock) — the same integrity as Arrange transfer.
+    let created
     try {
-      await api.transfers.create({
+      const rows = await api.transfers.create({
         sending_facility_id: fid, sending_facility_name: myFac?.name || '',
         receiving_facility_id: recFacId, receiving_facility_name: recFac?.name || '',
         commodity_id: commId, commodity_name: comm?.name || '',
-        quantity: parseInt(qty), qty_requested: parseInt(qty), status: 'in_transit', initiated_by: sentBy || '',
-        initiated_at: new Date().toISOString(), notes: fullNotes,
+        quantity: parsedQty, qty_requested: parsedQty, status: 'pending', initiated_by: sentBy || '',
+        initiated_at: new Date().toISOString(), notes: notes || null,
         section: commoditySection,
       })
+      created = Array.isArray(rows) ? rows[0] : rows
     } catch (error) { setMsg({ type: 'error', text: 'Error: ' + error.message }); setSending(false); return }
+
+    try {
+      let dispatchData
+      if (pickedLots.length) {
+        const lotsPayload = pickedLots.map(l => ({
+          batch: l.selected.batch_number || '',
+          quantity: parseInt(l.qty),
+          set_expiry: l.selected.expiry_date ? null : String(l.fixExpiry || '').trim() || null,
+          set_batch: l.selected.batch_number ? null : String(l.fixBatch || '').trim() || null,
+        }))
+        const batchOf = l => l.selected.batch_number || String(l.fixBatch || '').trim()
+        const expiryOf = l => ymdLagos(l.selected.expiry_date) || ymdLagos(String(l.fixExpiry || '').trim())
+        const batchLabel = [...new Set(pickedLots.map(batchOf).filter(Boolean))].join(', ')
+        const earliestExpiry = pickedLots.map(expiryOf).filter(Boolean).sort()[0] || null
+        dispatchData = { approved_by: sendApprovedBy.trim(), carrier: sendCarrier.trim(), quantity: parsedQty, expiry: earliestExpiry, batch: batchLabel, lots: lotsPayload }
+      } else {
+        dispatchData = { approved_by: sendApprovedBy.trim(), carrier: sendCarrier.trim(), quantity: parsedQty }
+      }
+      await api.transfers.dispatch(created.id, dispatchData)
+    } catch (error) {
+      // A failed dispatch must not leave an orphan pending request — remove the row.
+      try { await api.transfers.remove(created.id) } catch { /* best effort */ }
+      setMsg({ type: 'error', text: 'Error: ' + error.message }); setSending(false); return
+    }
+
+    await loadStock()
     toast('Transfer dispatched to ' + recFac?.name, 'green')
     setMsg({ type: 'success', text: 'Transfer dispatched. Awaiting receiver acceptance.' })
-    setCommId(''); setQty(1); setRecFacId(''); setNotes(''); setSentBy(''); setSendExpiry(''); setSendBatch(''); setSendApprovedBy(''); setSendCarrier('')
+    setCommId(''); setQty(1); setRecFacId(''); setNotes(''); setSentBy(''); setSendApprovedBy(''); setSendCarrier('')
+    setSendLots([{ id: Date.now(), selected: null, qty: 1, fixExpiry: '', fixBatch: '' }])
     loadPending(); setSending(false)
   }
 
@@ -1181,8 +1254,15 @@ export function Transfers() {
                     // the sender and the requesting facility raises a new request, so
                     // there is nothing to action here. It stays visible in history.
                     if (t.status === 'disputed') return null
+                    // A request is fulfilled from OUTSIDE the requesting facility's LGA:
+                    // exclude the requester and every facility sharing its real LGA.
+                    // State-office / cluster hubs have no LGA, so they stay assignable.
+                    const reqFac = allFacilities.find(f => f.id === t.receiving_facility_id)
                     const assignFacGroups = {}
-                    allFacilities.filter(f => f.id !== t.receiving_facility_id).forEach(f => {
+                    allFacilities.filter(f => f.id !== t.receiving_facility_id
+                      && !(reqFac && reqFac.lga && f.lga
+                        && (f.state || '') === (reqFac.state || '')
+                        && String(f.lga).trim() === String(reqFac.lga).trim())).forEach(f => {
                       const s = f.state || 'Other', l = facilityGroupLabel(f)
                       if (!assignFacGroups[s]) assignFacGroups[s] = {}
                       if (!assignFacGroups[s][l]) assignFacGroups[s][l] = []
@@ -1786,15 +1866,17 @@ export function Transfers() {
       {primary === 'external' && (
         <>
           <BackButton />
-          {/* Send form intentionally disabled: this module is view/print only and must
-              NOT be used to perform transfers. */}
-          {false && (
+          {/* External redistribution: a facility store manager pushes surplus stock to
+              another facility IN ITS OWN LGA. Cross-LGA movement goes through the
+              request flow. Admins (no own facility) see the history only, below. */}
+          {canManage && accessLevel === 'facility' && (
             <Card>
               <CardHeader><CardTitle>External redistribution</CardTitle></CardHeader>
               <CardBody>
                 <form onSubmit={sendTransfer} className="space-y-4">
                   <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-gray-300">
                     Sending from: <strong className="text-gray-100">{myFac?.name || '—'}</strong>
+                    <span className="text-gray-500"> · to a facility in {facilityGroupLabel(myFac)}</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -1808,34 +1890,53 @@ export function Transfers() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Receiving facility</label>
-                    <div className="space-y-2">
-                      <select value={selectedState} onChange={e => { setSelectedState(e.target.value); setSelectedLga(''); setRecFacId('') }} className={inputCls}>
-                        <option value="">Select state…</option>
-                        {states.map(s => <option key={s} value={s}>{s}</option>)}
+                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Receiving facility (in {facilityGroupLabel(myFac)})</label>
+                    {sameLgaFacilities.length ? (
+                      <select value={recFacId} onChange={e => setRecFacId(e.target.value)} className={inputCls}>
+                        <option value="">Select facility…</option>
+                        {sameLgaFacilities.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                       </select>
-                      {selectedState && (
-                        <select value={selectedLga} onChange={e => { setSelectedLga(e.target.value); setRecFacId('') }} className={inputCls}>
-                          <option value="">Select LGA…</option>
-                          {lgas.map(l => <option key={l} value={l}>{l}</option>)}
-                        </select>
-                      )}
-                      {selectedLga && (
-                        <select value={recFacId} onChange={e => setRecFacId(e.target.value)} className={inputCls}>
-                          <option value="">Select facility…</option>
-                          {facilities.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                        </select>
-                      )}
-                    </div>
+                    ) : (
+                      <p className="text-xs text-gray-500 bg-white/5 border border-white/10 rounded-lg px-3 py-2">
+                        No other facility in {facilityGroupLabel(myFac)} to redistribute to. Use the Request tab to source stock from outside your LGA.
+                      </p>
+                    )}
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Expiry date *</label>
-                      <input type="date" value={sendExpiry} onChange={e => setSendExpiry(e.target.value)} className={inputCls} />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch / lot number *</label>
-                      <input type="text" value={sendBatch} onChange={e => setSendBatch(e.target.value)} placeholder="e.g. LOT2024A001" className={inputCls} />
+                  {/* Batch picks — same as Arrange transfer: pick lots from your store with
+                      per-batch quantities, or leave empty to let the server draw FEFO. */}
+                  <div>
+                    <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batches (optional — pick batches and per-batch qty)</label>
+                    <div className="space-y-2">
+                      {sendLots.map((dl, i) => (
+                        <div key={dl.id} className="space-y-1">
+                          <div className="flex gap-2 items-center">
+                            <BatchSelect facilityId={fid} commodityId={commId} locationType={"store"} value={dl.selected?.key || null} onSelect={opt => {
+                              const copy = [...sendLots]; copy[i] = { ...copy[i], selected: opt, fixExpiry: '', fixBatch: '' }; setSendLots(copy)
+                            }} className={inputCls} />
+                            <input type="number" min="0" value={dl.qty} onChange={e => { const copy = [...sendLots]; copy[i] = { ...copy[i], qty: e.target.value }; setSendLots(copy) }} className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
+                            {sendLots.length > 1 && <button type="button" onClick={() => { setSendLots(sendLots.filter((_, idx) => idx !== i)) }} className="text-xs text-red-400">Remove</button>}
+                          </div>
+                          {dl.selected && (!dl.selected.expiry_date || !dl.selected.batch_number) && (
+                            <div className="flex gap-2 items-center pl-1">
+                              <span className="text-xs text-amber-400">This batch is incomplete — it will be corrected on file:</span>
+                              {!dl.selected.batch_number && (
+                                <input type="text" value={dl.fixBatch || ''} placeholder="Enter batch no"
+                                  onChange={e => { const copy = [...sendLots]; copy[i] = { ...copy[i], fixBatch: e.target.value }; setSendLots(copy) }}
+                                  className="w-40 bg-white/5 border border-amber-500/40 rounded-lg px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-amber-400" />
+                              )}
+                              {!dl.selected.expiry_date && (
+                                <input type="date" value={dl.fixExpiry || ''}
+                                  onChange={e => { const copy = [...sendLots]; copy[i] = { ...copy[i], fixExpiry: e.target.value }; setSendLots(copy) }}
+                                  className="w-44 bg-white/5 border border-amber-500/40 rounded-lg px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-amber-400" />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => setSendLots([...sendLots, { id: Date.now(), selected: null, qty: 0 }])} className="text-xs text-blue-400 hover:text-blue-300">+ Add batch</button>
+                        <div className="text-xs text-gray-400">Leave batches empty to let server draw FEFO</div>
+                      </div>
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1868,6 +1969,12 @@ export function Transfers() {
               <CardHeader>
                 <CardTitle>External redistribution history</CardTitle>
                 <div className="flex items-center gap-2 flex-wrap">
+                  <select value={lgaScope} onChange={e => setLgaScope(e.target.value)}
+                    className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                    <option value="">All LGA scopes</option>
+                    <option value="intra">Intra-LGA (within LGA)</option>
+                    <option value="inter">Inter-LGA (across LGAs)</option>
+                  </select>
                   <input type="date" value={extHistFrom} onChange={e => setExtHistFrom(e.target.value)}
                     className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500" />
                   <span className="text-xs text-gray-600">to</span>
@@ -1876,7 +1983,7 @@ export function Transfers() {
                   <button onClick={() => loadSendHistory(extHistFrom, extHistTo)} className="text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5">Refresh</button>
                 </div>
               </CardHeader>
-              <HistoryTable rows={sendHistory} loading={loadingS} emptyMsg="No external redistributions recorded." kind="external" />
+              <HistoryTable rows={shownSendHistory} loading={loadingS} emptyMsg="No external redistributions recorded." kind="external" />
             </Card>
           )}
         </>
