@@ -347,19 +347,50 @@ dbTest('lifetime excludes junk dates that would corrupt the week span', async ()
   // dispense_log holds rows dated before 2024 and in the future. A single stray
   // early date would stretch a commodity's span and drive its AMC toward zero,
   // hiding a stockout — so the aggregate must bound the range.
+  //
+  // WHY THIS IS BRACKETED RATHER THAN COMPARED TO A SINGLE SUM. `npm test` runs
+  // suites in PARALLEL against one database, and seven of them write
+  // dispense_log. The aggregate and any verification sum are therefore two
+  // different instants, and this test used to assert they were equal — so a row
+  // inserted between the two statements failed it, intermittently, with a
+  // difference equal to whatever that row's quantity happened to be (observed:
+  // once by 10, once by 1). The bug was in the measurement, not the aggregate.
+  //
+  // Reading the sums either side of the aggregate pins it to a range. When
+  // nothing is writing concurrently the two readings are identical and this is
+  // exactly the equality assertion it replaces; when something is, it is still a
+  // real constraint rather than a coin toss. Same technique, same reason, as the
+  // category-set comparisons in commodityListScope.test.js.
+  const sums = async () => (await query(`
+    select coalesce(sum(quantity) filter (
+             where dispensed_at >= '2024-01-01' and dispensed_at <= now()), 0)::int bounded,
+           coalesce(sum(quantity) filter (
+             where dispensed_at <  '2024-01-01' or  dispensed_at >  now()), 0)::int junk
+      from dispense_log`)).rows[0]
+
+  const before = await sums()
   const rows = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime' })
+  const after = await sums()
+
   const now = new Date(), floor = new Date('2024-01-01')
   for (const r of rows) {
     assert.ok(r.first_at >= floor, `first_at ${r.first_at} predates the floor`)
     assert.ok(r.last_at <= now, `last_at ${r.last_at} is in the future`)
   }
-  const { rows: [{ c: outOfRange }] } = await query(
-    `select count(*)::int c from dispense_log where dispensed_at < '2024-01-01' or dispensed_at > now()`)
-  const bounded = await query(
-    `select sum(quantity)::int s from dispense_log where dispensed_at >= '2024-01-01' and dispensed_at <= now()`)
-  if (outOfRange > 0) {
-    assert.equal(rows.reduce((s, r) => s + r.qty, 0), bounded.rows[0].s,
-      'lifetime total must exclude out-of-range rows')
+
+  // Only meaningful while junk rows carrying quantity actually exist — otherwise
+  // "excludes them" is vacuously true and this asserts nothing.
+  if (Math.min(before.junk, after.junk) > 0) {
+    const total = rows.reduce((s, r) => s + r.qty, 0)
+    const lo = Math.min(before.bounded, after.bounded)
+    const hi = Math.max(before.bounded, after.bounded)
+    assert.ok(total >= lo && total <= hi,
+      `lifetime total ${total} must exclude out-of-range rows — expected the in-range sum, ` +
+      `which was ${lo === hi ? lo : `between ${lo} and ${hi} across the read`}`)
+    // The exclusion is observable, not just consistent: the junk rows carry
+    // quantity, and the aggregate is below the unfiltered total.
+    assert.ok(total < hi + Math.min(before.junk, after.junk),
+      'the aggregate must be strictly below the unfiltered total')
   }
 })
 
