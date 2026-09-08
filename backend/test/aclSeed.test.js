@@ -193,7 +193,7 @@ test('user_permissions remains completely empty', async () => {
   const { rows: up } = await query(
     `select count(*)::int n from user_permissions up
        join users u on u.id = up.user_id
-      where u.email not like '%.invalid'`)
+      where u.email not like '%.invalid' and u.email not like 'probe.create.%'`)
   assert.equal(up[0].n, 0, 'no user was granted or denied a direct permission in this phase')
 })
 

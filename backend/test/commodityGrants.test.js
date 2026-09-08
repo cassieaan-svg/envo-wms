@@ -9,6 +9,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { attachScope } from '../src/middleware/scope.js'
+import { HIV_CATEGORIES, ESSENTIAL_CATEGORIES } from '../src/constants/sections.js'
 import {
   STATE_OFFICE_CATEGORIES, extraCommoditiesForFacility,
   narrowGrantsToCategories, sectionFilterSql, sectionFilterFixed, allowsCommodity,
@@ -54,13 +55,33 @@ test('facility name matching tolerates case and whitespace', () => {
   assert.deepEqual(extraCommoditiesForFacility(''), [])
 })
 
-test('an unrestricted admin carries no grants', () => {
-  // No section restriction → nothing to widen; the filter is null either way, so the
-  // grant must not appear and cannot narrow what an admin sees.
+test('an admin with no section pin is scoped to its MODULE, not to everything', () => {
+  // This used to assert `null` — "no category filter at all". That was written
+  // when the HIV programme was the whole of `commodities`, so "no filter" and
+  // "both sections" described the same set. Essential Commodities then added 450
+  // rows to the same table and silently widened every unpinned caller.
+  //
+  // An absent section now resolves to the HIV module's categories, so a state
+  // admin overseeing pharmacy and lab can no longer read Essential stock.
   const admin = scopeFor({ access_level: 'state_admin', admin_state: 'Akwa Ibom',
     facility_name: 'Akwa Ibom State Office Store' })
-  assert.equal(admin.sectionCategories, null)
-  assert.deepEqual(admin.sectionCommodityNames, [])
+  assert.deepEqual([...admin.sectionCategories].sort(), [...HIV_CATEGORIES].sort())
+  for (const c of ESSENTIAL_CATEGORIES) {
+    assert.ok(!admin.sectionCategories.includes(c), `${c} must be outside an HIV admin's scope`)
+  }
+  // A consequence of the above, and inert: the per-facility grant is now
+  // evaluated for an admin too, because it is only skipped when the category
+  // filter is null. It adds Alere Determine — an RTK, already inside the HIV
+  // categories this admin holds — so it widens nothing. Real admin accounts
+  // carry no facility_name at all; this metadata is constructed.
+  assert.deepEqual(admin.sectionCommodityNames, ['Alere Determine'])
+  assert.ok(HIV_CATEGORIES.includes('RTKs'),
+    'and the grant is redundant here, because its category is already in scope')
+})
+
+test('system_admin keeps the unrestricted view — it has no operational access to abuse', () => {
+  const sys = scopeFor({ access_level: 'system_admin' })
+  assert.equal(sys.sectionCategories, null, 'the one account that still sees every category')
 })
 
 test('sectionFilterSql binds correctly and stays inert without a grant', () => {

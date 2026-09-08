@@ -136,7 +136,8 @@ export function Stock() {
 
   // Order categories by the canonical section sequence (e.g. RTKs before
   // Lab reagents before Lab consumables), with any unknown category last.
-  const catOrder = allowedCategoriesFor(commoditySection, store.currentFacility?.name)
+  const catOrder = allowedCategoriesFor(commoditySection, store.currentFacility?.name,
+    store.user?.user_metadata?.essential === true)
     || SECTION_CATEGORIES[commoditySection] || []
   const orderedCats = Object.keys(byCategory).sort((a, b) => {
     const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)

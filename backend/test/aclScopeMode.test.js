@@ -33,7 +33,7 @@ async function realUser(roleName) {
   const { rows } = await query(
     `select u.id, ur.scope_type, ur.scope_id
        from user_roles ur join roles r on r.id = ur.role_id join users u on u.id = ur.user_id
-      where r.name = $1 and u.email not like '%.invalid' ${scopeCond} limit 1`, [roleName])
+      where r.name = $1 and u.email not like '%.invalid' and u.email not like 'probe.create.%' ${scopeCond} limit 1`, [roleName])
   if (!rows.length) throw new Error(`no real user with role ${roleName}`)
   return rows[0]
 }
@@ -220,7 +220,7 @@ test('a disabled feature still suppresses a permission that inherits its scope',
       from user_roles ur join users u on u.id = ur.user_id join roles r on r.id = ur.role_id
       left join facilities f on f.id::text = ur.scope_id
      where r.name = 'facility' and u.raw_user_meta_data->>'commodity_section' = 'pharmacy'
-       and u.email not like '%.invalid'
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and (f.name is null or f.name !~* 'state office store|cluster lab store')
      limit 1`)
   const { id, facility_id } = rows[0]

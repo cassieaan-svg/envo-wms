@@ -30,9 +30,23 @@ export const SECTION_CATEGORIES = {
   general:   ['General Consumables'],
 }
 
-// The new "General Consumables" category — not part of any section list, so a
-// regular section-pinned caller never sees it (excluded by the include-list filter).
+// The new "General Consumables" category — not part of the pharmacy or lab lists,
+// so a caller pinned to either never sees it (excluded by the include-list filter).
 export const GENERAL_CONSUMABLES = 'General Consumables'
+
+// Which sections belong to which module. A module is the set of its sections'
+// categories, so this is the one place that says what "the HIV catalogue" means.
+//
+// KEEP `me` IN MIND: when the envo-tools branch lands it adds an `me` section
+// (M&E Tools) to the HIV module, and it must be added to HIV_SECTIONS here or
+// admins will stop seeing those items.
+const HIV_SECTIONS = ['pharmacy', 'lab', 'general']
+const ESSENTIAL_SECTIONS = ['essential']
+
+const categoriesOf = keys => [...new Set(keys.flatMap(k => SECTION_CATEGORIES[k] || []))]
+
+export const HIV_CATEGORIES = categoriesOf(HIV_SECTIONS)
+export const ESSENTIAL_CATEGORIES = categoriesOf(ESSENTIAL_SECTIONS)
 
 // The COMPLETE category set a per-state "State Office Store" sees — it replaces the
 // caller's normal section list (it is NOT the lab section): a state office handles

@@ -124,7 +124,7 @@ test('every real account with a role carries exactly one module scope', async ()
     select count(*)::int n from user_roles ur
       join users u on u.id = ur.user_id
       join roles r on r.id = ur.role_id
-     where u.email not like '%.invalid'
+     where u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and r.name not in ('essential_admin', 'system_admin')
        and not exists (select 1 from user_role_scopes s
                         where s.user_id = ur.user_id and s.dimension = 'module')`)
@@ -149,7 +149,7 @@ test('an Essential Commodities item is denied to every HIV-scoped account', asyn
     select u.id, r.name from user_roles ur
       join roles r on r.id = ur.role_id
       join users u on u.id = ur.user_id
-     where u.email not like '%.invalid'
+     where u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and r.name in ('overall_admin','state_admin','state_viewer','lga_admin','cluster_admin')
      limit 6`)
   assert.ok(rows.length >= 4, 'need a spread of tiers to make this meaningful')
@@ -165,7 +165,7 @@ test('the same accounts still reach HIV commodities — the denial is the module
     select u.id, ur.scope_id from user_roles ur
       join roles r on r.id = ur.role_id
       join users u on u.id = ur.user_id
-     where r.name = 'state_admin' and u.email not like '%.invalid'
+     where r.name = 'state_admin' and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and u.raw_user_meta_data->>'commodity_section' is null
      limit 1`)
   const { rows: fac } = await query(
@@ -272,7 +272,7 @@ test('this suite restored the scope rows it touched', async () => {
   const { rows } = await query(`
     select dimension, count(*)::int n from user_role_scopes s
       join users u on u.id = s.user_id
-     where u.email not like '%.invalid' group by 1 order by 1`)
+     where u.email not like '%.invalid' and u.email not like 'probe.create.%' group by 1 order by 1`)
   assert.deepEqual(rows, [
     // Commodity rows outnumber accounts: the 195 Essential accounts hold TWO
     // section rows each (pharmacy + essential, Phase 2M.2d), and the hub stores

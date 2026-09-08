@@ -44,7 +44,7 @@ async function realUser(roleName) {
   const { rows } = await query(
     `select u.id, u.raw_user_meta_data meta, ur.scope_type, ur.scope_id
        from user_roles ur join roles r on r.id=ur.role_id join users u on u.id=ur.user_id
-      where r.name = $1 and u.email not like '%.invalid' ${scopeCond}
+      where r.name = $1 and u.email not like '%.invalid' and u.email not like 'probe.create.%' ${scopeCond}
       limit 1`, [roleName])
   if (!rows.length) throw new Error(`no real user with role ${roleName}`)
   return rows[0]

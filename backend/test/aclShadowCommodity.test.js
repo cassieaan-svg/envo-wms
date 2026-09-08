@@ -45,7 +45,7 @@ async function facilityUser(section) {
        left join facilities f on f.id::text = ur.scope_id
       where r.name = 'facility' and u.raw_user_meta_data->>'commodity_section' = $1
         and (f.name is null or f.name !~* 'state office store|cluster lab store')
-        and u.email not like '%.invalid' limit 1`, [section])
+        and u.email not like '%.invalid' and u.email not like 'probe.create.%' limit 1`, [section])
   if (!rows.length) throw new Error(`no facility user with section ${section}`)
   return rows[0]
 }
@@ -88,7 +88,7 @@ test('hub store on a hub category matches', async () => {
     select u.id, u.raw_user_meta_data meta from user_roles ur
       join users u on u.id = ur.user_id join facilities f on f.id::text = ur.scope_id
      where f.name ~* 'state office store|cluster lab store'
-       and u.email not like '%.invalid' limit 1`)
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%' limit 1`)
   const c = await oneCommodityIn('Lab consumables')
   const legacy = await verdict(res => enforceCommoditySection(scopeFor(u[0].meta), res, c.id))
   record('hub store / Lab consumables', legacy, await AclResolver.commodityCovers(u[0].id, c.id), true)
@@ -101,7 +101,7 @@ test('the Akwa Ibom individual grant matches on Alere Determine', async () => {
     select u.id, u.raw_user_meta_data meta from user_roles ur
       join users u on u.id = ur.user_id join facilities f on f.id::text = ur.scope_id
      where lower(btrim(f.name)) = 'akwa ibom state office store'
-       and u.email not like '%.invalid' limit 1`)
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%' limit 1`)
   const { rows: c } = await query(`select id from commodities where name = 'Alere Determine'`)
   const legacy = await verdict(res => enforceCommoditySection(scopeFor(u[0].meta), res, c[0].id))
   record('akwa ibom / Alere Determine grant', legacy, await AclResolver.commodityCovers(u[0].id, c[0].id), true)

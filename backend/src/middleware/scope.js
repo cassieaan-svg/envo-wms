@@ -1,6 +1,7 @@
 import { query } from '../db.js'
 import { categoriesForSection, isHubStoreName, HUB_STORE_CATEGORIES,
-         extraCommoditiesForFacility, allowsCommodity } from '../constants/sections.js'
+         extraCommoditiesForFacility, allowsCommodity,
+         HIV_CATEGORIES, ESSENTIAL_CATEGORIES } from '../constants/sections.js'
 
 // Facility + section scoping for the API layer.
 //
@@ -86,9 +87,47 @@ export function attachScope(req, res, next) {
   if (sectionCategories && isHubStoreName(meta.facility_name)) {
     sectionCategories = [...HUB_STORE_CATEGORIES]
   }
+  // AN UNPINNED CALLER DEFAULTS TO ITS MODULE, NOT TO EVERYTHING.
+  //
+  // `null` here means "no category filter", and that was written when the HIV
+  // programme was the only thing in `commodities` — so "no filter" and "both
+  // sections" described the same set. Essential Commodities then added 450 rows
+  // to the same table and silently widened every unpinned caller: a state_admin
+  // overseeing HIV pharmacy and lab could read Essential stock, because nobody
+  // had written a rule to stop them. Nothing granted that access; it was
+  // inherited from an absent filter.
+  //
+  // So an absent section now resolves to the caller's MODULE rather than to the
+  // whole table. Two accounts keep the old unrestricted meaning, deliberately:
+  //
+  //   system_admin  administers users and holds no operational access at all
+  //                 (Phase 2M.1); it may see the full catalogue and can act on
+  //                 none of it.
+  //   Essential     an account carrying the meta.essential grant, or the
+  //                 essential_admin role, spans both modules by design.
+  const seesEssential = meta.essential === true || accessLevel === 'essential_admin'
+  if (sectionCategories === null && accessLevel !== 'system_admin') {
+    sectionCategories = [...HIV_CATEGORIES]
+  }
+
+  // THE ESSENTIAL GRANT IS ADDITIVE, not a default.
+  //
+  // The 194 granted store-manager logins carry commodity_section = 'pharmacy'
+  // explicitly — the essential-commodities branch requires that section as a
+  // precondition for opening Essential at all. So they are PINNED, and a rule
+  // that only filled in an absent section never reached them: they held the
+  // grant and still could not see a single Essential item.
+  //
+  // Adding the categories to whatever section they already hold is what the
+  // grant means. It also makes legacy agree with the ACL, which has given these
+  // accounts {pharmacy, essential} since Phase 2M.2d — the two were describing
+  // different access for the same people.
+  if (sectionCategories && seesEssential) {
+    sectionCategories = [...new Set([...sectionCategories, ...ESSENTIAL_CATEGORIES])]
+  }
+
   // Individually-granted commodities that fall outside those categories (see
-  // FACILITY_EXTRA_COMMODITIES). Empty for every facility without an explicit grant,
-  // and irrelevant to unrestricted admins, whose category filter is null anyway.
+  // FACILITY_EXTRA_COMMODITIES). Empty for every facility without an explicit grant.
   const sectionCommodityNames = sectionCategories ? extraCommoditiesForFacility(meta.facility_name) : []
 
   req.scope = {

@@ -51,7 +51,7 @@ const UNSCOPED_ROLES = ['overall_admin', 'system_admin']
 // caught up with the metadata it is being re-synced against. '.invalid' is
 // reserved by RFC 2606 and can never be a real account, so excluding all of it
 // cannot hide a genuine defect.
-const NOT_FIXTURE_USER = `u.email not like '%.invalid'`
+const NOT_FIXTURE_USER = `u.email not like '%.invalid' and u.email not like 'probe.create.%'`
 
 // Accounts whose access_level implies a facility scope but which carry no
 // facility_id are deliberately excluded from the ACL entirely

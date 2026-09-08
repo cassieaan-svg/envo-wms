@@ -9,7 +9,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, SECTION_CATEGORIES, todayLagos, entryTimestamp, isPlausibleExpiry, expiryDateBounds } from '../../utils/helpers'
+import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, allowedCategoriesFor, todayLagos, entryTimestamp, isPlausibleExpiry, expiryDateBounds } from '../../utils/helpers'
 
 export function Intake() {
   const store = useAppStore()
@@ -60,7 +60,9 @@ export function Intake() {
     categories[c.category].push(c)
   })
 
-  const sectionCats = SECTION_CATEGORIES[store.commoditySection] || []
+  const sectionCats = allowedCategoriesFor(
+    store.commoditySection, store.currentFacility?.name,
+    store.user?.user_metadata?.essential === true) || []
 
   if (!canManage) return (
     <div>
@@ -74,7 +76,12 @@ export function Intake() {
   )
 
   async function refreshCommodities() {
-    const cats = SECTION_CATEGORIES[store.commoditySection] || []
+    // allowedCategoriesFor, not a raw SECTION_CATEGORIES lookup: it folds in the
+    // per-login Essential grant and the hub-store override, so this list matches
+    // what the API will actually return.
+    const cats = allowedCategoriesFor(
+      store.commoditySection, store.currentFacility?.name,
+      store.user?.user_metadata?.essential === true) || []
     const comms = await api.commodities.list().catch(() => null)
     if (comms) {
       const filtered = cats.length
@@ -131,7 +138,12 @@ export function Intake() {
   async function loadRecent(dateStr) {
     setLoadingR(true)
     const d    = dateStr || historyDate
-    const cats = SECTION_CATEGORIES[store.commoditySection] || []
+    // allowedCategoriesFor, not a raw SECTION_CATEGORIES lookup: it folds in the
+    // per-login Essential grant and the hub-store override, so this list matches
+    // what the API will actually return.
+    const cats = allowedCategoriesFor(
+      store.commoditySection, store.currentFacility?.name,
+      store.user?.user_metadata?.essential === true) || []
     const commodity_ids = cats.length ? store.allCommodities.map(c => c.id) : undefined
     const data = await api.intake.history({
       facility_id: fid, date: d, commodity_ids, section: commoditySection || undefined,

@@ -109,7 +109,7 @@ test('it reads both modules, and the sections still bound it', async () => {
     select u.id, u.raw_user_meta_data->>'admin_state' state
       from users u join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
-     where r.name = 'state_admin' and u.email not like '%.invalid'
+     where r.name = 'state_admin' and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and (u.raw_user_meta_data->>'essential') is null
        and u.raw_user_meta_data->>'admin_state' is not null limit 1`)
   const { rows: fac } = await query(
@@ -139,7 +139,8 @@ test('an account holds an essential module scope only if it was granted one', as
       join roles r on r.id = ur.role_id
       join users u on u.id = s.user_id
      where s.dimension = 'module' and s.scope_id = 'essential'
-       and u.email not like '%.invalid'`)
+       and u.email not like '%.invalid'
+       and u.email not like 'probe.create.%'`)
   assert.ok(rows.length > 0, 'non-vacuous')
   for (const r of rows) {
     assert.ok(r.granted === true || r.role === 'essential_admin',
@@ -154,7 +155,7 @@ test('every dual-module login keeps its HIV half', async () => {
   const { rows } = await query(`
     select count(*)::int n from users u
      where (u.raw_user_meta_data->>'essential')::boolean is true
-       and u.email not like '%.invalid'
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and not exists (select 1 from user_role_scopes s
                         where s.user_id = u.id and s.dimension = 'module' and s.scope_id = 'hiv')`)
   assert.equal(rows[0].n, 0)
@@ -223,7 +224,12 @@ test('its user list contains only accounts granted the Essential module', async 
   // Dual-module logins ARE its users: meta.essential grants both modules, so
   // "only Essential-module accounts" means "holds an essential row", not "holds
   // nothing else".
+  //
+  // 'probe.create.%' accounts are skipped: aclAdminApi's createUser tests mint
+  // REAL @envo.ng logins (that is the point of createUser), and one can be
+  // deleted by its own cleanup between the listing above and the check below.
   for (const u of users) {
+    if (u.email.startsWith('probe.create.')) continue
     const { rows } = await query(
       `select 1 from user_role_scopes
         where user_id = $1 and dimension = 'module' and scope_id = 'essential'`, [u.id])
@@ -242,7 +248,7 @@ test('an HIV-only account is not in its list', async () => {
     select u.email from users u
      where u.raw_user_meta_data->>'admin_state' = 'Akwa Ibom'
        and (u.raw_user_meta_data->>'essential') is null
-       and u.email not like '%.invalid'
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'
      limit 5`)
   assert.ok(rows.length > 0, 'non-vacuous')
   for (const r of rows) assert.ok(!emails.has(r.email), `${r.email} is HIV-only and must be hidden`)

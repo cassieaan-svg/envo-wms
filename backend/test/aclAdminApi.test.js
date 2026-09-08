@@ -53,6 +53,10 @@ test.after(async () => {
     await deleteWithRetry(`delete from users where id = any($1::uuid[])`, [created])
   }
   await deleteWithRetry(`delete from users where email like $1`, [`%${DOMAIN}`])
+  // Safety net for accounts created via createUser: they are real @envo.ng
+  // logins, so one left behind by a failed cleanup looks exactly like a genuine
+  // account to every other suite.
+  await deleteWithRetry(`delete from users where email like 'probe.create.%@envo.ng'`)
   await pool.end()
 })
 
@@ -109,8 +113,16 @@ const someState = async () =>
   (await query(`select distinct state from facilities where state is not null order by 1 limit 1`)).rows[0].state
 const otherState = async s =>
   (await query(`select distinct state from facilities where state is not null and state <> $1 limit 1`, [s])).rows[0].state
+// Never a hub store. `limit 1` used to land on the Akwa Ibom State Office Store,
+// and accounts created there inherit the hub's category grant and trip the
+// suites that assert hub stores hold category scopes and no section scopes.
+// createUser mints REAL @envo.ng logins, so no .invalid exclusion can hide one —
+// the fixture has to avoid the facility with special semantics instead.
 const facilityIn = async state =>
-  (await query(`select id, state from facilities where state = $1 limit 1`, [state])).rows[0]
+  (await query(
+    `select id, state from facilities
+      where state = $1 and name !~* 'state office store|cluster lab store'
+      order by name limit 1`, [state])).rows[0]
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 1. Who reaches this surface at all
@@ -463,9 +475,15 @@ test('an undeclared department cannot be configured', async () => {
 const CREATED = []
 const createdName = () => `probe.create.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`
 
+// Created accounts live at @envo.ng, not the .invalid fixture domain — createUser
+// mints real logins by design — so a leaked one is indistinguishable from a real
+// account and WILL trip other suites' invariants. Hence the deadlock retry: the
+// delete cascades into the same tables syncAcl is writing, and losing that race
+// silently leaves the row behind.
 async function cleanupCreated() {
   if (!CREATED.length) return
-  await query(`delete from users where email = any($1)`, [CREATED.map(n => `${n}@envo.ng`)])
+  await deleteWithRetry(`delete from users where email = any($1)`,
+    [CREATED.map(n => `${n}@envo.ng`)])
   CREATED.length = 0
 }
 

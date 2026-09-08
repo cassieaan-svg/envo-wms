@@ -2,7 +2,7 @@ import express from 'express'
 import { CommodityService } from '../services/commodityService.js'
 import { LogService } from '../services/logService.js'
 import { validators, sendValidationError } from '../middleware/validation.js'
-import { enforceFacilityRead, resolveListFacilityIds } from '../middleware/scope.js'
+import { enforceFacilityRead, resolveListFacilityIds, sectionFilter } from '../middleware/scope.js'
 
 const router = express.Router()
 
@@ -52,13 +52,50 @@ function enforceCatalogueModules(req, res, modules) {
 
 router.get('/', async (req, res) => {
   try {
-    const { module, section, category, active, q } = req.query
+    const { module, section, category, active, q, all } = req.query
+
+    // SCOPED BY DEFAULT. This endpoint used to return the whole catalogue and
+    // rely on the client to discard what the caller may not see (session.js
+    // still does, and useStock turns that filtered list into a request
+    // parameter). That made the browser the boundary — the same
+    // frontend-field-as-access-control pattern this project has been unwinding.
+    //
+    // The ceiling comes from req.scope, so it is the SAME rule the stock,
+    // dispensing, intake, adjustment, transfer, activity and report routes
+    // already apply. Nothing new is invented here, and the ACL resolver is not
+    // consulted — attachScope alone decides.
+    //
+    // `?all=true` is the deliberate escape hatch for administering the catalogue,
+    // where the manager must see modules they do not operate in. It is OPT-IN and
+    // permission-checked rather than an ambient privilege of the role: an
+    // overall_admin gets HIV-only on the session bootstrap and everything on the
+    // Catalogue page, which is the distinction between overseeing a programme and
+    // administering the item list.
+    const wantsAll = all === 'true' || all === '1'
+    if (wantsAll && !isCatalogueManager(req)) {
+      return res.status(403).json({
+        success: false, code: 'FORBIDDEN',
+        error: 'Only a catalogue manager may request the unscoped catalogue.',
+      })
+    }
+
+    // Named scope* in the service so a view filter can never be mistaken for the
+    // caller's ceiling. `categories: null` means unrestricted, which is what
+    // system_admin carries — the escape hatch and that account reach the same
+    // place by different routes, and both are deliberate.
+    const { categories, commodityNames } = sectionFilter(req)
+    const scope = wantsAll ? {} : {
+      scopeCategories: categories,
+      scopeCommodityNames: commodityNames,
+    }
+
     const commodities = await CommodityService.getCommodities({
       module: module || undefined,
       section: section || undefined,
       category: category || undefined,
       activeOnly: active === 'true' || active === '1',
       q: q || undefined,
+      ...scope,
     })
 
     res.json({

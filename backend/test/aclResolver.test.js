@@ -39,7 +39,7 @@ async function aRealUserWithRole(roleName) {
        from user_roles ur
        join roles r on r.id = ur.role_id
        join users u on u.id = ur.user_id
-      where r.name = $1 and u.email not like '%.invalid'
+      where r.name = $1 and u.email not like '%.invalid' and u.email not like 'probe.create.%'
         and ur.scope_id <> ''
       limit 1`,
     [roleName])
@@ -148,7 +148,7 @@ test('LGA scope: covers facilities in the LGA, denies outside it', async () => {
 test('national scope applies ONLY to overall_admin — any facility, any state, no narrowing', async () => {
   const { rows } = await query(
     `select u.id from user_roles ur join roles r on r.id=ur.role_id join users u on u.id=ur.user_id
-      where r.name='overall_admin' and u.email not like '%.invalid' limit 1`)
+      where r.name='overall_admin' and u.email not like '%.invalid' and u.email not like 'probe.create.%' limit 1`)
   const { rows: anyFacility } = await query(`select id from facilities order by random() limit 1`)
   const res = await AclResolver.can(rows[0].id, 'stock.read', { facilityId: anyFacility[0].id })
   assert.equal(res.decision, true, 'overall_admin must cover any facility nationally')

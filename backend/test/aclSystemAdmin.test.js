@@ -26,6 +26,7 @@ import {
 import { authMiddleware } from '../src/middleware/auth.js'
 import commodityRoutes from '../src/routes/commodities.js'
 import { AclResolver } from '../src/services/aclResolver.js'
+import { NOT_TEST_ACCOUNT } from './helpers/realAccounts.js'
 
 test.after(async () => { await pool.end() })
 
@@ -255,7 +256,9 @@ test('the module backfill gave HIV scope to neither national nor cross-module ro
       from user_role_scopes s
       join user_roles ur on ur.user_id = s.user_id and ur.role_id = s.role_id
       join roles r on r.id = ur.role_id
-     where r.name in ('system_admin', 'essential_admin') and s.dimension = 'module'`)
+      join users u on u.id = s.user_id
+     where r.name in ('system_admin', 'essential_admin') and s.dimension = 'module'
+       and ${NOT_TEST_ACCOUNT}`)
 
   assert.equal(rows.filter(r => r.name === 'system_admin').length, 0,
     'system_admin carries no module row at all')
@@ -281,7 +284,7 @@ test('no HIV role ever acquires the Essential module', async () => {
      where s.dimension = 'module' and s.scope_id = 'essential'
        and r.name <> 'essential_admin'
        and (u.raw_user_meta_data->>'essential') is distinct from 'true'
-       and u.email not like '%.invalid'`)
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'`)
   assert.deepEqual(rows, [],
     'only the essential_admin role, or an account holding meta.essential, may carry Essential module scope')
 })
@@ -291,7 +294,7 @@ test('every other account still has exactly one module scope', async () => {
     select count(*)::int n from user_roles ur
       join users u on u.id = ur.user_id
       join roles r on r.id = ur.role_id
-     where u.email not like '%.invalid'
+     where u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and r.name not in ('system_admin', 'essential_admin')
        and not exists (select 1 from user_role_scopes s
                         where s.user_id = ur.user_id and s.dimension = 'module')`)

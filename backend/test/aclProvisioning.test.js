@@ -191,18 +191,18 @@ test('syncing does not disturb existing users', async () => {
     // their own '.invalid' fixtures concurrently, and a global count would make
     // this assertion about their timing rather than about syncAcl.
     `select (select count(*)::int from user_roles ur join users u on u.id = ur.user_id
-              where u.email not like '%.invalid') roles,
+              where u.email not like '%.invalid' and u.email not like 'probe.create.%') roles,
             (select count(*)::int from user_role_scopes s join users u on u.id = s.user_id
-              where u.email not like '%.invalid') scopes`)
+              where u.email not like '%.invalid' and u.email not like 'probe.create.%') scopes`)
   await syncAcl({ quiet: true })
   const after = await query(
     // Real accounts only. aclFoundation and aclUserRoleScopes create and drop
     // their own '.invalid' fixtures concurrently, and a global count would make
     // this assertion about their timing rather than about syncAcl.
     `select (select count(*)::int from user_roles ur join users u on u.id = ur.user_id
-              where u.email not like '%.invalid') roles,
+              where u.email not like '%.invalid' and u.email not like 'probe.create.%') roles,
             (select count(*)::int from user_role_scopes s join users u on u.id = s.user_id
-              where u.email not like '%.invalid') scopes`)
+              where u.email not like '%.invalid' and u.email not like 'probe.create.%') scopes`)
   assert.deepEqual(after.rows[0], before.rows[0], 'a no-op sync must be exactly that')
 })
 

@@ -29,6 +29,11 @@ export function Catalogue() {
   async function load() {
     const [list, mods, cats] = await Promise.all([
       api.commodities.list({
+        // The one caller that asks for the UNSCOPED catalogue. Everywhere else
+        // the endpoint now narrows to the caller's own sections, but this page
+        // administers the item list itself, so it must show modules the manager
+        // does not operate in. The server permission-checks the flag.
+        all: true,
         module: moduleFilter || undefined,
         section: sectionFilter || undefined,
         category: categoryFilter || undefined,

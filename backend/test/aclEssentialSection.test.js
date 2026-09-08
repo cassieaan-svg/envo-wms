@@ -71,7 +71,7 @@ test('every Essential account has EXACTLY the allowed sections', async () => {
       join roles r on r.id = ur.role_id
       left join user_role_scopes s
         on s.user_id = u.id and s.dimension = 'commodity' and s.scope_type = 'section'
-     where ${IS_ESSENTIAL} and u.email not like '%.invalid'
+     where ${IS_ESSENTIAL} and u.email not like '%.invalid' and u.email not like 'probe.create.%'
      group by u.email`)
 
   assert.ok(rows.length > 0, 'non-vacuous — Essential accounts exist')
@@ -88,7 +88,7 @@ test('both markers are represented — the rule is not keyed on the email patter
       from users u
       join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
-     where ${IS_ESSENTIAL} and u.email not like '%.invalid'`)
+     where ${IS_ESSENTIAL} and u.email not like '%.invalid' and u.email not like 'probe.create.%'`)
   assert.ok(rows[0].by_grant > 0, 'grant-holders covered')
   assert.ok(rows[0].by_role > 0, 'the essential_admin role covered')
 })
@@ -104,7 +104,7 @@ test('an Essential account reaches its two sections and no others', async () => 
       join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
      where ${IS_ESSENTIAL} and r.name = 'facility' and ur.scope_type = 'facility'
-       and u.email not like '%.invalid' limit 1`)
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%' limit 1`)
   const { id, facility_id } = rows[0]
 
   // Everything inside pharmacy OR essential must be reachable — including the
@@ -144,7 +144,7 @@ test('removing the section scope would UNSCOPE it — which is why the row must 
       join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
      where ${IS_ESSENTIAL} and r.name = 'facility' and ur.scope_type = 'facility'
-       and u.email not like '%.invalid' limit 1`)
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%' limit 1`)
   const { id, role_id, facility_id } = rows[0]
   const lab = (await query(
     `select id from commodities where category = 'Lab consumables' limit 1`)).rows[0].id
@@ -183,7 +183,7 @@ test('lab and pharmacy accounts keep the sections they had', async () => {
       join roles r on r.id = ur.role_id
       join user_role_scopes s
         on s.user_id = u.id and s.dimension = 'commodity' and s.scope_type = 'section'
-     where not ${IS_ESSENTIAL} and u.email not like '%.invalid'
+     where not ${IS_ESSENTIAL} and u.email not like '%.invalid' and u.email not like 'probe.create.%'
      group by 1, 2 order by 1, 2`)
   for (const r of rows) {
     assert.equal(r.acl_section, r.meta_section,
@@ -210,7 +210,7 @@ test('every Essential account kept its geographic scope', async () => {
     select count(*)::int n from users u
       join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
-     where ${IS_ESSENTIAL} and u.email not like '%.invalid'
+     where ${IS_ESSENTIAL} and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and not exists (select 1 from user_role_scopes s
                         where s.user_id = u.id and s.dimension = 'geography')`)
   assert.equal(rows[0].n, 0, 'the section change must not have cost anyone their geography')
@@ -221,7 +221,7 @@ test('module scopes are unchanged — this was the section dimension only', asyn
     select count(*)::int n from users u
       join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
-     where ${IS_ESSENTIAL} and u.email not like '%.invalid'
+     where ${IS_ESSENTIAL} and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and not exists (select 1 from user_role_scopes s
                         where s.user_id = u.id and s.dimension = 'module' and s.scope_id = 'essential')`)
   assert.equal(rows[0].n, 0, 'every Essential account still holds the essential module')
@@ -252,7 +252,7 @@ test('re-running the backfill is a no-op, not a duplicate', async () => {
     select u.id from users u
       join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
-     where ${IS_ESSENTIAL} and u.email not like '%.invalid' limit 1`)
+     where ${IS_ESSENTIAL} and u.email not like '%.invalid' and u.email not like 'probe.create.%' limit 1`)
   const before = await sectionsOf(rows[0].id)
   for (let i = 0; i < 4; i++) if ((await syncAcl({ quiet: true })).synced) break
   assert.deepEqual(await sectionsOf(rows[0].id), before,

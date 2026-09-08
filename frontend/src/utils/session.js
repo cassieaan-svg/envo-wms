@@ -42,7 +42,8 @@ export async function hydrateSession(user) {
   // Restrict to the account's section, or to the hub-store set (lab + general
   // consumables) for a State Office / Cluster Lab Store. Admins (no section) keep the
   // full catalogue. allowedCats null = all.
-  const allowedCats = allowedCategoriesFor(commoditySection, meta.facility_name)
+  const allowedCats = allowedCategoriesFor(
+    commoditySection, meta.facility_name, meta.essential === true)
   let allCommodities = comms || []
   if (allowedCats) {
     // allowsCommodity, not a plain category test: a facility may hold individual

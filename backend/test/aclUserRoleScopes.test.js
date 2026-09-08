@@ -85,9 +85,9 @@ test('geography rows reconcile exactly with user_roles scoped assignments', asyn
   const { rows } = await query(`
     select
       (select count(*)::int from user_roles ur join users u on u.id = ur.user_id
-        where ur.scope_type <> '' and ur.scope_id <> '' and u.email not like '%.invalid') expected,
+        where ur.scope_type <> '' and ur.scope_id <> '' and u.email not like '%.invalid' and u.email not like 'probe.create.%') expected,
       (select count(*)::int from user_role_scopes urs join users u on u.id = urs.user_id
-        where urs.dimension = 'geography' and u.email not like '%.invalid') actual`)
+        where urs.dimension = 'geography' and u.email not like '%.invalid' and u.email not like 'probe.create.%') actual`)
   assert.equal(rows[0].actual, rows[0].expected)
 })
 
@@ -97,7 +97,7 @@ test('every geography row matches its user_roles pair exactly', async () => {
       join user_roles ur on ur.user_id = urs.user_id and ur.role_id = urs.role_id
       join users u on u.id = urs.user_id
      where urs.dimension = 'geography'
-       and u.email not like '%.invalid'
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and (urs.scope_type <> ur.scope_type or urs.scope_id <> ur.scope_id)`)
   assert.equal(rows[0].n, 0, 'the backfill must be a verbatim copy, not a reinterpretation')
 })
@@ -210,7 +210,7 @@ test('an Essential account is the deliberate exception, holding two sections', a
       join user_roles ur on ur.user_id = u.id
       join roles r on r.id = ur.role_id
      where ((u.raw_user_meta_data->>'essential')::boolean is true or r.name = 'essential_admin')
-       and u.email not like '%.invalid'
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'
        and (select count(*) from user_role_scopes s
              where s.user_id = u.id and s.dimension = 'commodity'
                and s.scope_type = 'section') <> 2`)
@@ -222,8 +222,10 @@ test('hub stores REPLACE their section with the hub category set, never extend i
     select count(*)::int n from user_role_scopes urs
       join user_roles ur on ur.user_id = urs.user_id
       join facilities f on f.id::text = ur.scope_id
+      join users u on u.id = urs.user_id
      where urs.dimension = 'commodity' and urs.scope_type = 'section'
-       and f.name ~* 'state office store|cluster lab store'`)
+       and f.name ~* 'state office store|cluster lab store'
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'`)
   assert.equal(sections[0].n, 0, 'a hub store must not keep a section row')
 
   const { rows: cats } = await query(`
@@ -249,7 +251,7 @@ test('the Alere Determine exception is a commodity row, not a hardcoded name', a
       join commodities c on c.id::text = urs.scope_id
       join users u on u.id = urs.user_id
      where urs.dimension = 'commodity' and urs.scope_type = 'commodity'
-       and u.email not like '%.invalid'`)
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'`)
   assert.equal(rows.length, 1, 'exactly one individual-commodity grant exists today')
   assert.equal(rows[0].commodity, 'Alere Determine')
   assert.match(rows[0].facility, /akwa ibom state office store/i)
