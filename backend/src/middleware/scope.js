@@ -75,8 +75,21 @@ export function attachScope(req, res, next) {
   // Section (pharmacy/lab) is null — "sees both" — for overall_admin / state_admin.
   // Everyone else (cluster_admin, lga_admin, section-scoped state_viewers) is pinned
   // to their token's commodity_section; a state_viewer with none set still sees both.
-  const bothSections = isAdminFlag ||
-    ['overall_admin', 'state_admin'].includes(accessLevel)
+  // overall_admin is NOT here. It was, and that discarded its commodity_section
+  // before anything could read it — so Lab HQ and Pharmacy HQ, provisioned as
+  // overall_admin tagged 'lab' and 'pharmacy', both saw every section. The tag
+  // was read by the frontend to pick which pages to render and by nothing else,
+  // which made a display field the only thing standing between an HQ viewer and
+  // another section's data. create_hq_viewers.mjs says as much: the tag exists
+  // "so the UI shows only that section's data".
+  //
+  // An UNTAGGED overall_admin (envo.admin) still sees every HIV section — it
+  // falls through to the module default below, exactly as before. Only a tagged
+  // one narrows, which is what the tag was always meant to mean.
+  //
+  // state_admin stays: it genuinely oversees both sections, and its own
+  // commodity_section — where one exists — is not an access statement.
+  const bothSections = isAdminFlag || accessLevel === 'state_admin'
   const section = bothSections ? null : (meta.commodity_section || null)
 
   // Section include-list. A hub store — state office or cluster store — handles a
