@@ -1,9 +1,15 @@
 import { query, withTransaction } from '../db.js';
 
 export class FacilityService {
-  static async list({ state = null, lga = null, search = null, includeInactive = false } = {}) {
+  static async list({
+    state = null,
+    lga = null,
+    search = null,
+    facilityType = null,
+    includeInactive = false,
+  } = {}) {
     const { rows } = await query(
-      `SELECT f.id, f.envo_facility_id, f.name, f.state, f.lga, f.is_active, f.created_at,
+      `SELECT f.id, f.envo_facility_id, f.name, f.state, f.lga, f.facility_type, f.is_active, f.created_at,
               -- What the facility owes the store. Joined here so the list can be scanned
               -- for debtors without opening each facility in turn; the balances view
               -- already encodes which schemes are billable, so this doesn't restate it.
@@ -15,9 +21,10 @@ export class FacilityService {
           AND ($2::text IS NULL OR f.state = $2)
           AND ($3::text IS NULL OR f.lga = $3)
           AND ($4::text IS NULL OR f.name ILIKE '%' || $4 || '%')
+          AND ($5::text IS NULL OR f.facility_type = $5)
         GROUP BY f.id
         ORDER BY f.state, f.lga NULLS LAST, f.name`,
-      [includeInactive, state, lga, search]
+      [includeInactive, state, lga, search, facilityType]
     );
     return rows;
   }

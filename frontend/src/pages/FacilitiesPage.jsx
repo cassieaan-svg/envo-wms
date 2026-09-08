@@ -11,6 +11,7 @@ export default function FacilitiesPage({ isAdmin }) {
   const [facilities, setFacilities] = useState([]);
   const [lgas, setLgas] = useState([]);
   const [lgaFilter, setLgaFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
   const [search, setSearch] = useState('');
   const [stockFor, setStockFor] = useState(null);
   const [historyFor, setHistoryFor] = useState(null);
@@ -22,7 +23,7 @@ export default function FacilitiesPage({ isAdmin }) {
     setLoading(true);
     try {
       const [list, lgaList] = await Promise.all([
-        api.facilities.list({ lga: lgaFilter, search }),
+        api.facilities.list({ lga: lgaFilter, search, facilityType: typeFilter }),
         api.facilities.lgas(),
       ]);
       setFacilities(list);
@@ -37,7 +38,7 @@ export default function FacilitiesPage({ isAdmin }) {
 
   useEffect(() => {
     load();
-  }, [lgaFilter, search]);
+  }, [lgaFilter, typeFilter, search]);
 
   return (
     <>
@@ -73,15 +74,23 @@ export default function FacilitiesPage({ isAdmin }) {
             ))}
           </select>
         </Field>
+        <Field label="Level">
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="">primary &amp; secondary</option>
+            <option value="primary">primary</option>
+            <option value="secondary">secondary</option>
+          </select>
+        </Field>
         <button className="btn" onClick={load} disabled={loading}>
           {loading ? 'refreshing…' : 'Refresh'}
         </button>
-        {(search || lgaFilter) && (
+        {(search || lgaFilter || typeFilter) && (
           <button
             className="btn"
             onClick={() => {
               setSearch('');
               setLgaFilter('');
+              setTypeFilter('');
             }}
           >
             Clear filters
@@ -104,6 +113,7 @@ export default function FacilitiesPage({ isAdmin }) {
                     { header: 'Facility', value: (f) => f.name },
                     { header: 'State', value: (f) => f.state },
                     { header: 'LGA', value: (f) => f.lga || '' },
+                    { header: 'Level', value: (f) => f.facility_type || '' },
                   ],
                   facilities
                 )
@@ -124,6 +134,7 @@ export default function FacilitiesPage({ isAdmin }) {
                 <tr>
                   <th className="wrap">Name</th>
                   <th>LGA</th>
+                  <th>Level</th>
                   <th className="num">Owed</th>
                   <th />
                 </tr>
@@ -133,6 +144,15 @@ export default function FacilitiesPage({ isAdmin }) {
                   <tr key={facility.id}>
                     <td className="wrap">{facility.name}</td>
                     <td>{facility.lga || '—'}</td>
+                    <td>
+                      {facility.facility_type ? (
+                        <span className={`badge ${facility.facility_type === 'primary' ? 'default' : 'manual'}`}>
+                          {facility.facility_type}
+                        </span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
                     {/* What this facility owes the store, so debtors can be spotted while
                         scanning the list instead of only from the Accounts page. */}
                     <td className="num">

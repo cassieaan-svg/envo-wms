@@ -1,0 +1,522 @@
+name,lga,facility_type
+Victor Attah Int'l Airport Clinic,Uruan,secondary
+General Hospital Ikot Ekpene,Ikot Ekpene,secondary
+General Hospital Iquita (Oron),Oron,secondary
+Immanuel General Hospital Eket,Eket,secondary
+General Hospital Ikot Abasi,Ikot Abasi,secondary
+General Hospital Etinan,Etinan,secondary
+General Hospital Ikono,Ikono,secondary
+"General Hospital Ikpe Ikot Nkon, Ini",Ini,secondary
+General Hospital Ukpom Abak,Abak,secondary
+General Hospital Amammong Okobo,Okobo,secondary
+General Hospital Ikpe Annang,Essien Udim,secondary
+General Hospital Mbioto II,Etinan,secondary
+General Hospital Ikot Okoro,Oruk Anam,secondary
+General Hospital Uruk Ata Ikot Ekpor (Etim Ekpo),Etim Ekpo,secondary
+Methodist General Hospital Ituk Mbang,Uruan,secondary
+General Hospital Urue Offong Oruko,Urue Offong Oruko,secondary
+Mount Carmel Hospital Akpa Utong,Ibesikpo Asutan,secondary
+QIC Leprosy Hospital Ekpene Obom,Etinan,secondary
+Mary Slessor General Hospital Itu,Itu,secondary
+Cottage Hospital Asong,Mkpat Enin,secondary
+Cottage Hospital Ikot Abia,Mkpat Enin,secondary
+Cottage Hospital Ikot Ekpaw,Mkpat Enin,secondary
+Cottage Hospital Ikot Eko Ibon,Onna,secondary
+Cottage Hospital Akai Ubium,Nsit Ubium,secondary
+Cottage Hospital Ikot Ekpene Udo,Nsit Ubium,secondary
+Cottage Hospital Ekpene Obo,Esit Eket,secondary
+Psychiatric Hospital Eket,Eket,secondary
+Infectious Disease Hospital Ikot Ekpene,Ikot Ekpene,secondary
+Cottage Hospital Ukana,Essien Udim,secondary
+Cottage Hospital Ibeno,Ibeno,secondary
+Redeemer Cottage Hospital Ibesit,Oruk Anam,secondary
+Cottage Hospital Ika,Ika,secondary
+Cottage Hospital Eastern Obolo/General Hospital Okoroette,Eastern Obolo,secondary
+Comprehensive Health Centre Okon Eket,Eket,secondary
+Comprehensive Health Centre Awa,Onna,secondary
+Comprehensive Health Centre Ikot Edibon,Nsit Ubium,secondary
+Comprehensive Health Centre Ikot Nkpene,Nsit Atai,secondary
+Comprehensive Health Centre Mbiaya Uruan,Uruan,secondary
+Comprehensive Health Centre Nto Edino,Obot Akara,secondary
+Comprehensive Health Centre Essene,Ikot Abasi,secondary
+Government Dental Centre Ikot Ekpene,Ikot Ekpene,secondary
+Government Dental Centre Eket,Eket,secondary
+Ukanafun General Hospital,Ukanafun,secondary
+Ibanang Ediene Health Centre,Abak,primary
+Itung Health Centre,Abak,primary
+Operational Base Abak Primary Health Centre,Abak,primary
+Utu Ikot Ebak Health Post,Abak,primary
+Ikot Akpan Ikpong Health Centre,Abak,primary
+Afaha Obong Health Centre,Abak,primary
+Midim Health Centre,Abak,primary
+Ikot Edong Health Post,Abak,primary
+Abiakpo Health Centre,Abak,primary
+Ikot Ossom Health Post,Abak,primary
+Ibong Otoro Health Centre,Abak,primary
+Okoroette Primary Health Centre,Eastern Obolo,primary
+Okorombokho Health Post,Eastern Obolo,primary
+Amadaka Primary Health Centre,Eastern Obolo,primary
+Elekpon Health Post,Eastern Obolo,primary
+Ikonta Obianga Primary Health Centre,Eastern Obolo,primary
+Emereoko Health Centre,Eastern Obolo,primary
+Amauka Primary Health Centre,Eastern Obolo,primary
+Okoroinyong Primary Health Centre,Eastern Obolo,primary
+Iko Primary Health Centre,Eastern Obolo,primary
+Atabrikang Health Post,Eastern Obolo,primary
+Afaha Atai Health Post,Eket,primary
+Idung Iniang Health Centre,Eket,primary
+Ikot Usoekong Health Post,Eket,primary
+Effoi Health Centre,Eket,primary
+Odio Health Centre,Eket,primary
+Ikot Okudomo Health Centre,Eket,primary
+Idua Health Post,Eket,primary
+Ikot Ebok Poly Operational Base Clinic,Eket,primary
+Mkpok Model Health Centre,Eket,primary
+Nduo Eduo Health Post,Eket,primary
+Ikot Abasi Okon Comprehensive Health Centre,Eket,primary
+Ikot Ukpong Health Post,Eket,primary
+Iko Efak Health Post,Esit Eket,primary
+Ebe Ekpi Health Post,Esit Eket,primary
+Ebighi Okpono Health Post,Esit Eket,primary
+Edor Health Centre,Esit Eket,primary
+Ekpene Obo Health Post,Esit Eket,primary
+Etebi Health Centre,Esit Eket,primary
+Etebi Idung Assan Health Centre,Esit Eket,primary
+Ikpa Health Centre,Esit Eket,primary
+Afaha Ekpenedi Health Post,Esit Eket,primary
+Base Uquo Primary Health Centre,Esit Eket,primary
+Adiasim Health Centre,Essien Udim,primary
+Afaha Ikot Ebak Primary Health Centre,Essien Udim,primary
+Midim Atan Health Centre,Essien Udim,primary
+Ekpenyong Atai Health Centre,Essien Udim,primary
+Ikpe Annang Health Centre,Essien Udim,primary
+Odoro Ikot 1 Health Centre,Essien Udim,primary
+Odoro Ikot 2 Health Centre,Essien Udim,primary
+Okon Ikot Ocho Health Centre,Essien Udim,primary
+Ukana East Primary Health Centre,Essien Udim,primary
+Ikot Otu Ukana West Health Centre,Essien Udim,primary
+Ukana Ikot Ideh Health Centre,Essien Udim,primary
+Ikot Obioma Health Centre,Etim Ekpo,primary
+Ikpe Annang Primary Health Centre (Model),Etim Ekpo,primary
+Ikot Ebo Health Centre,Etim Ekpo,primary
+Atan Eka Uruk Eshiet Health Centre,Etim Ekpo,primary
+Obong Ntak Health Centre,Etim Ekpo,primary
+Ikot Udobong Health Centre,Etim Ekpo,primary
+Iwukem Primary Health Centre,Etim Ekpo,primary
+Etinan Primary Health Centre,Etinan,primary
+Ekpene Ukpa Health Centre,Etinan,primary
+Ikot Udo Oto Primary Health Centre,Etinan,primary
+Edem Ekpat Primary Health Centre,Etinan,primary
+Ikot Udobia Primary Health Centre,Etinan,primary
+Ikot Obio Inyang Health Centre,Etinan,primary
+Ikot Ekan Health Post,Etinan,primary
+Nkana Health Centre,Etinan,primary
+Ikot Esen Oku Health Centre,Etinan,primary
+Akpasak Efa Health Post,Etinan,primary
+Iwo Etor Health Centre,Etinan,primary
+Upenekan Operational Base Primary Health Centre,Ibeno,primary
+Itak Abasi Health Centre,Ibeno,primary
+Opolom Health Centre,Ibeno,primary
+Mkpanak Health Centre,Ibeno,primary
+Iwuokpom Opolom Health Post,Ibeno,primary
+Ndito Eka Iba Health Centre,Ibeno,primary
+Inua Iyiet Ikot Health Post,Ibeno,primary
+Okoroutip Health Centre,Ibeno,primary
+Iwuochang Health Post,Ibeno,primary
+Atabrikan Health Post,Ibeno,primary
+Atia Health Centre,Ibeno,primary
+Okop Ndua Erong Health Centre,Ibesikpo Asutan,primary
+Ikot Obio Edim Health Centre,Ibesikpo Asutan,primary
+Ikot Akpaedung Health Post,Ibesikpo Asutan,primary
+Ikot Atang Esen Health Post,Ibesikpo Asutan,primary
+Ikot Nkwo Health Post,Ibesikpo Asutan,primary
+Afaha Atai Health Centre,Ibesikpo Asutan,primary
+Nung Udoe Operational Base Primary Health Centre,Ibesikpo Asutan,primary
+Nung Udoe Model Health Centre,Ibesikpo Asutan,primary
+Afaha Udoeyop Health Centre,Ibesikpo Asutan,primary
+Ikot Edung Health Centre,Ibiono-Ibom,primary
+Ikpa Operational Base Primary Health Centre,Ibiono-Ibom,primary
+Okopedi Use Health Centre,Ibiono-Ibom,primary
+Ididep Model Health Centre,Ibiono-Ibom,primary
+Ikot Esen Model Health Centre,Ibiono-Ibom,primary
+Idoro Comprehensive Health Centre,Ibiono-Ibom,primary
+Ikot Adaidem Primary Health Centre,Ibiono-Ibom,primary
+Ikot Idaha Health Centre,Ibiono-Ibom,primary
+Nsan Health Centre,Ibiono-Ibom,primary
+Ibiaku Health Centre,Ibiono-Ibom,primary
+Ikpanya Health Centre,Ibiono-Ibom,primary
+Achan Ika Health Centre,Ika,primary
+Ikot Okoro Ata Leprosy Clinic,Ika,primary
+Ikot Inyang Ese Health Post,Ika,primary
+Urua Inyang Operational Base Primary Health Centre,Ika,primary
+Efen Ikot Udonya Health Post,Ika,primary
+Itak Nto Urua Health Post,Ika,primary
+Ikot Akpan Anwa Health Centre,Ika,primary
+Ikot Udom Health Centre,Ika,primary
+Nto Uso Health Centre,Ika,primary
+Nto Etukudo Health Centre,Ika,primary
+Ediene I Health Centre,Ikono,primary
+Etip Ediene Health Centre,Ikono,primary
+Nung Ukim Health Centre,Ikono,primary
+Asanting Ikono Immunization Primary Health Centre,Ikono,primary
+Ibiaku Ntok Okpo Primary Health Centre,Ikono,primary
+Mbiabong Ukam Health Centre,Ikono,primary
+Ukpom Primary Health Centre,Ikono,primary
+Nung Udoe Itak Health Centre,Ikono,primary
+Ikot Idaha Primary Health Centre,Ikono,primary
+Nkwot Nung Imo Health Centre,Ikono,primary
+Nkwot Edem Edet Health Post,Ikono,primary
+Edemaya Primary Health Centre,Ikot Abasi,primary
+Ikot Okpok Health Post,Ikot Abasi,primary
+Ikot Ekara Health Centre,Ikot Abasi,primary
+Ikot Abasi Primary Health Centre,Ikot Abasi,primary
+Ikot Etetuk Health Centre,Ikot Abasi,primary
+Essene Health Centre,Ikot Abasi,primary
+Ikot Usop Primary Health Centre,Ikot Abasi,primary
+Ikot Akan Primary Health Centre,Ikot Abasi,primary
+Ikot Okwo Primary Health Centre,Ikot Abasi,primary
+Ikot Umiang Okon Health Centre,Ikot Abasi,primary
+Utu Edem Usung Health Post,Ikot Ekpene,primary
+Uruk Uso Health Centre,Ikot Ekpene,primary
+Abiakpo Ikot Essien Health Centre,Ikot Ekpene,primary
+Utu Ikot Ekpenyong Health Post,Ikot Ekpene,primary
+Amayam Health Centre,Ikot Ekpene,primary
+Ikot Ekpene Operational Base Primary Health Centre,Ikot Ekpene,primary
+Ikot Inyang Health Post,Ikot Ekpene,primary
+Ikot Udoe Health Post,Ikot Ekpene,primary
+Ikot Osura Health Post,Ikot Ekpene,primary
+Mbiaso Health Post,Ikot Ekpene,primary
+Abiakpo Ikot Ntuen Health Post,Ikot Ekpene,primary
+Mbiabong Ikot Udofia Health Centre,Ini,primary
+Ikpe Ikot Nkon Health Centre,Ini,primary
+Ogu Itumbonuso Health Centre,Ini,primary
+Iwerre Health Centre,Ini,primary
+Odoro Ukwok Health Centre,Ini,primary
+Usuk Ibakesi Health Centre,Ini,primary
+Usuk Ukwok Health Post,Ini,primary
+Mbiabong Health Post,Itu,primary
+Ekritam Primary Health Centre,Itu,primary
+Uyo Itam Health Centre,Itu,primary
+Ikot Andem Health Centre,Itu,primary
+Nkim Itam Health Centre,Itu,primary
+Mbak Atai Operational Base Primary Health Centre,Itu,primary
+Ayadehe Health Post,Itu,primary
+Oma Oku Iboku Health Centre,Itu,primary
+West Itam Primary Health Centre,Itu,primary
+Mbak Itam 3 Health Centre,Itu,primary
+Ntak Inyang Health Centre,Itu,primary
+Ebughu 1 Primary Health Centre,Mbo,primary
+Oduo Primary Health Centre,Mbo,primary
+Asiak Obufa Health Post,Mbo,primary
+Esuk Enwang Health Centre,Mbo,primary
+Eyo Ukut Enwang 1 Health Post,Mbo,primary
+Enwang Primary Health Centre,Mbo,primary
+Ibaka Primary Health Centre,Mbo,primary
+Uda Mbo Primary Health Centre,Mbo,primary
+Unyenge Health Post,Mbo,primary
+Udesi Primary Health Centre,Mbo,primary
+Ibekwe Akpan Nya Health Centre,Mkpat-Enin,primary
+Ikot Abia Enin Health Post,Mkpat-Enin,primary
+Ikot Idiong Health Centre,Mkpat-Enin,primary
+Ikot Akata Health Centre,Mkpat-Enin,primary
+Ukam Health Centre,Mkpat-Enin,primary
+Ikot Akpaden Health Centre,Mkpat-Enin,primary
+Ndon Health Post,Mkpat-Enin,primary
+Ikot Abasi Obio Nkan Health Centre,Mkpat-Enin,primary
+Ikot Eda Health Centre,Mkpat-Enin,primary
+Etuk Nung Ukim Health Centre,Mkpat-Enin,primary
+Minya Health Centre,Mkpat-Enin,primary
+Operational Base Mkpat Enin Primary Health Centre,Mkpat-Enin,primary
+Eyonsek Health Centre,Udung-Uko,primary
+Eyofin Primary Health Centre,Udung-Uko,primary
+Ukukudung Health Post,Udung-Uko,primary
+Eyo Okponung Primary Health Centre,Udung-Uko,primary
+Eyobiosiio Health Post,Udung-Uko,primary
+Eyotai Health Centre,Udung-Uko,primary
+Uboro Isong Inyang Health Post,Udung-Uko,primary
+Eyibia Health Post,Udung-Uko,primary
+Edikor Eyokpu Primary Health Centre,Udung-Uko,primary
+Ekim Health Centre,Udung-Uko,primary
+Odot Operational Base Primary Health Centre,Nsit-Atai,primary
+Iwok Health Post,Nsit-Atai,primary
+Ikot Otu Health Post,Nsit-Atai,primary
+Ikot Mkpo Health Centre,Nsit-Atai,primary
+Ikot Obon Health Centre,Nsit-Atai,primary
+Ikot Itie Udung Health Centre,Nsit-Atai,primary
+Ikot Edebe Health Centre,Nsit-Atai,primary
+Ibedu Health Centre,Nsit-Atai,primary
+Okoro Nsit Health Post,Nsit-Atai,primary
+Ikot Uyo Health Centre,Nsit-Atai,primary
+Mbiokporo 1 Primary Health Centre,Nsit-Ibom,primary
+Ikot Offiok Health Centre,Nsit-Ibom,primary
+Oboatai Health Centre,Nsit-Ibom,primary
+Asang Primary Health Centre,Nsit-Ibom,primary
+Oboetok Health Post,Nsit-Ibom,primary
+Afaha Offiong Operational Base Primary Health Centre,Nsit-Ibom,primary
+Afia Nsit Urua Nko Health Centre,Nsit-Ibom,primary
+Afaha Abia Health Centre,Nsit-Ibom,primary
+Ikot Nya Health Post,Nsit-Ibom,primary
+Mbiaso Primary Health Centre,Nsit-Ibom,primary
+Ikot Ukobo Health Centre,Nsit-Ubium,primary
+Itreto Health Centre,Nsit-Ubium,primary
+Ikot Edibon Operational Base Primary Health Centre,Nsit-Ubium,primary
+Ikot Eyo Health Centre,Nsit-Ubium,primary
+Ikot Ekwere Model Health Centre,Nsit-Ubium,primary
+Ikot Ubo Health Centre,Nsit-Ubium,primary
+Nung Obong Primary Health Centre,Nsit-Ubium,primary
+Ikot Abia Anwan Health Centre,Obot Akara,primary
+Nto Eton Health Post,Obot Akara,primary
+Ubon Akwa Health Post,Obot Akara,primary
+Ikot Ide Health Post,Obot Akara,primary
+Okop Eto Health Post,Obot Akara,primary
+Nto Edino Operation Base Primary Health Centre,Obot Akara,primary
+Abama Health Centre,Obot Akara,primary
+Obot Akara Health Centre,Obot Akara,primary
+Nko Health Centre,Obot Akara,primary
+Ikot Utu Model Primary Health Centre,Obot Akara,primary
+Mbokpu Oduobo Primary Health Centre,Okobo,primary
+Ekeya Health Centre,Okobo,primary
+Urue Ita Health Post,Okobo,primary
+Eweme Model Health Centre,Okobo,primary
+Eastern Okobo Health Centre,Okobo,primary
+Odobo Health Centre,Okobo,primary
+Utine Health Post,Okobo,primary
+Okopedi Primary Health Centre,Okobo,primary
+Ikot Idem Udo Health Centre,Onna,primary
+Edem Idim Ishiet Health Post,Onna,primary
+Ikot Akpan Nko Health Centre,Onna,primary
+Mkpok Health Centre,Onna,primary
+Ikot Nkan Health Centre,Onna,primary
+Abat Primary Health Centre,Onna,primary
+Ikot Annang Health Centre,Onna,primary
+Ikwe Health Centre,Onna,primary
+Ukpana Health Centre,Onna,primary
+Ikot Udo Health Centre,Onna,primary
+Idua Assang Health Post,Oron,primary
+Anamfa Health Post,Oron,primary
+Iyamba Health Post,Oron,primary
+Afaha Eduok Ukpata Primary Health Centre,Oron,primary
+Esuk Oro Health Post,Oron,primary
+Esin Ufot Primary Health Centre,Oron,primary
+Oron Ija Primary Health Centre,Oron,primary
+Eyo Abasi Health Post,Oron,primary
+Uya Oron Health Post,Oron,primary
+Ikot Otok Health Centre,Oruk Anam,primary
+Ikot Akpan Essien Health Centre,Oruk Anam,primary
+Ikot Esenam Health Centre,Oruk Anam,primary
+Ikot Ukpong Obiose Health Centre,Oruk Anam,primary
+Ekparakwa Health Centre,Oruk Anam,primary
+Ntak Ibesit Health Post,Oruk Anam,primary
+Ikot Iba Health Centre,Oruk Anam,primary
+Ikot Udoro Health Centre,Oruk Anam,primary
+Ikot Ibritam Operational Base Primary Health Centre,Oruk Anam,primary
+Ikot Inyang1 Ikot Ibritam Ll in Ward 2 Primary Health Centre,Oruk Anam,primary
+Nung Okubo 2 Health Centre,Oruk Anam,primary
+Ikot Obio Nkan Health Post,Oruk Anam,primary
+Inen Nsai Health Post,Oruk Anam,primary
+Obiokpa Primary Health Centre,Oruk Anam,primary
+Afaha Ikot Inyang Health Centre,Ukanafun,primary
+Northern Afaha Health Centre,Ukanafun,primary
+Ikot Oku Usung Health Post,Ukanafun,primary
+Utu Nsekhe Health Centre,Ukanafun,primary
+Idung Nneke Health Post,Ukanafun,primary
+Adat Ifang Health Centre,Ukanafun,primary
+Ikot Udo Mbang Afaha Obo Health Centre,Ukanafun,primary
+Ikot Udo Ossiom Health Centre,Ukanafun,primary
+Ikot Idiong Health Post,Ukanafun,primary
+Ikot Unah Health Centre,Ukanafun,primary
+Ikot Akpa Nkuk Primary Health Centre,Ukanafun,primary
+Idu Primary Health Centre,Uruan,primary
+Nwaniba Health Centre,Uruan,primary
+Ikot Otoinyie Health Centre,Uruan,primary
+Ibikpe Health Post,Uruan,primary
+Ifianyong Obot Health Post,Uruan,primary
+Ekpene Ibia Health Centre,Uruan,primary
+Adadia Health Post,Uruan,primary
+Use Health Centre,Uruan,primary
+Nung Ikono Ufok Health Post,Uruan,primary
+Ibiaku Issiet Health Centre,Uruan,primary
+Ndon Ebom Health Centre,Uruan,primary
+Mbukpo Uko Akai Health Centre,Urue-Offong/Oruko,primary
+Edok Oruko Primary Health Centre,Urue-Offong/Oruko,primary
+Oduonim Health Post,Urue-Offong/Oruko,primary
+Ukuda Health Post,Urue-Offong/Oruko,primary
+Udung Ukpor Health Centre,Urue-Offong/Oruko,primary
+Oyoku Ibighi Primary Health Centre,Urue-Offong/Oruko,primary
+Operation Base Urue Offong Primary Health Centre,Urue-Offong/Oruko,primary
+Oyubia Health Post,Urue-Offong/Oruko,primary
+Ikpe Oro Health Post,Urue-Offong/Oruko,primary
+Okossi Primary Health Centre (Model),Urue-Offong/Oruko,primary
+Mbiabong Anyanya Health Post,Uyo,primary
+Mbak Etoi Health Centre,Uyo,primary
+Ikot Ayan Ikono Health Centre,Uyo,primary
+Ikot Ebo Health Centre,Uyo,primary
+Ikot Okubo Health Centre,Uyo,primary
+Akamba Nsukara Health Post,Uyo,primary
+Idoro Uyo Health Centre,Uyo,primary
+Oku Uyo Health Centre (Model),Uyo,primary
+Aka Offot Health Centre,Uyo,primary
+Uyo Primary Health Centre,Uyo,primary
+Ewet Offot Health Post,Uyo,primary
+Ukpom Health Centre,Abak,primary
+Ikot Etukudo Health Centre,Abak,primary
+Ebana Health Centre,Eket,primary
+Esit Urua Health Post,Eket,primary
+Iko Eket Health Centre,Eket,primary
+Ikot Abia Health Centre,Eket,primary
+Akpasung Health Post,Esit Eket,primary
+Ntakinyang Health Centre,Esit Eket,primary
+Odoronkit Health Centre,Esit Eket,primary
+Ikot Ondo Health Centre,Essien Udim,primary
+Utu Ikot Ukpong Health Centre,Essien Udim,primary
+Mkpatak Health Centre,Essien Udim,primary
+Community Ikpe Ikot Ntuen Health Centre,Essien Udim,primary
+Ikpe Ikot Akpan Health Centre,Essien Udim,primary
+Ikot Akpanefia Health Centre,Essien Udim,primary
+Ukana Nsasak Primary Health Centre,Essien Udim,primary
+Atan Ikot Okoro Health Centre,Essien Udim,primary
+Utu Etim Ekpo Health Centre,Etim Ekpo,primary
+Akai Uro Health Centre,Etim Ekpo,primary
+Uruk Ata Ikot Ekpor Operational Base Primary Health Centre,Etim Ekpo,primary
+Ikot Edet Health Post,Etim Ekpo,primary
+Ikot Ese Health Centre,Etim Ekpo,primary
+Ndon Eyo 2 Primary Health Centre,Etinan,primary
+Ndon Eyo Health Post,Etinan,primary
+Ndon Utim Primary Health Centre,Etinan,primary
+Ikot Inyang Health Post,Etinan,primary
+Oniong Primary Health Centre,Etinan,primary
+Ikot Mfon Health Centre,Etinan,primary
+Ikot Obio Eka Primary Health Centre,Etinan,primary
+Ikot Akpan Ntembom Primary Health Centre,Etinan,primary
+Akata Health Post,Ibeno,primary
+Iwuokpom Health Centre,Ibeno,primary
+Ntafre Health Centre,Ibeno,primary
+Ikot Iyan Health Centre,Ibesikpo Asutan,primary
+Ikot Iko Primary Health Centre,Ibesikpo Asutan,primary
+Ikot Udo Ekop Health Centre,Ibesikpo Asutan,primary
+Mbierebe Akpawat Primary Health Centre,Ibesikpo Asutan,primary
+Ikot Efre Health Centre,Ibesikpo Asutan,primary
+Ikot Uba Health Centre,Ibiono-Ibom,primary
+Ididep Usuk Health Centre,Ibiono-Ibom,primary
+Ikot Etim Health Centre,Ibiono-Ibom,primary
+Aka Ididep Health Centre,Ibiono-Ibom,primary
+Ekimbuk Health Centre,Ibiono-Ibom,primary
+Ono Comprehensive Health Centre,Ibiono-Ibom,primary
+Use Ikot Amama Health Centre,Ibiono-Ibom,primary
+Afaha Obio Eno Health Centre,Ibiono-Ibom,primary
+Ikot Osukong Health Post,Ika,primary
+Ikot Udo Health Post,Ika,primary
+Ikot Onwon Health Centre,Ikono,primary
+Ediene Atai Health Centre,Ikono,primary
+Obio Itak Primary Health Centre,Ikono,primary
+Osuk Ediene Health Centre,Ikono,primary
+Aka Ekpeme Primary Health Centre,Ikono,primary
+Ndiya Ikot Akpan Edet Health Centre,Ikono,primary
+Nkara Obio Health Post,Ikono,primary
+Uta Ewa Health Centre,Ikot Abasi,primary
+Ikot Akpan Udo Health Centre,Ikot Abasi,primary
+Ikot Otu Health Post,Ikot Ekpene,primary
+Ibong Ikot Akan Health Centre,Ikot Ekpene,primary
+Urua Obo Health Post,Ikot Ekpene,primary
+Edem Idim Ibakesi Model Health Centre,Ini,primary
+Mbiabet Ikpe Health Centre,Ini,primary
+Odoro Ikpe Operational Base Primary Health Centre,Ini,primary
+Ekio Ikpe Health Post,Ini,primary
+Nchana Ebua Health Post,Ini,primary
+Okpoto Health Post,Ini,primary
+Awa Ndem Imen Health Post,Ini,primary
+Edem Idim Ibakesi Health Centre,Ini,primary
+Mbiafun Ikot Abasi Health Post,Ini,primary
+North Itam Health Post,Itu,primary
+Uyo Itam Primary Health Centre,Itu,primary
+Ema Itam Primary Health Centre,Itu,primary
+Mkpeti Health Centre,Itu,primary
+Ikot Ntu Health Post,Itu,primary
+Ikot Ekwere Health Post,Itu,primary
+Brama Health Centre,Mbo,primary
+Ekiebong Health Post,Mbo,primary
+Udungnyafa Health Post,Mbo,primary
+Ikot Inyang Okop Primary Health Centre,Mkpat-Enin,primary
+Ikot Obio Ndoho Health Post,Mkpat-Enin,primary
+Asana/Ibianga Health Post,Mkpat-Enin,primary
+Ikot Unya Health Centre,Mkpat-Enin,primary
+Ikot Eyiene Primary Health Centre,Mkpat-Enin,primary
+Ikot Obiokoi Health Post,Mkpat-Enin,primary
+Ikot Ekpe Health Centre,Mkpat-Enin,primary
+Eniongo Health Post,Udung-Uko,primary
+Ekpene Ikpan Health Post,Nsit-Ibom,primary
+Ikot Oku Nsit Health Post,Nsit-Ibom,primary
+Oboetim Primary Health Centre,Nsit-Ibom,primary
+Okwo Nsit Health Centre,Nsit-Ibom,primary
+Oboyo Ikot Ita Model Primaryhealth Centre Primary Health Centre,Nsit-Ibom,primary
+Ikot Obio Etan Primary Health Centre,Nsit-Ibom,primary
+Mbiokporo 2 Health Centre,Nsit-Ibom,primary
+Edebom 1 Health Post,Nsit-Ibom,primary
+Ikot Akpatu Health Centre,Nsit-Ubium,primary
+Ntit Oton Health Post,Nsit-Ubium,primary
+Ikot Ukap Health Centre,Nsit-Ubium,primary
+Ndiya Health Centre,Nsit-Ubium,primary
+Ikot Okwot Primary Health Centre,Nsit-Ubium,primary
+Ikot Akpan Abia Health Centre,Nsit-Ubium,primary
+Ikot Udoide Health Post,Nsit-Ubium,primary
+Obio Ubium Health Centre,Nsit-Ubium,primary
+Primary Obi Ubium Health Centre,Nsit-Ubium,primary
+Ikot Okpudo Health Centre,Nsit-Ubium,primary
+Odoro Atasung Health Post,Nsit-Ubium,primary
+Ikot Ukpong Health Post,Obot Akara,primary
+Ikot Ukpong Ikot Udoanwan Health Centre,Obot Akara,primary
+Abiakpo Idiaha Health Post,Obot Akara,primary
+Abak Ukpom Health Post,Obot Akara,primary
+Editaha Okop Health Centre,Obot Akara,primary
+Nto Assiak Health Post,Obot Akara,primary
+Abiakpo Nkap Health Centre,Obot Akara,primary
+Ikot Abasi Eduo Health Post,Obot Akara,primary
+Nsit Ikpe Health Post,Obot Akara,primary
+Attai Ikwen Health Centre,Obot Akara,primary
+Ikwen Ikot Udom Health Centre,Obot Akara,primary
+Afaha Akai Health Centre,Okobo,primary
+Atak Oro Nsie Health Centre,Okobo,primary
+Oti Oro Health Centre,Okobo,primary
+Utine Nduong Health Post,Okobo,primary
+Uruting Health Post,Okobo,primary
+Nsating Health Post,Okobo,primary
+Ikot Ese Ishiet Health Post,Onna,primary
+Ntan Ide Ekpe Health Centre,Onna,primary
+Atiamkpat Health Centre,Onna,primary
+Ikot Mbong Health Centre,Onna,primary
+Nung Oku Ekanem Health Centre,Onna,primary
+Okat Health Centre,Onna,primary
+Ikot Ebidang Health Centre,Onna,primary
+Eyotong Health Post,Oron,primary
+Ikot Osute Health Centre,Oruk Anam,primary
+Ukpom Edem Inyang Health Centre,Oruk Anam,primary
+Ibianga Asakpa Health Centre,Oruk Anam,primary
+Ikot Obio Nkan Health Centre,Oruk Anam,primary
+Ikot Eka Ideh Health Post,Oruk Anam,primary
+Afaha Odon Primary Health Centre,Ukanafun,primary
+Nto Okon Health Post,Ukanafun,primary
+Ikot Ebok Health Post,Ukanafun,primary
+Ikot Udombang Afaha Obo Health Post,Ukanafun,primary
+Ohaobu Health Centre,Ukanafun,primary
+Nkek Health Post,Ukanafun,primary
+Afaha Ikot Akwa Health Post,Ukanafun,primary
+Eman Ikot Ebo Health Post,Uruan,primary
+Mbiakong Uruan Health Post,Uruan,primary
+Ekpene Ukim Health Post,Uruan,primary
+Elei Primary Health Centre,Urue-Offong/Oruko,primary
+Mbukpo Eyoima Primary Health Centre,Urue-Offong/Oruko,primary
+Uboro Primary Health Centre,Urue-Offong/Oruko,primary
+Ibotong Primary Health Centre,Urue-Offong/Oruko,primary
+Mbukpo Eyokan Primary Health Centre,Urue-Offong/Oruko,primary
+Ifa Ikot Okpon Primary Health Centre,Uyo,primary
+Ifa Atai Primary Health Centre,Uyo,primary
+Ikot Ofon Health Post,Uyo,primary
+Atan Offot Primary Health Centre,Uyo,primary
+Obio Etoi Community Health Centre,Uyo,primary
+Ikot Ebido Ultra Modern Health Centre,Uyo,primary
+"Model Phc, Eyulor",Urue-Offong/Oruko,primary
+Grace Efiong Osung Health Centre,Okobo,primary
+Nung Oku Health Post,Ibesikpo Asutan,primary
+Abak Ifia Phc,Ikot Ekpene,primary
+"Health Post, Abak Itenge",Abak,primary
+"Primary Health Centre, Ibiaku Uruan",Uruan,primary

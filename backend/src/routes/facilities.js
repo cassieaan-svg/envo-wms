@@ -14,6 +14,7 @@ router.get('/', async (req, res, next) => {
       state: req.query.state || null,
       lga: req.query.lga || null,
       search: req.query.search || null,
+      facilityType: req.query.facilityType || null,
       includeInactive: req.query.includeInactive === 'true',
     });
     return res.json(facilities);

@@ -115,17 +115,51 @@ function Picker({
   itemPlaceholder,
   searchPlaceholder,
   metaOf,
+  // A second, independent narrowing dimension — e.g. facility level — rendered as its own
+  // select before the group. Optional: omitted entirely when a picker has only one axis.
+  filterLabel,
+  filterPlaceholder,
+  filterOf,
+  filterOptions,
 }) {
   const [group, setGroup] = useState('');
+  const [filterValue, setFilterValue] = useState('');
 
-  const groups = useMemo(() => listGroups(items, groupOf), [items, groupOf]);
+  const filtered = useMemo(
+    () => (filterOf && filterValue ? items.filter((i) => filterOf(i) === filterValue) : items),
+    [items, filterOf, filterValue]
+  );
+
+  const groups = useMemo(() => listGroups(filtered, groupOf), [filtered, groupOf]);
   const scoped = useMemo(
-    () => (group ? items.filter((i) => groupOf(i) === group) : items),
-    [items, groupOf, group]
+    () => (group ? filtered.filter((i) => groupOf(i) === group) : filtered),
+    [filtered, groupOf, group]
   );
 
   return (
     <div className="picker-filters">
+      {filterOf && (
+        <Field label={filterLabel}>
+          <select
+            value={filterValue}
+            onChange={(e) => {
+              setFilterValue(e.target.value);
+              // The chosen LGA may not exist under the new level (or may now mean a
+              // different set of facilities), so it's cleared along with the selection.
+              setGroup('');
+              if (value) onChange('');
+            }}
+          >
+            <option value="">{filterPlaceholder}</option>
+            {filterOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
       <Field label={groupLabel}>
         <select
           value={group}
@@ -179,6 +213,11 @@ export function CommodityPicker({ commodities, value, onChange, metaOf }) {
   );
 }
 
+const FACILITY_LEVELS = [
+  { value: 'primary', label: 'Primary' },
+  { value: 'secondary', label: 'Secondary' },
+];
+
 export function FacilityPicker({ facilities, value, onChange }) {
   return (
     <Picker
@@ -192,6 +231,10 @@ export function FacilityPicker({ facilities, value, onChange }) {
       itemPlaceholder="select facility…"
       searchPlaceholder="search facilities…"
       metaOf={(f, ctx) => (ctx.group ? null : f.lga)}
+      filterLabel="Level"
+      filterPlaceholder="primary & secondary"
+      filterOf={(f) => f.facility_type}
+      filterOptions={FACILITY_LEVELS}
     />
   );
 }
