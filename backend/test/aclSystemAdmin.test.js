@@ -16,11 +16,15 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import express from 'express'
+import jwt from 'jsonwebtoken'
 import { query, pool } from '../src/db.js'
 import {
   attachScope, enforceFacilityRead, enforceFacilityWrite, scopedReadFacilityIds,
   isAdminScope, mayWriteTransferFacility, scopedCategories,
 } from '../src/middleware/scope.js'
+import { authMiddleware } from '../src/middleware/auth.js'
+import commodityRoutes from '../src/routes/commodities.js'
 import { AclResolver } from '../src/services/aclResolver.js'
 
 test.after(async () => { await pool.end() })
@@ -172,6 +176,52 @@ test('being unscoped does not leak into a commodity or module grant', async () =
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
+// 3b. The catalogue — its one write, and its limits
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('it may add a catalogue item, in any module, and this grants no facility access', async () => {
+  const app = express()
+  app.use(express.json())
+  app.use('/api', authMiddleware, attachScope)
+  app.use('/api/commodities', commodityRoutes)
+  const server = app.listen(0)
+
+  const token = m => jwt.sign(
+    { sub: '00000000-0000-0000-0000-000000000002', email: SYS_EMAIL, user_metadata: m },
+    process.env.JWT_SECRET, { expiresIn: '5m' })
+  const post = async (m, body) => {
+    const r = await fetch(`http://localhost:${server.address().port}/api/commodities`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token(m)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return r.status
+  }
+
+  const name = `sysadmin catalogue probe ${Date.now()}`
+  try {
+    // The catalogue is global configuration, so system_admin is NOT confined to
+    // one module the way essential_admin is.
+    assert.equal(await post(sysMeta, { name, memberships: [{ module: 'hiv' }] }), 201)
+    assert.equal(await post(sysMeta, { name: `${name} ess`, memberships: [{ module: 'essential' }] }), 201)
+
+    // …and it stays refused everywhere that matters. Adding master data must not
+    // have opened any facility's stock.
+    const req = scopeFor(sysMeta)
+    const facilityId = await anyFacility()
+    for (const table of SCOPED_TABLES) {
+      assert.equal(await enforceFacilityWrite(req, fakeRes(), facilityId, table), false,
+        `${table} must still deny after the catalogue grant`)
+    }
+  } finally {
+    server.close()
+    await query(`delete from commodity_modules where commodity_id in
+                   (select id from commodities where name like $1)`, [`${name}%`])
+    await query(`delete from commodities where name like $1`, [`${name}%`])
+  }
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 4. Nothing changed for anyone else
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -209,9 +259,31 @@ test('the module backfill gave HIV scope to neither national nor cross-module ro
 
   assert.equal(rows.filter(r => r.name === 'system_admin').length, 0,
     'system_admin carries no module row at all')
-  for (const r of rows.filter(r => r.name === 'essential_admin')) {
-    assert.equal(r.scope_id, 'essential', 'essential_admin is confined to its own module, never HIV')
-  }
+
+  // essential_admin holds BOTH modules by decision (Phase 2M.2c) — an Essential
+  // administrator opens Essential and HIV. What still must not happen is the
+  // reverse: an HIV role acquiring `essential`. That is asserted below.
+  const essentialAdminModules = rows.filter(r => r.name === 'essential_admin')
+    .map(r => r.scope_id).sort()
+  assert.deepEqual(essentialAdminModules, ['essential', 'hiv'])
+})
+
+test('no HIV role ever acquires the Essential module', async () => {
+  // The protective half of the asymmetry. Essential may reach HIV; HIV may not
+  // reach Essential — so an `essential` module row on an HIV role would be a
+  // silent crossing of the programme boundary.
+  const { rows } = await query(`
+    select distinct r.name, u.email
+      from user_role_scopes s
+      join user_roles ur on ur.user_id = s.user_id and ur.role_id = s.role_id
+      join roles r on r.id = ur.role_id
+      join users u on u.id = s.user_id
+     where s.dimension = 'module' and s.scope_id = 'essential'
+       and r.name <> 'essential_admin'
+       and (u.raw_user_meta_data->>'essential') is distinct from 'true'
+       and u.email not like '%.invalid'`)
+  assert.deepEqual(rows, [],
+    'only the essential_admin role, or an account holding meta.essential, may carry Essential module scope')
 })
 
 test('every other account still has exactly one module scope', async () => {

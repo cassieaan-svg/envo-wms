@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
 import { Card, CardBody, CardHeader, CardTitle } from '../../components/ui/Card'
-import { Button } from '../../components/ui/Button'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { ShadowBanner } from './UserAccess'
@@ -25,7 +24,11 @@ export function FeatureConfig() {
   const [config, setConfig] = useState([])
   const [facilities, setFacilities] = useState([])
   const [facilityId, setFacilityId] = useState('')
-  const [q, setQ] = useState('')
+  // Narrowing selections only — the configuration is always keyed on one
+  // facility. These exist so the picker cascades instead of listing every
+  // facility in the country at once.
+  const [state, setState] = useState('')
+  const [lga, setLga] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -45,10 +48,24 @@ export function FeatureConfig() {
     })()
   }, [])
 
-  const shown = useMemo(() => {
-    const t = q.trim().toLowerCase()
-    return t ? facilities.filter(f => f.name.toLowerCase().includes(t)) : facilities
-  }, [facilities, q])
+  const states = useMemo(
+    () => [...new Set(facilities.map(f => f.state).filter(Boolean))].sort(),
+    [facilities])
+
+  const lgas = useMemo(
+    () => [...new Set(facilities.filter(f => f.state === state).map(f => f.lga).filter(Boolean))].sort(),
+    [facilities, state])
+
+  const shown = useMemo(
+    () => facilities
+      .filter(f => f.state === state && f.lga === lga)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [facilities, state, lga])
+
+  // A wider change invalidates the narrower selections — otherwise the facility
+  // configured could belong to a state the picker no longer shows.
+  const pickState = v => { setState(v); setLga(''); setFacilityId('') }
+  const pickLga = v => { setLga(v); setFacilityId('') }
 
   const selected = facilities.find(f => f.id === facilityId) || null
 
@@ -100,15 +117,22 @@ export function FeatureConfig() {
       </div>
 
       <Card><CardBody>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <input className={field} value={q} onChange={e => setQ(e.target.value)}
-                 placeholder="Search facilities…" />
-          <select className={`${field} sm:w-96`} value={facilityId}
+        <div className="grid gap-3 sm:grid-cols-3">
+          <select className={field} value={state} onChange={e => pickState(e.target.value)}>
+            <option value="">— select a state —</option>
+            {states.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+
+          <select className={field} value={lga} disabled={!state}
+                  onChange={e => pickLga(e.target.value)}>
+            <option value="">{state ? `— select an LGA in ${state} —` : '— LGA —'}</option>
+            {lgas.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+
+          <select className={field} value={facilityId} disabled={!lga}
                   onChange={e => setFacilityId(e.target.value)}>
-            <option value="">— select a facility —</option>
-            {shown.map(f => (
-              <option key={f.id} value={f.id}>{f.name}{f.state ? ` · ${f.state}` : ''}</option>
-            ))}
+            <option value="">{lga ? `— select a facility in ${lga} —` : '— facility —'}</option>
+            {shown.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
           </select>
         </div>
       </CardBody></Card>

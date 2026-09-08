@@ -1,6 +1,6 @@
 import express from 'express'
 import {
-  adminIdentity, listUsers, getUserConfig, setUserRoleAndScope, setUserOverride,
+  adminIdentity, listUsers, getUserConfig, createUser, setUserRoleAndScope, setUserOverride,
   listFeatureConfig, setFeatureConfig, featureRegistry,
   ASSIGNABLE_ROLES, SECTIONS, AclAdminError,
 } from '../services/aclAdminService.js'
@@ -61,6 +61,22 @@ router.get('/users', async (req, res) => {
 })
 
 /**
+ * POST /api/admin/users  { username, role, scopes }
+ *
+ * Creates an account and returns its generated password ONCE. Note this is the
+ * only endpoint here that affects live authorization — see createUser.
+ */
+router.post('/users', async (req, res) => {
+  const identity = requireAdmin(req, res); if (!identity) return
+  try {
+    const { username, role, scopes } = req.body || {}
+    if (scopes != null && !Array.isArray(scopes)) throw new AclAdminError('Scopes must be a list.')
+    const result = await createUser(identity, { username, role, scopes: scopes || [] })
+    res.status(201).json({ success: true, data: result })
+  } catch (err) { fail(res, err, 'create user') }
+})
+
+/**
  * GET /api/admin/users/:id — role, scope, and the permission list split into
  * role-inherited versus direct override.
  */
@@ -110,10 +126,18 @@ router.get('/meta', async (req, res) => {
   try {
     const { rows: permissions } = await query(
       `select key, module, description from permissions where is_active order by module, key`)
+    // Modules come from the `modules` table — the catalogue's own declaration —
+    // not from distinct commodities.module, so a module with no items yet still
+    // appears and a typo in a commodity row cannot invent one.
+    const { rows: modules } = await query(`select key, label from modules order by label`)
     res.json({
       success: true,
       data: {
         roles: ASSIGNABLE_ROLES,
+        modules,
+        // Sections partition the HIV module only. Essential has categories, not
+        // sections, and M&E's section arrives with the envo-tools branch — so
+        // this list is deliberately shorter than the module list.
         sections: SECTIONS.map(key => ({ key, categories: SECTION_CATEGORIES[key] })),
         features: featureRegistry(),
         permissions,

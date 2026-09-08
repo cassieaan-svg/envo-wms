@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { Card, CardBody, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { UserConfigPanel } from '../../components/admin/UserConfigPanel'
+import { CreateUserModal } from '../../components/admin/CreateUserModal'
 
 const field = 'w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-green-500'
+
+const PAGE_SIZE = 50
 
 // User & Access Management.
 //
@@ -25,7 +28,9 @@ export function UserAccess() {
   const [q, setQ] = useState('')
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(0)
   const [selected, setSelected] = useState(null)
+  const [creating, setCreating] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -47,12 +52,14 @@ export function UserAccess() {
     if (!meta) return
     const t = setTimeout(async () => {
       try {
-        const res = await api.admin.users({ q: q.trim() || undefined, limit: 50 })
+        const res = await api.admin.users({
+          q: q.trim() || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE,
+        })
         setRows(res?.data || []); setTotal(res?.total ?? 0)
       } catch (err) { toast(err.message || 'Search failed.', 'red') }
     }, 250)
     return () => clearTimeout(t)
-  }, [q, meta])
+  }, [q, meta, page])
 
   if (loading) return <LoadingState />
   if (error) return (
@@ -65,11 +72,14 @@ export function UserAccess() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-medium text-gray-100">User &amp; Access Management</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Roles, scope and permissions · {scopeLabel}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-medium text-gray-100">User &amp; Access Management</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Roles, scope and permissions · {scopeLabel}
+          </p>
+        </div>
+        <Button variant="success" onClick={() => setCreating(true)}>+ Create user</Button>
       </div>
 
       <ShadowBanner />
@@ -78,7 +88,10 @@ export function UserAccess() {
         <input
           className={field}
           value={q}
-          onChange={e => setQ(e.target.value)}
+          // Reset to the first page with the search itself, not in an effect: a
+          // narrower result set can otherwise leave the offset past its end and
+          // show an empty table.
+          onChange={e => { setQ(e.target.value); setPage(0) }}
           placeholder="Search by email…"
         />
       </CardBody></Card>
@@ -94,9 +107,12 @@ export function UserAccess() {
                 <thead className="text-left text-xs text-gray-500 uppercase">
                   <tr>
                     <th className="pb-2">Email</th>
-                    <th className="pb-2">ACL role</th>
-                    <th className="pb-2">Scope</th>
-                    <th className="pb-2">Section</th>
+                    <th className="pb-2 pr-4">ACL role</th>
+                    <th className="pb-2 pr-4">Scope</th>
+                    <th className="pb-2 pr-4">Module</th>
+                    {/* Every column here reports ACL configuration, not the live
+                        sign-in metadata — that is shown in the detail panel. */}
+                    <th className="pb-2 pr-4">Section</th>
                     <th className="pb-2"></th>
                   </tr>
                 </thead>
@@ -104,11 +120,16 @@ export function UserAccess() {
                   {rows.map(u => (
                     <tr key={u.id} className="border-t border-white/5">
                       <td className="py-2.5 text-gray-100">{u.email}</td>
-                      <td className="py-2.5 text-gray-400">{u.role || <span className="text-amber-400">none</span>}</td>
-                      <td className="py-2.5 text-gray-400">
-                        {u.facility_name || u.state || u.lga || u.cluster || '—'}
+                      <td className="py-2.5 pr-4 text-gray-400">{u.role || <span className="text-amber-400">none</span>}</td>
+                      <td className="py-2.5 pr-4 text-gray-400">
+                        {u.scope_label
+                          ? <>{u.scope_label}<span className="text-gray-600 text-xs ml-1">{u.scope_type}</span></>
+                          : <span className="text-gray-600">national</span>}
                       </td>
-                      <td className="py-2.5 text-gray-400">{u.legacy_section || 'all'}</td>
+                      <td className="py-2.5 pr-4 text-gray-400">{u.module || <span className="text-gray-600">all</span>}</td>
+                      <td className="py-2.5 pr-4 text-gray-400">
+                        {u.acl_section || <span className="text-gray-600">all sections</span>}
+                      </td>
                       <td className="py-2.5 text-right">
                         <Button size="sm" onClick={() => setSelected(u.id)}>Configure</Button>
                       </td>
@@ -116,15 +137,34 @@ export function UserAccess() {
                   ))}
                 </tbody>
               </table>
-              {total > rows.length && (
-                <div className="text-xs text-gray-500 mt-3">
-                  Showing {rows.length} of {total}. Narrow the search to see the rest.
+              {total > PAGE_SIZE && (
+                <div className="flex items-center justify-between gap-3 mt-4">
+                  <div className="text-xs text-gray-500">
+                    {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" disabled={page === 0}
+                            onClick={() => setPage(p => Math.max(0, p - 1))}>Previous</Button>
+                    <Button size="sm" disabled={(page + 1) * PAGE_SIZE >= total}
+                            onClick={() => setPage(p => p + 1)}>Next</Button>
+                  </div>
                 </div>
               )}
             </div>
           )}
         </CardBody>
       </Card>
+
+      {creating && (
+        <CreateUserModal
+          meta={meta}
+          onClose={() => setCreating(false)}
+          onCreated={async () => {
+            const res = await api.admin.users({ q: q.trim() || undefined, limit: PAGE_SIZE })
+            setRows(res?.data || []); setTotal(res?.total ?? 0); setPage(0)
+          }}
+        />
+      )}
 
       {selected && (
         <UserConfigPanel
@@ -147,9 +187,11 @@ export function ShadowBanner() {
     <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3">
       <div className="text-sm text-amber-300 font-medium">Configuration only — not yet enforced</div>
       <div className="text-xs text-amber-200/70 mt-1 leading-relaxed">
-        These settings are staged for the new access model. Live access is still
-        decided by each account's existing sign-in metadata, so changes here take
-        effect at cutover, not immediately.
+        Role, scope and permission changes are staged for the new access model.
+        Live access is still decided by each account's existing sign-in metadata,
+        so those take effect at cutover, not immediately.
+        {' '}<span className="text-amber-200">Creating an account is the exception</span> —
+        a new login works straight away.
       </div>
     </div>
   )

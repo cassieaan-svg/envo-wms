@@ -91,8 +91,18 @@ function callSite() {
   return 'unknown'
 }
 
+// The LOCAL calendar day, matching the database's `current_date` — not UTC.
+//
+// toISOString() gives the UTC day, and Lagos is UTC+1, so for one hour every
+// night the probe would bucket into the previous day while `current_date` had
+// already rolled over. A reporting cycle read with `day >= current_date - N`
+// would then miss or double-count that hour's observations, and the
+// "one row per day/site/facility" invariant would quietly break.
+//
+// en-CA formats as YYYY-MM-DD, which is what the date column wants. This is the
+// same calendar-day-not-instant distinction db.js applies to DATE columns.
 function today() {
-  return new Date().toISOString().slice(0, 10)
+  return new Date().toLocaleDateString('en-CA')
 }
 
 /**

@@ -243,9 +243,16 @@ export function transferReason(t) {
 }
 
 // ── Section categories ────────────────────────────
+// Mirror of the backend copy in constants/sections.js — keep the two in sync.
+// A section is a named set of categories; `essential` and `general` were added
+// so those category sets are reachable by a section scope at all (see the
+// backend file for why).
 export const SECTION_CATEGORIES = {
   pharmacy: ['Pharmacy drugs'],
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
+  essential: ['Tablets, caplets & capsules', 'Consumables', 'Injections',
+              'Syrups & suspensions', 'Ophthalmic preparations', 'Infusions'],
+  general:   ['General Consumables'],
 }
 
 // The new "General Consumables" category — not part of any section list, so a

@@ -33,7 +33,16 @@ export function UserConfigPanel({ userId, meta, onClose, onSaved }) {
   const [error, setError] = useState('')
   const [role, setRole] = useState('')
   const [geoValue, setGeoValue] = useState('')
-  const [section, setSection] = useState('')
+  // Narrowing selections, NOT the scope itself. Only geoValue is ever written;
+  // these two exist so the picker can cascade instead of showing 288 facilities
+  // in one flat list.
+  const [geoState, setGeoState] = useState('')
+  const [geoLga, setGeoLga] = useState('')
+  // Sections are a SET, not one value: the commodity dimension ORs within
+  // itself, so an account can hold several (an Essential login holds pharmacy
+  // and essential).
+  const [sections, setSections] = useState([])
+  const [modules, setModules] = useState([])
   const [facilities, setFacilities] = useState([])
   const [confirm, setConfirm] = useState(null)
 
@@ -41,44 +50,80 @@ export function UserConfigPanel({ userId, meta, onClose, onSaved }) {
     (async () => {
       try {
         const [c, facs] = await Promise.all([api.admin.user(userId), api.facilities.list()])
-        setCfg(c); setFacilities(facs || [])
+        const list = facs || []
+        setCfg(c); setFacilities(list)
         setRole(c.role || '')
-        setGeoValue(c.scopes.find(s => s.dimension === 'geography')?.scope_id || '')
-        setSection(c.scopes.find(s => s.dimension === 'commodity' && s.scope_type === 'section')?.scope_id || '')
+        setSections(c.scopes
+          .filter(s => s.dimension === 'commodity' && s.scope_type === 'section')
+          .map(s => s.scope_id).sort())
+        setModules(c.scopes.filter(s => s.dimension === 'module').map(s => s.scope_id))
+
+        // Prefill the cascade by working BACKWARDS from the stored scope, so
+        // opening an existing user shows where they already sit rather than an
+        // empty form the administrator has to re-navigate.
+        const geo = c.scopes.find(s => s.dimension === 'geography')
+        setGeoValue(geo?.scope_id || '')
+        if (geo) {
+          const owner = geo.scope_type === 'facility'
+            ? list.find(f => f.id === geo.scope_id)
+            : list.find(f => f[geo.scope_type] === geo.scope_id)
+          if (geo.scope_type === 'state') setGeoState(geo.scope_id)
+          else if (owner) { setGeoState(owner.state || ''); setGeoLga(owner.lga || '') }
+        }
       } catch (err) { setError(err.message || 'Could not load this user.') }
     })()
   }, [userId])
 
   const geoType = role ? GEOGRAPHY_FOR[role] : undefined
 
-  // Options for the geography picker, derived from the real facility list so a
-  // typo cannot produce a scope that matches nothing.
-  const geoOptions = useMemo(() => {
-    if (!geoType) return []
-    if (geoType === 'facility') return facilities.map(f => ({ v: f.id, label: `${f.name}${f.state ? ` · ${f.state}` : ''}` }))
-    const key = geoType
-    return [...new Set(facilities.map(f => f[key]).filter(Boolean))].sort()
-      .map(v => ({ v, label: v }))
-  }, [geoType, facilities])
+  // Every list is derived from the real facility table, so a scope can never name
+  // something that matches no facility.
+  const states = useMemo(
+    () => [...new Set(facilities.map(f => f.state).filter(Boolean))].sort(),
+    [facilities])
+
+  const lgas = useMemo(
+    () => [...new Set(facilities.filter(f => f.state === geoState).map(f => f.lga).filter(Boolean))].sort(),
+    [facilities, geoState])
+
+  const clusters = useMemo(
+    () => [...new Set(facilities.filter(f => f.state === geoState).map(f => f.cluster).filter(Boolean))].sort(),
+    [facilities, geoState])
+
+  const facilityOptions = useMemo(
+    () => facilities
+      .filter(f => f.state === geoState && f.lga === geoLga)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [facilities, geoState, geoLga])
+
+  // Changing a wider level invalidates the narrower ones — otherwise a state
+  // change would leave an LGA from the previous state still selected, and the
+  // scope written would name a place the facility list does not agree with.
+  const pickState = v => { setGeoState(v); setGeoLga(''); setGeoValue(geoType === 'state' ? v : '') }
+  const pickLga = v => { setGeoLga(v); setGeoValue(geoType === 'lga' ? v : '') }
 
   if (error) return <Overlay onClose={onClose}><div className="text-sm text-red-400">{error}</div></Overlay>
   if (!cfg) return <Overlay onClose={onClose}><Spinner /></Overlay>
 
   const dirty = role !== (cfg.role || '')
     || geoValue !== (cfg.scopes.find(s => s.dimension === 'geography')?.scope_id || '')
-    || section !== (cfg.scopes.find(s => s.dimension === 'commodity' && s.scope_type === 'section')?.scope_id || '')
+    || sections.join(',') !== cfg.scopes
+         .filter(s => s.dimension === 'commodity' && s.scope_type === 'section')
+         .map(s => s.scope_id).sort().join(',')
+    || modules.join(',') !== cfg.scopes.filter(s => s.dimension === 'module').map(s => s.scope_id).sort().join(',')
 
   function buildScopes() {
     const scopes = []
     if (geoType && geoValue) scopes.push({ dimension: 'geography', scope_type: geoType, scope_id: geoValue })
-    if (section) scopes.push({ dimension: 'commodity', scope_type: 'section', scope_id: section })
-    // The module row is preserved as-is rather than offered in the form. It is
-    // set by provisioning and changing a user's module is a different decision
-    // from changing their role — conflating them in one dropdown is how someone
-    // moves an account between programmes by accident.
-    for (const s of cfg.scopes) if (s.dimension === 'module') scopes.push(s)
+    for (const key of sections) scopes.push({ dimension: 'commodity', scope_type: 'section', scope_id: key })
+    for (const key of modules) scopes.push({ dimension: 'module', scope_type: 'module', scope_id: key })
     return scopes
   }
+
+  const toggleIn = setter => key => setter(v =>
+    v.includes(key) ? v.filter(x => x !== key) : [...v, key].sort())
+  const toggleModule = toggleIn(setModules)
+  const toggleSection = toggleIn(setSections)
 
   async function save() {
     setBusy(true); setError('')
@@ -157,25 +202,93 @@ export function UserConfigPanel({ userId, meta, onClose, onSaved }) {
         ) : !role ? (
           <div className="text-sm text-gray-500 mt-2">Select a role first.</div>
         ) : (
-          <select className={`${field} mt-2`} value={geoValue} disabled={!cfg.editable}
-                  onChange={e => setGeoValue(e.target.value)}>
-            <option value="">— select a {geoType} —</option>
-            {geoOptions.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
-          </select>
+          // Cascading: state narrows the LGA list, which narrows the facility
+          // list. Only the level the ROLE is scoped by is written as the scope —
+          // the wider selections are navigation, not access.
+          <div className="mt-2 space-y-2">
+            <select className={field} value={geoState} disabled={!cfg.editable}
+                    onChange={e => pickState(e.target.value)}>
+              <option value="">— select a state —</option>
+              {states.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+
+            {(geoType === 'lga' || geoType === 'facility') && geoState && (
+              <select className={field} value={geoLga} disabled={!cfg.editable}
+                      onChange={e => pickLga(e.target.value)}>
+                <option value="">— select an LGA in {geoState} —</option>
+                {lgas.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            )}
+
+            {geoType === 'facility' && geoLga && (
+              <select className={field} value={geoValue} disabled={!cfg.editable}
+                      onChange={e => setGeoValue(e.target.value)}>
+                <option value="">— select a facility in {geoLga} —</option>
+                {facilityOptions.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            )}
+
+            {geoType === 'cluster' && geoState && (
+              <select className={field} value={geoValue} disabled={!cfg.editable}
+                      onChange={e => setGeoValue(e.target.value)}>
+                <option value="">— select a cluster in {geoState} —</option>
+                {clusters.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
+
+            <div className="text-xs text-gray-500">
+              {geoValue
+                ? <>Scope written: <span className="text-gray-400">{geoType}</span></>
+                : `This role is scoped by ${geoType}.`}
+            </div>
+          </div>
         )}
       </section>
 
       <section className="mb-5">
-        <div className={label}>Section scope</div>
-        <select className={`${field} mt-2`} value={section} disabled={!cfg.editable}
-                onChange={e => setSection(e.target.value)}>
-          <option value="">All sections</option>
-          {meta.sections.map(s => (
-            <option key={s.key} value={s.key}>{s.key} ({s.categories.join(', ')})</option>
-          ))}
-        </select>
+        <div className={label}>Module access</div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {(meta.modules || []).map(m => {
+            const on = modules.includes(m.key)
+            return (
+              <button key={m.key} type="button" disabled={!cfg.editable}
+                onClick={() => toggleModule(m.key)}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
+                  on ? 'bg-green-500/20 border-green-500/40 text-green-300'
+                     : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'}`}>
+                {m.label}
+              </button>
+            )
+          })}
+        </div>
         <div className="text-xs text-gray-500 mt-1.5">
-          Leaving this blank means every section — an absent scope is unconstrained, not empty.
+          {modules.length === 0
+            ? <span className="text-amber-400">No module selected means every module — pick at least one.</span>
+            : 'An account may hold more than one; the modules are OR-ed together.'}
+        </div>
+      </section>
+
+      <section className="mb-5">
+        <div className={label}>Section scope</div>
+        <div className="mt-2 space-y-1.5">
+          {meta.sections.map(s => {
+            const on = sections.includes(s.key)
+            return (
+              <button key={s.key} type="button" disabled={!cfg.editable}
+                onClick={() => toggleSection(s.key)}
+                className={`w-full text-left px-3 py-2 rounded-lg border transition-colors disabled:opacity-40 ${
+                  on ? 'bg-green-500/15 border-green-500/40'
+                     : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
+                <div className={`text-sm ${on ? 'text-green-300' : 'text-gray-300'}`}>{s.key}</div>
+                <div className="text-xs text-gray-500">{s.categories.join(', ')}</div>
+              </button>
+            )
+          })}
+        </div>
+        <div className="text-xs text-gray-500 mt-1.5">
+          {sections.length === 0
+            ? <span className="text-amber-400">None selected means EVERY section — an absent scope is unconstrained, not empty.</span>
+            : 'Sections are OR-ed together: an account may hold several.'}
         </div>
       </section>
 

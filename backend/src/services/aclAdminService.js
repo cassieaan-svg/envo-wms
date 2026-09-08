@@ -1,6 +1,18 @@
+import crypto from 'node:crypto'
+import bcrypt from 'bcryptjs'
 import { query, withTransaction } from '../db.js'
 import { SECTION_CATEGORIES } from '../constants/sections.js'
 import { FEATURES, isDeclaredFeature } from '../constants/features.js'
+
+// Same alphabet and shape the provisioning scripts use: no look-alike characters
+// (0/O, 1/l/I), and at least one digit so it survives a password policy.
+const PW_CHARS = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
+function generatePassword() {
+  let pw
+  do { pw = Array.from(crypto.randomBytes(12), b => PW_CHARS[b % PW_CHARS.length]).join('') }
+  while (!/[2-9]/.test(pw))
+  return pw
+}
 
 // Read and write models for the administration screens.
 //
@@ -130,16 +142,44 @@ export async function listUsers(identity, { q = '', limit = 50, offset = 0 } = {
   const limitAt = params.length
   params.push(Math.max(Number(offset) || 0, 0))
 
+  // The scope shown is the ACL GEOGRAPHY ROW, not the legacy facility_id. Only
+  // facility users have a facility_id, so joining on that alone left every admin
+  // tier showing "—" while actually holding a real state/cluster/LGA scope. For a
+  // facility scope the id is resolved to the facility's name; the others are
+  // already human-readable.
   const { rows } = await query(`
     select u.id, u.email, u.created_at,
-           u.raw_user_meta_data->>'access_level'     legacy_access_level,
+           u.raw_user_meta_data->>'access_level'      legacy_access_level,
            u.raw_user_meta_data->>'commodity_section' legacy_section,
            r.name role,
-           f.name facility_name, f.state, f.lga, f.cluster
+           f.name facility_name, f.state, f.lga, f.cluster,
+           g.scope_type scope_type,
+           coalesce(gf.name, g.scope_id) scope_label,
+           -- AGGREGATED, not joined. A dual-module login (see
+           -- 20260907_acl_dual_module_logins.sql) holds TWO module rows, and a
+           -- plain LEFT JOIN duplicates the whole user row once per module.
+           (select string_agg(mm.scope_id, ' + ' order by mm.scope_id)
+              from user_role_scopes mm
+             where mm.user_id = u.id and mm.dimension = 'module') module,
+           -- The ACL SECTION SCOPE, aggregated like the module column. The list
+           -- reports ACL configuration in every other column (role, scope,
+           -- module), so reporting legacy metadata here read as "unscoped" for
+           -- any account whose section lives only in the ACL — the lga_admin and
+           -- state_admin Essential accounts, whose metadata carries no
+           -- commodity_section at all. Legacy stays visible in the detail panel,
+           -- where it is explicitly labelled as the live sign-in metadata.
+           (select string_agg(ss.scope_id, ' + ' order by ss.scope_id)
+              from user_role_scopes ss
+             where ss.user_id = u.id and ss.dimension = 'commodity'
+               and ss.scope_type = 'section') acl_section
       from users u
       left join user_roles ur on ur.user_id = u.id
       left join roles r on r.id = ur.role_id
       left join facilities f on f.id::text = u.raw_user_meta_data->>'facility_id'
+      left join user_role_scopes g
+        on g.user_id = u.id and g.dimension = 'geography'
+      left join facilities gf
+        on g.scope_type = 'facility' and gf.id::text = g.scope_id
      where ${conds.join(' and ')}
      order by u.email
      limit $${limitAt} offset $${limitAt + 1}`, params)
@@ -291,16 +331,42 @@ async function assertMayWrite(identity, userId, nextRole) {
   return target
 }
 
-function validateScopes(role, scopes, identity) {
-  // A module-confined administrator may only produce users inside its own
-  // module. Without this it could hand an account `module = hiv` — or omit the
-  // module row entirely, which means unconstrained — and so create an
-  // administrator wider than itself.
+/**
+ * The modules the ACTOR itself holds. Read from the actor's own scope rows rather
+ * than hard-coded, so "what may I grant" tracks "what do I have" without a second
+ * copy of that decision in code.
+ *
+ * An empty result means unconstrained (system_admin), not "nothing".
+ */
+async function actorModules(identity) {
+  const { rows } = await query(
+    `select scope_id from user_role_scopes where user_id = $1 and dimension = 'module'`,
+    [identity.actorId])
+  return rows.map(r => r.scope_id)
+}
+
+async function validateScopes(role, scopes, identity) {
+  // A module-confined administrator may only produce users inside the modules it
+  // holds ITSELF. Without this it could hand an account a module it does not have
+  // — or omit the module row entirely, which means unconstrained — and so create
+  // an administrator wider than itself.
+  //
+  // A SUBSET check, not equality: an Essential administrator holds both hiv and
+  // essential, and must be able to create a single-module user as well as a
+  // dual-module one.
   if (identity?.module) {
-    const modules = scopes.filter(s => s.dimension === 'module')
-    if (modules.length !== 1 || modules[0].scope_id !== identity.module) {
+    const mine = await actorModules(identity)
+    const asked = scopes.filter(s => s.dimension === 'module').map(s => s.scope_id)
+    if (!asked.length) {
       throw new AclAdminError(
-        `You may only configure users in the ${identity.module} module.`, 403, 'OUT_OF_MODULE')
+        'A module is required — an account with none is unconstrained across every module.',
+        403, 'OUT_OF_MODULE')
+    }
+    const outside = asked.filter(mod => !mine.includes(mod))
+    if (outside.length) {
+      throw new AclAdminError(
+        `You may only grant modules you hold yourself (${mine.join(', ') || 'none'}).`,
+        403, 'OUT_OF_MODULE')
     }
   }
 
@@ -351,7 +417,7 @@ export async function setUserRoleAndScope(identity, userId, { role, scopes = [] 
     throw new AclAdminError(`Unknown role "${role}".`)
   }
   await assertMayWrite(identity, userId, role)
-  validateScopes(role, scopes, identity)
+  await validateScopes(role, scopes, identity)
 
   await withTransaction(async exec => {
     const { rows: r } = await exec(`select id from roles where name = $1`, [role])
@@ -380,6 +446,114 @@ export async function setUserRoleAndScope(identity, userId, { role, scopes = [] 
   })
 
   return getUserConfig(identity, userId)
+}
+
+/**
+ * Create a new account.
+ *
+ * THIS IS THE ONE WRITE ON THIS SURFACE THAT AFFECTS LIVE AUTHORIZATION, and it
+ * cannot be otherwise: scope.js decides access from raw_user_meta_data, so an
+ * account with no metadata can sign in and reach nothing. Every other write here
+ * touches ACL tables only and takes effect at cutover.
+ *
+ * Two things keep that safe:
+ *
+ *   1. METADATA IS DERIVED, NEVER ACCEPTED. The caller sends a role and scopes,
+ *      both validated by the same rules as an edit; the metadata is computed
+ *      from them here. A client cannot post `{ access_level: 'overall_admin' }`
+ *      and have it stored, because the request has no metadata field at all.
+ *   2. The role and scope validation runs BEFORE anything is written, inside one
+ *      transaction with the ACL rows.
+ *
+ * The password is generated server-side and returned ONCE. It is never stored in
+ * plaintext and never logged — the same handling the provisioning scripts use.
+ */
+export async function createUser(identity, { username, role, scopes = [] } = {}) {
+  const name = String(username || '').trim().replace(/@envo\.ng$/i, '').toLowerCase()
+  if (!name) throw new AclAdminError('A username is required.')
+  if (!/^[a-z0-9._-]+$/.test(name)) {
+    throw new AclAdminError('Username may contain only letters, digits, dot, dash and underscore.')
+  }
+  if (!ASSIGNABLE_ROLES.includes(role)) throw new AclAdminError(`Unknown role "${role}".`)
+
+  // The same ceiling an edit obeys: never create a role above your own.
+  if (ROLE_RANK[role] > identity.rank) {
+    throw new AclAdminError(`You cannot create a ${role} account.`, 403, 'ABOVE_LEVEL')
+  }
+  await validateScopes(role, scopes, identity)
+
+  const geo = scopes.find(s => s.dimension === 'geography')
+  const sections = scopes.filter(s => s.dimension === 'commodity' && s.scope_type === 'section')
+                         .map(s => s.scope_id)
+  const modules = scopes.filter(s => s.dimension === 'module').map(s => s.scope_id)
+
+  // A state-confined administrator may only create inside its own state — checked
+  // against the geography that will actually be written, whatever its shape.
+  if (identity.state) {
+    const inState = geo && (
+      geo.scope_type === 'state' ? geo.scope_id === identity.state
+      : (await query(
+          `select 1 from facilities where ${geo.scope_type === 'facility' ? 'id::text' : geo.scope_type} = $1
+             and state = $2`, [geo.scope_id, identity.state])).rows.length > 0)
+    if (!inState) {
+      throw new AclAdminError(`You may only create accounts in ${identity.state}.`, 403, 'OUT_OF_SCOPE')
+    }
+  }
+
+  const email = `${name}@envo.ng`
+  const { rows: existing } = await query(`select 1 from users where lower(email) = $1`, [email])
+  if (existing.length) throw new AclAdminError(`${email} already exists.`, 409, 'DUPLICATE')
+
+  // Metadata derived from the validated role and scopes — see the note above.
+  const meta = { access_level: role, email_verified: true }
+  if (geo?.scope_type === 'facility') {
+    const { rows: f } = await query(`select name, state from facilities where id = $1`, [geo.scope_id])
+    if (!f.length) throw new AclAdminError('That facility does not exist.')
+    meta.facility_id = geo.scope_id
+    meta.facility_name = f[0].name
+    meta.admin_state = f[0].state
+  } else if (geo?.scope_type === 'state') meta.admin_state = geo.scope_id
+  else if (geo?.scope_type === 'lga') meta.admin_lga = geo.scope_id
+  else if (geo?.scope_type === 'cluster') meta.admin_cluster = geo.scope_id
+
+  // commodity_section is single-valued in the legacy metadata, so a multi-section
+  // account records the first as its live pin. The ACL carries the full set; the
+  // two diverge deliberately, exactly as they do for the existing Essential
+  // accounts.
+  if (sections.length) meta.commodity_section = sections[0]
+  // The essential-commodities branch's live gate. Set it when the account is
+  // actually being given that module, so ACL and legacy agree from the start.
+  if (modules.includes('essential')) meta.essential = true
+
+  const password = generatePassword()
+  const hash = await bcrypt.hash(password, 10)
+
+  const id = await withTransaction(async exec => {
+    const { rows: r } = await exec(`select id from roles where name = $1`, [role])
+    if (!r.length) throw new AclAdminError(`Role "${role}" is not seeded.`, 500, 'MISSING_ROLE')
+    const roleId = r[0].id
+
+    const { rows: u } = await exec(
+      `insert into users (id, email, encrypted_password, raw_user_meta_data)
+       values (gen_random_uuid(), $1, $2, $3::jsonb) returning id`,
+      [email, hash, JSON.stringify(meta)])
+    const userId = u[0].id
+
+    await exec(
+      `insert into user_roles (user_id, role_id, scope_type, scope_id) values ($1, $2, $3, $4)`,
+      [userId, roleId, geo?.scope_type ?? '', geo ? String(geo.scope_id).trim() : ''])
+    for (const s of scopes) {
+      await exec(
+        `insert into user_role_scopes (user_id, role_id, dimension, scope_type, scope_id)
+         values ($1, $2, $3, $4, $5) on conflict do nothing`,
+        [userId, roleId, s.dimension, s.scope_type, String(s.scope_id).trim()])
+    }
+    return userId
+  })
+
+  // Returned ONCE. The caller shows it to the administrator and it is never
+  // retrievable again — only a bcrypt hash is stored.
+  return { user: await getUserConfig(identity, id), username: name, password }
 }
 
 /**
@@ -461,7 +635,7 @@ export async function listFeatureConfig(identity) {
 export async function setFeatureConfig(identity, { facility_id, department, feature, enabled }) {
   if (identity.module) {
     throw new AclAdminError(
-      `Feature configuration is organised by section, which belongs to the HIV module. A ${identity.module} administrator has no sections to configure.`,
+      `Feature configuration is organised by section, which belongs to the HIV module. An administrator scoped to the ${identity.module} module has no sections to configure.`,
       403, 'OUT_OF_MODULE')
   }
   if (!isDeclaredFeature(feature)) {

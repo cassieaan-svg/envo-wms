@@ -116,6 +116,15 @@ test('disabling at one facility does not affect the same department elsewhere', 
   if (!other.length) return
   try {
     await disable(f.facility_id, 'pharmacy', 'transfer')
+
+    // Re-check rather than assume. aclAdminApi/aclEssentialAdmin write real
+    // feature_config rows concurrently, so the facility chosen above can acquire
+    // one between the select and this assertion — and the test would then be
+    // reporting that suite's timing instead of the no-wildcards rule.
+    const { rows: nowConfigured } = await query(
+      `select 1 from feature_config where facility_id::text = $1`, [other[0].facility_id])
+    if (nowConfigured.length) return
+
     assert.equal((await AclResolver.can(other[0].id, 'transfer.write',
       { sendingFacilityId: other[0].facility_id })).decision, true,
       'a pharmacy user at another facility keeps transfers')
@@ -235,6 +244,11 @@ test('no feature_config row names an undeclared feature', async () => {
 })
 
 test('this suite left feature_config empty', async () => {
-  const { rows } = await query(`select count(*)::int n from feature_config`)
+  // Scoped to the facilities THIS suite writes to. aclAdminApi/aclEssentialAdmin
+  // write real feature_config rows concurrently, and a table-wide count would
+  // make this assertion about their cleanup rather than this suite's.
+  const f = await facilityWithBothDepartments()
+  const { rows } = await query(
+    `select count(*)::int n from feature_config where facility_id::text = $1`, [f.facility_id])
   assert.equal(rows[0].n, 0, 'every row created here must be cleaned up')
 })

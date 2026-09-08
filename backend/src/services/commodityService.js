@@ -1,4 +1,5 @@
 import { query, withTransaction } from '../db.js'
+import { SECTION_CATEGORIES } from '../constants/sections.js'
 
 export class CommodityService {
   /**
@@ -6,15 +7,36 @@ export class CommodityService {
    * query the session bootstrap relied on. Section-level filtering is applied
    * client-side (see SECTION_CATEGORIES), so this returns the full catalogue.
    */
-  static async getCommodities({ module, activeOnly = false, q } = {}) {
+  /**
+   * `section` and `category` both narrow on the LEGACY c.category column — the
+   * one the catalogue table actually displays. A section expands to its category
+   * list (SECTION_CATEGORIES), so the two filters compose: section=lab plus
+   * category=RTKs is just RTKs, and section=lab alone is every lab category.
+   *
+   * Sections partition the HIV module only, so a section filter naturally
+   * excludes Essential items rather than needing to say so.
+   */
+  static async getCommodities({ module, section, category, activeOnly = false, q } = {}) {
     const params = []
     const where = []
     if (module) { params.push(module); where.push(`cm.module = $${params.length}`) }
     if (activeOnly) where.push('c.is_active = true and cm.is_active = true')
+    if (category) { params.push(category); where.push(`c.category = $${params.length}`) }
+    else if (section) {
+      const cats = SECTION_CATEGORIES[section]
+      // An undeclared section matches nothing rather than everything — the same
+      // fail-closed choice the scope guards make.
+      params.push(Array.isArray(cats) ? cats : [])
+      where.push(`c.category = any($${params.length})`)
+    }
     if (q) { params.push(`%${q}%`); where.push(`(c.name ilike $${params.length} or c.item_code ilike $${params.length})`) }
     const { rows } = await query(
-      `select id, name, category, unit, pack_size, dispensing_unit,
-              item_type, item_code, is_active, description
+      // Every column qualified with c. — commodity_modules ALSO has is_active,
+      // so the unqualified list was ambiguous the moment the join was added, and
+      // any module-filtered or active-only request 500'd. The catalogue's module
+      // filter silently did nothing because the frontend swallowed that error.
+      `select c.id, c.name, c.category, c.unit, c.pack_size, c.dispensing_unit,
+              c.item_type, c.item_code, c.is_active, c.description
          from commodities c
          ${module || activeOnly ? 'join commodity_modules cm on cm.commodity_id = c.id' : ''}
          ${where.length ? `where ${where.join(' and ')}` : ''}

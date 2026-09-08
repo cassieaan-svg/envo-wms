@@ -24,19 +24,35 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { query, pool, withTransaction } from '../src/db.js'
 import {
-  adminIdentity, listUsers, getUserConfig, setUserRoleAndScope, setUserOverride,
+  adminIdentity, listUsers, getUserConfig, createUser, setUserRoleAndScope, setUserOverride,
   listFeatureConfig, setFeatureConfig, AclAdminError,
 } from '../src/services/aclAdminService.js'
 
 const DOMAIN = '@acl-admin-test.invalid'
 const created = []
 
+// Deleting a user CASCADES into user_roles and user_role_scopes — the same
+// tables syncAcl writes inside one long transaction from aclProvisioning,
+// aclEssentialAdmin and aclEssentialSection, all running concurrently. Postgres
+// breaks the resulting lock cycle by killing one side, arbitrarily, and when it
+// picks the cleanup the whole FILE fails rather than any single test.
+//
+// Retried because it is contention, not corruption: the delete is idempotent and
+// a second attempt succeeds once the other transaction commits.
+async function deleteWithRetry(sql, params, attempts = 5) {
+  for (let i = 0; ; i++) {
+    try { return await query(sql, params) } catch (err) {
+      if (err.code !== '40P01' || i >= attempts) throw err
+    }
+  }
+}
+
 test.after(async () => {
   if (created.length) {
-    await query(`delete from feature_config where updated_by = any($1::uuid[])`, [created])
-    await query(`delete from users where id = any($1::uuid[])`, [created])
+    await deleteWithRetry(`delete from feature_config where updated_by = any($1::uuid[])`, [created])
+    await deleteWithRetry(`delete from users where id = any($1::uuid[])`, [created])
   }
-  await query(`delete from users where email like $1`, [`%${DOMAIN}`])
+  await deleteWithRetry(`delete from users where email like $1`, [`%${DOMAIN}`])
   await pool.end()
 })
 
@@ -438,6 +454,181 @@ test('an undeclared department cannot be configured', async () => {
     () => setFeatureConfig(sysIdentity(actor),
       { facility_id: f.id, department: 'radiology', feature: 'transfer', enabled: false }),
     /not a declared section/)
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 6b. Creating accounts — the one write here that is LIVE
+// ═════════════════════════════════════════════════════════════════════════════
+
+const CREATED = []
+const createdName = () => `probe.create.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`
+
+async function cleanupCreated() {
+  if (!CREATED.length) return
+  await query(`delete from users where email = any($1)`, [CREATED.map(n => `${n}@envo.ng`)])
+  CREATED.length = 0
+}
+
+test('a system administrator creates in any state and any module', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const id = sysIdentity(actor)
+  try {
+    for (const state of [await someState(), await otherState(await someState())]) {
+      const f = await facilityIn(state)
+      const name = createdName(); CREATED.push(name)
+      const { user, password } = await createUser(id, {
+        username: name, role: 'facility',
+        scopes: [
+          { dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+          { dimension: 'commodity', scope_type: 'section', scope_id: 'pharmacy' },
+          { dimension: 'module', scope_type: 'module', scope_id: 'hiv' },
+          { dimension: 'module', scope_type: 'module', scope_id: 'essential' },
+        ],
+      })
+      assert.equal(user.role, 'facility')
+      assert.ok(password.length >= 12, 'a password is generated and returned once')
+      assert.deepEqual(
+        user.scopes.filter(s => s.dimension === 'module').map(s => s.scope_id).sort(),
+        ['essential', 'hiv'], 'both modules, in either state')
+    }
+  } finally { await cleanupCreated() }
+})
+
+test('the stored metadata is DERIVED, never taken from the request', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const name = createdName(); CREATED.push(name)
+  try {
+    // Note what is NOT passed: there is no metadata field on the request at all,
+    // so a client cannot post access_level: 'overall_admin' and have it stored.
+    const { user } = await createUser(sysIdentity(actor), {
+      username: name, role: 'facility',
+      scopes: [
+        { dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+        { dimension: 'commodity', scope_type: 'section', scope_id: 'pharmacy' },
+        { dimension: 'module', scope_type: 'module', scope_id: 'hiv' },
+      ],
+    })
+    const { rows } = await query(`select raw_user_meta_data m from users where id = $1`, [user.id])
+    const meta = rows[0].m
+    assert.equal(meta.access_level, 'facility', 'derived from the validated role')
+    assert.equal(meta.facility_id, f.id)
+    assert.equal(meta.commodity_section, 'pharmacy')
+    assert.ok(meta.facility_name, 'resolved from the facility, not supplied')
+    assert.equal(meta.essential, undefined, 'the Essential grant is set only when that module is given')
+  } finally { await cleanupCreated() }
+})
+
+test('granting the Essential module also sets the live grant, so ACL and legacy agree', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const name = createdName(); CREATED.push(name)
+  try {
+    const { user } = await createUser(sysIdentity(actor), {
+      username: name, role: 'facility',
+      scopes: [
+        { dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+        { dimension: 'module', scope_type: 'module', scope_id: 'essential' },
+      ],
+    })
+    const { rows } = await query(`select raw_user_meta_data m from users where id = $1`, [user.id])
+    assert.equal(rows[0].m.essential, true,
+      'meta.essential is the essential-commodities branch\'s live gate')
+  } finally { await cleanupCreated() }
+})
+
+test('only a hash is stored — never the password', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const name = createdName(); CREATED.push(name)
+  try {
+    const { user, password } = await createUser(sysIdentity(actor), {
+      username: name, role: 'facility',
+      scopes: [{ dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+               { dimension: 'module', scope_type: 'module', scope_id: 'hiv' }],
+    })
+    const { rows } = await query(`select encrypted_password p from users where id = $1`, [user.id])
+    assert.notEqual(rows[0].p, password, 'the plaintext must never reach the column')
+    assert.match(rows[0].p, /^\$2[aby]\$/, 'a bcrypt hash')
+  } finally { await cleanupCreated() }
+})
+
+test('a state administrator cannot create outside its own state', async () => {
+  const mine = await someState()
+  const theirs = await otherState(mine)
+  const actor = await makeUser({ access_level: 'state_admin', admin_state: mine }, 'state_admin',
+    [{ dimension: 'geography', scope_type: 'state', scope_id: mine }])
+  const far = await facilityIn(theirs)
+  await assert.rejects(
+    () => createUser(stateIdentity(actor, mine), {
+      username: createdName(), role: 'facility',
+      scopes: [{ dimension: 'geography', scope_type: 'facility', scope_id: far.id },
+               { dimension: 'module', scope_type: 'module', scope_id: 'hiv' }],
+    }),
+    err => err.code === 'OUT_OF_SCOPE')
+})
+
+test('nobody creates a role above their own', async () => {
+  const mine = await someState()
+  const actor = await makeUser({ access_level: 'state_admin', admin_state: mine }, 'state_admin',
+    [{ dimension: 'geography', scope_type: 'state', scope_id: mine }])
+  for (const role of ['overall_admin', 'system_admin']) {
+    await assert.rejects(
+      () => createUser(stateIdentity(actor, mine), { username: createdName(), role, scopes: [] }),
+      err => err.code === 'ABOVE_LEVEL', `${role} must be refused`)
+  }
+})
+
+test('a duplicate username is refused rather than overwriting the account', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const name = createdName(); CREATED.push(name)
+  const scopes = [{ dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+                  { dimension: 'module', scope_type: 'module', scope_id: 'hiv' }]
+  try {
+    await createUser(sysIdentity(actor), { username: name, role: 'facility', scopes })
+    await assert.rejects(
+      () => createUser(sysIdentity(actor), { username: name, role: 'facility', scopes }),
+      err => err.code === 'DUPLICATE')
+  } finally { await cleanupCreated() }
+})
+
+test('an invalid username, unknown role, or bad scope shape is refused', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const ok = [{ dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+              { dimension: 'module', scope_type: 'module', scope_id: 'hiv' }]
+  const id = sysIdentity(actor)
+
+  await assert.rejects(() => createUser(id, { username: 'has spaces', role: 'facility', scopes: ok }),
+    /only letters, digits/)
+  await assert.rejects(() => createUser(id, { username: '', role: 'facility', scopes: ok }),
+    /username is required/)
+  await assert.rejects(() => createUser(id, { username: createdName(), role: 'root', scopes: ok }),
+    /Unknown role/)
+  // facility needs a facility scope — the same shape rule an edit obeys
+  await assert.rejects(
+    () => createUser(id, { username: createdName(), role: 'facility',
+      scopes: [{ dimension: 'module', scope_type: 'module', scope_id: 'hiv' }] }),
+    /needs exactly one facility scope/)
+})
+
+test('a module-confined administrator cannot grant a module it does not hold', async () => {
+  const state = await someState()
+  const actor = await makeUser(
+    { access_level: 'essential_admin', admin_state: state }, 'essential_admin',
+    [{ dimension: 'geography', scope_type: 'state', scope_id: state },
+     { dimension: 'module', scope_type: 'module', scope_id: 'essential' }])
+  const f = await facilityIn(state)
+  const id = adminIdentity({ accessLevel: 'essential_admin', adminState: state }, actor)
+  await assert.rejects(
+    () => createUser(id, {
+      username: createdName(), role: 'facility',
+      scopes: [{ dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+               { dimension: 'module', scope_type: 'module', scope_id: 'hiv' }],
+    }),
+    err => err.code === 'OUT_OF_MODULE',
+    'it holds only essential, so it cannot mint an HIV account')
 })
 
 // ═════════════════════════════════════════════════════════════════════════════

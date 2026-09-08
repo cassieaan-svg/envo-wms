@@ -127,12 +127,28 @@ test('state_admin has no commodity rows; a section-tagged overall_admin now does
   // accounts get NARROWER than legacy (an intended fix, recorded as its own
   // shadow-comparison class).
   //
-  // state_admin is unchanged: it genuinely sees both sections.
+  // An ORDINARY state_admin is unchanged: it genuinely sees both sections.
+  //
+  // The exception is a state_admin holding the Essential grant (meta.essential):
+  // Phase 2M.2c pins every granted account to the pharmacy section, because that
+  // section is the essential-commodities branch's own precondition for opening
+  // Essential. So the carve-out is by GRANT, not by role.
   const { rows: sa } = await query(`
     select count(*)::int n from user_role_scopes urs
       join roles r on r.id = urs.role_id
-     where r.name = 'state_admin' and urs.dimension = 'commodity'`)
-  assert.equal(sa[0].n, 0, 'state_admin still sees every section')
+      join users u on u.id = urs.user_id
+     where r.name = 'state_admin' and urs.dimension = 'commodity'
+       and (u.raw_user_meta_data->>'essential') is distinct from 'true'`)
+  assert.equal(sa[0].n, 0, 'an ungranted state_admin still sees every section')
+
+  const { rows: granted } = await query(`
+    select count(*)::int n from user_role_scopes urs
+      join roles r on r.id = urs.role_id
+      join users u on u.id = urs.user_id
+     where r.name = 'state_admin' and urs.dimension = 'commodity'
+       and urs.scope_type = 'section' and urs.scope_id = 'pharmacy'
+       and (u.raw_user_meta_data->>'essential')::boolean is true`)
+  assert.ok(granted[0].n > 0, 'and a granted one IS pinned to pharmacy — non-vacuous')
 
   const { rows: tagged } = await query(`
     select u.raw_user_meta_data->>'commodity_section' section,
@@ -163,6 +179,14 @@ test('state_admin has no commodity rows; a section-tagged overall_admin now does
 })
 
 test('a section-pinned user has exactly one section row matching their metadata', async () => {
+  // Essential accounts are excluded: Phase 2M.2d gives them TWO section rows
+  // (pharmacy + essential) deliberately, so their ACL scope is wider than the
+  // single value in their metadata. That divergence is the point — the
+  // `essential` section has no metadata equivalent, because commodity_section
+  // predates the module ever existing.
+  //
+  // For everyone else the backfill is still a verbatim copy, and this is what
+  // catches it drifting.
   const { rows } = await query(`
     select count(*)::int n from user_roles ur
       join users u on u.id = ur.user_id
@@ -173,9 +197,24 @@ test('a section-pinned user has exactly one section row matching their metadata'
       left join facilities f on f.id::text = ur.scope_id
      where r.name not in ('overall_admin','state_admin')
        and ${NOT_FIXTURE}
+       and (u.raw_user_meta_data->>'essential') is distinct from 'true'
+       and r.name <> 'essential_admin'
        and (f.name is null or f.name !~* 'state office store|cluster lab store')
        and urs.scope_id <> u.raw_user_meta_data->>'commodity_section'`)
   assert.equal(rows[0].n, 0, 'section rows must copy commodity_section verbatim')
+})
+
+test('an Essential account is the deliberate exception, holding two sections', async () => {
+  const { rows } = await query(`
+    select count(*)::int n from users u
+      join user_roles ur on ur.user_id = u.id
+      join roles r on r.id = ur.role_id
+     where ((u.raw_user_meta_data->>'essential')::boolean is true or r.name = 'essential_admin')
+       and u.email not like '%.invalid'
+       and (select count(*) from user_role_scopes s
+             where s.user_id = u.id and s.dimension = 'commodity'
+               and s.scope_type = 'section') <> 2`)
+  assert.equal(rows[0].n, 0, 'exactly two — pharmacy for HIV, essential for its own module')
 })
 
 test('hub stores REPLACE their section with the hub category set, never extend it', async () => {

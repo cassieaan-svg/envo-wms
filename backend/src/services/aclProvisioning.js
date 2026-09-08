@@ -35,6 +35,10 @@ const MIGRATIONS = [
   // without `module = essential` is UNCONSTRAINED on module and reaches HIV
   // commodities, so the two can never be separated.
   '20260907_acl_essential_admin_assignment.sql',
+  // Phase 2M.2d. Runs on every provisioning call so a NEWLY minted Essential
+  // account is pinned to the pharmacy section too — an absent section row means
+  // unconstrained, so a new account would otherwise see every section.
+  '20260908_acl_essential_section_pharmacy.sql',
   '20260904_acl_exclude_scopeless_accounts.sql',
   '20260905_acl_user_role_scopes.sql',
   // Phase 2M. Without this a newly provisioned account gets geography and

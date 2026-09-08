@@ -226,25 +226,33 @@ test('moduleCovers denies an unknown commodity and a scopeless request', async (
 })
 
 test('no module rows means unconstrained, matching the other dimensions', async () => {
-  // Proven by removing the rows rather than asserted from the code, then restored.
-  const id = await userByEmail('labhq@envo.ng')
+  // Proven by removing the rows rather than asserted from the code.
+  //
+  // ON A THROWAWAY ACCOUNT, not a real one. This used labhq@envo.ng, and for the
+  // width of the delete that real account had no module row — which is exactly
+  // what aclSystemAdmin.test.js asserts can never happen, concurrently. The
+  // property under test needs *an* account with module rows, not a specific one.
+  const { rows: fixture } = await query(`
+    insert into users (id, email, encrypted_password, raw_user_meta_data)
+    values (gen_random_uuid(), $1, 'x', '{}'::jsonb) returning id`,
+    [`modulescope${Date.now()}@acl-module-test.invalid`])
+  const id = fixture[0].id
+  const { rows: role } = await query(`select id from roles where name = 'facility'`)
   const ess = await oneCommodity('essential')
-  const { rows: saved } = await query(
-    `select role_id, scope_type, scope_id from user_role_scopes
-      where user_id = $1 and dimension = 'module'`, [id])
+
   try {
+    await query(
+      `insert into user_role_scopes (user_id, role_id, dimension, scope_type, scope_id)
+       values ($1, $2, 'module', 'module', 'hiv')`, [id, role[0].id])
+    assert.equal(await AclResolver.moduleCovers(id, ess.id), false,
+      'a hiv-only module scope refuses an Essential item')
+
     await query(`delete from user_role_scopes where user_id = $1 and dimension = 'module'`, [id])
     assert.equal(await AclResolver.moduleCovers(id, ess.id), true,
       'an empty dimension is unconstrained, not denied')
   } finally {
-    for (const s of saved) {
-      await query(
-        `insert into user_role_scopes (user_id, role_id, dimension, scope_type, scope_id)
-         values ($1, $2, 'module', $3, $4) on conflict do nothing`,
-        [id, s.role_id, s.scope_type, s.scope_id])
-    }
+    await query(`delete from users where id = $1`, [id])
   }
-  assert.equal(await AclResolver.moduleCovers(id, ess.id), false, 'and the restore worked')
 })
 
 test('a module scope grants nothing on its own — the permission still gates', async () => {
@@ -266,10 +274,14 @@ test('this suite restored the scope rows it touched', async () => {
       join users u on u.id = s.user_id
      where u.email not like '%.invalid' group by 1 order by 1`)
   assert.deepEqual(rows, [
-    { dimension: 'commodity', n: 7533 },
-    // +1 geography and +1 module since Phase 2M: the essential_admin account
-    // (Phase 2M.2), which carries a state scope and `module = essential`.
+    // Commodity rows outnumber accounts: the 195 Essential accounts hold TWO
+    // section rows each (pharmacy + essential, Phase 2M.2d), and the hub stores
+    // hold category grants.
+    { dimension: 'commodity', n: 7761 },
+    // +1 geography: the essential_admin account's state scope (Phase 2M.2).
     { dimension: 'geography', n: 7564 },
-    { dimension: 'module', n: 7567 },
+    // Module rows outnumber accounts: 194 dual-module logins hold two, and
+    // essential_admin holds two (Phase 2M.2c). Counting rows, not holders.
+    { dimension: 'module', n: 7762 },
   ])
 })

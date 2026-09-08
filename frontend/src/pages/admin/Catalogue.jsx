@@ -5,35 +5,55 @@ import { Card, CardBody, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { LoadingState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
+import { SECTION_CATEGORIES } from '../../utils/helpers'
 
 const field = 'w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-green-500'
 
 // Shared catalogue manager.  Root items live in `commodities`; module-specific
 // category/SKU/configuration live in `commodity_modules`.
 export function Catalogue() {
-  const canManage = useAppStore(s => s.isOverallAdmin())
+  // Mirrors isCatalogueManager in routes/commodities.js. The button is a
+  // convenience — the endpoint enforces the same rule, and hiding it protects
+  // nobody.
+  const canManage = useAppStore(s => s.isOverallAdmin() || s.isSystemAdmin())
   const [items, setItems] = useState([])
   const [modules, setModules] = useState([])
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [moduleFilter, setModuleFilter] = useState('')
+  const [sectionFilter, setSectionFilter] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('')
   const [query, setQuery] = useState('')
   const [showAdd, setShowAdd] = useState(false)
 
   async function load() {
     const [list, mods, cats] = await Promise.all([
-      api.commodities.list({ module: moduleFilter || undefined, q: query || undefined }),
+      api.commodities.list({
+        module: moduleFilter || undefined,
+        section: sectionFilter || undefined,
+        category: categoryFilter || undefined,
+        q: query || undefined,
+      }),
       api.commodities.modules(),
       api.commodities.categories(),
     ])
     setItems(list || []); setModules(mods || []); setCategories(cats || [])
   }
-  useEffect(() => { (async () => { try { await load() } finally { setLoading(false) } })() }, [moduleFilter])
+  useEffect(() => { (async () => { try { await load() } finally { setLoading(false) } })() },
+    [moduleFilter, sectionFilter, categoryFilter])
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase()
     return q ? items.filter(i => `${i.name} ${i.item_code || ''}`.toLowerCase().includes(q)) : items
   }, [items, query])
+
+  // Category options follow the module in view, so the list stays short and
+  // cannot offer a category that the current module has no items in. Derived
+  // from the loaded rows because the table displays that same legacy column.
+  const categoryOptions = useMemo(
+    () => [...new Set(items.map(i => i.category).filter(Boolean))].sort(),
+    [items])
+
 
   if (loading) return <LoadingState />
   return <div className="space-y-5">
@@ -44,17 +64,34 @@ export function Catalogue() {
     </div>
 
     <Card><CardBody>
-      <div className="flex flex-col sm:flex-row gap-3">
+      <div className="space-y-3">
         <input className={field} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search item name or code…" />
-        <select className={`${field} sm:w-56`} value={moduleFilter} onChange={e => setModuleFilter(e.target.value)}>
-          <option value="">All modules</option>{modules.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-        </select>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <select className={field} value={moduleFilter}
+                  onChange={e => { setModuleFilter(e.target.value); setSectionFilter(''); setCategoryFilter('') }}>
+            <option value="">All modules</option>{modules.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+          </select>
+          {/* Driven by SECTION_CATEGORIES rather than hardcoded, so a section
+              added there (essential, general) appears here automatically. */}
+          <select className={field} value={sectionFilter}
+                  onChange={e => { setSectionFilter(e.target.value); setCategoryFilter('') }}>
+            <option value="">All sections</option>
+            {Object.keys(SECTION_CATEGORIES).map(k => (
+              <option key={k} value={k}>{k}</option>
+            ))}
+          </select>
+          <select className={field} value={categoryFilter}
+                  onChange={e => setCategoryFilter(e.target.value)}>
+            <option value="">All categories</option>
+            {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
       </div>
     </CardBody></Card>
 
     <Card><CardHeader><CardTitle>{shown.length} items</CardTitle></CardHeader><CardBody>
-      <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="text-left text-xs text-gray-500 uppercase"><tr><th className="pb-2">Item</th><th className="pb-2">Code</th><th className="pb-2">Category</th><th className="pb-2">Type</th><th className="pb-2">Status</th></tr></thead>
-        <tbody>{shown.map(i => <tr key={i.id} className="border-t border-white/5"><td className="py-2.5 text-gray-100">{i.name}</td><td className="py-2.5 text-gray-400">{i.item_code || '—'}</td><td className="py-2.5 text-gray-400">{i.category || '—'}</td><td className="py-2.5 text-gray-400">{i.item_type}</td><td className="py-2.5">{i.is_active ? <span className="text-green-400">Active</span> : <span className="text-gray-500">Inactive</span>}</td></tr>)}</tbody>
+      <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="text-left text-xs text-gray-500 uppercase"><tr><th className="pb-2">Item</th><th className="pb-2">Category</th><th className="pb-2">Type</th><th className="pb-2">Status</th></tr></thead>
+        <tbody>{shown.map(i => <tr key={i.id} className="border-t border-white/5"><td className="py-2.5 text-gray-100">{i.name}</td><td className="py-2.5 text-gray-400">{i.category || '—'}</td><td className="py-2.5 text-gray-400">{i.item_type}</td><td className="py-2.5">{i.is_active ? <span className="text-green-400">Active</span> : <span className="text-gray-500">Inactive</span>}</td></tr>)}</tbody>
       </table></div>
     </CardBody></Card>
     {showAdd && <AddItemModal modules={modules} categories={categories} onClose={() => setShowAdd(false)} onSaved={async () => { setShowAdd(false); await load() }} />}

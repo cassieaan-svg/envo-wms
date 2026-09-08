@@ -87,7 +87,8 @@ test('hub store on a hub category matches', async () => {
   const { rows: u } = await query(`
     select u.id, u.raw_user_meta_data meta from user_roles ur
       join users u on u.id = ur.user_id join facilities f on f.id::text = ur.scope_id
-     where f.name ~* 'state office store|cluster lab store' limit 1`)
+     where f.name ~* 'state office store|cluster lab store'
+       and u.email not like '%.invalid' limit 1`)
   const c = await oneCommodityIn('Lab consumables')
   const legacy = await verdict(res => enforceCommoditySection(scopeFor(u[0].meta), res, c.id))
   record('hub store / Lab consumables', legacy, await AclResolver.commodityCovers(u[0].id, c.id), true)
@@ -99,7 +100,8 @@ test('the Akwa Ibom individual grant matches on Alere Determine', async () => {
   const { rows: u } = await query(`
     select u.id, u.raw_user_meta_data meta from user_roles ur
       join users u on u.id = ur.user_id join facilities f on f.id::text = ur.scope_id
-     where lower(btrim(f.name)) = 'akwa ibom state office store' limit 1`)
+     where lower(btrim(f.name)) = 'akwa ibom state office store'
+       and u.email not like '%.invalid' limit 1`)
   const { rows: c } = await query(`select id from commodities where name = 'Alere Determine'`)
   const legacy = await verdict(res => enforceCommoditySection(scopeFor(u[0].meta), res, c[0].id))
   record('akwa ibom / Alere Determine grant', legacy, await AclResolver.commodityCovers(u[0].id, c[0].id), true)

@@ -12,9 +12,18 @@ const router = express.Router()
 /**
  * GET /api/commodities - List all commodities (ordered category -> name)
  */
+// The catalogue is CONFIGURATION — global master data, not any facility's stock —
+// which is why the administration roles manage it and the operational tiers do not.
+//
+// system_admin is included deliberately, and it is the one write it has:
+// Phase 2M.1 gave it zero OPERATIONAL access (no stock, no logs, no transfers,
+// enforced by scope.js refusing it twice over), and adding a catalogue item
+// touches none of that. It remains unable to read or write a single facility's
+// data.
 const isCatalogueManager = req =>
   req.scope?.accessLevel === 'overall_admin' || req.scope?.isAdmin === true ||
-  req.scope?.accessLevel === 'essential_admin'
+  req.scope?.accessLevel === 'essential_admin' ||
+  req.scope?.accessLevel === 'system_admin'
 
 // The modules a catalogue manager may create items in. The catalogue is ONE
 // shared table across modules, so "may add items" is not the whole question —
@@ -43,9 +52,11 @@ function enforceCatalogueModules(req, res, modules) {
 
 router.get('/', async (req, res) => {
   try {
-    const { module, active, q } = req.query
+    const { module, section, category, active, q } = req.query
     const commodities = await CommodityService.getCommodities({
       module: module || undefined,
+      section: section || undefined,
+      category: category || undefined,
       activeOnly: active === 'true' || active === '1',
       q: q || undefined,
     })

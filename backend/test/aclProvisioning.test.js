@@ -90,7 +90,11 @@ test('syncAcl gives a new facility account its role and ALL THREE scope dimensio
 // that then asserts on the scopes reports a confusing deepEqual mismatch instead
 // of the contention that actually happened. This waits for a run that succeeded,
 // so the assertions below are about the RULE and not about who won the race.
-async function syncUntilAssigned(attempts = 4) {
+// Attempts raised as more suites began calling syncAcl concurrently
+// (aclAdminApi, aclEssentialAdmin, aclEssentialSection). Each call is a single
+// transaction over the whole users table, so several in flight genuinely
+// contend; the work is idempotent, so retrying is free.
+async function syncUntilAssigned(attempts = 10) {
   let last
   for (let i = 0; i < attempts; i++) {
     last = await syncAcl({ quiet: true })
@@ -162,13 +166,20 @@ test('syncing twice changes nothing the second time', async () => {
   const { rows: f } = await query(`select id from facilities limit 1`)
   const id = await provisionUser({ access_level: 'facility', commodity_section: 'lab', facility_id: f[0].id })
   try {
-    const first = await syncAcl({ quiet: true })
-    assert.equal(first.assigned, 1)
+    // `assigned` is a GLOBAL count, and aclAdminApi/aclEssentialAdmin create
+    // role-less fixtures concurrently — so it can legitimately exceed 1. The
+    // subject here is idempotency for THIS user, so assert that.
+    // NOT asserting on `assigned`: it is a global count, and three other suites
+    // now call syncAcl concurrently — one of them can adopt this fixture first,
+    // leaving our own call to report 0. The subject is that the account ends up
+    // correctly assigned, which is what roleOf checks.
+    await syncUntilAssigned()
+    assert.equal(await roleOf(id), 'facility')
     const scopesAfterFirst = await scopesOf(id)
 
-    const second = await syncAcl({ quiet: true })
-    assert.equal(second.assigned, 0, 'a second run must assign nobody')
-    assert.deepEqual(await scopesOf(id), scopesAfterFirst, 'and must not duplicate scope rows')
+    await syncAcl({ quiet: true })
+    assert.deepEqual(await scopesOf(id), scopesAfterFirst,
+      'a second run must not duplicate or alter this user\'s scope rows')
   } finally {
     await cleanup()
   }

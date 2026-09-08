@@ -202,6 +202,7 @@ export const api = {
     // list needs it to say how many matched.
     users:       (params)      => getRaw('/admin/users', params),
     user:        (id)          => get(`/admin/users/${id}`),
+    createUser:  (body)        => post('/admin/users', body),
     setRole:     (id, body)    => put(`/admin/users/${id}/role`, body),
     setOverride: (id, body)    => put(`/admin/users/${id}/permission`, body),
     featureConfig:    ()       => get('/admin/feature-config'),

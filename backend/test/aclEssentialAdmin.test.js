@@ -59,43 +59,105 @@ const itemIn = async module =>
 // 1. THE REGRESSION GUARD — module confinement
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('the account carries exactly one module scope, and it is essential', async () => {
+test('the account carries BOTH module scopes', async () => {
+  // Phase 2M.2 confined it to `essential`, which fixed the real defect (an
+  // ABSENT module row means unconstrained). Phase 2M.2c then widened it to both,
+  // per the confirmed requirement that an Essential administrator opens both
+  // modules — the same shape as the 194 dual-module logins.
+  //
+  // The invariant that survives both changes is that the rows are EXPLICIT: zero
+  // rows would again mean every module, including any added later.
   const { rows } = await query(
-    `select scope_id from user_role_scopes where user_id = $1 and dimension = 'module'`,
+    `select scope_id from user_role_scopes
+      where user_id = $1 and dimension = 'module' order by scope_id`,
     [await ecUser()])
-  assert.deepEqual(rows.map(r => r.scope_id), ['essential'],
-    'zero rows here means UNCONSTRAINED, which is how this role reached HIV before Phase 2M.2')
+  assert.deepEqual(rows.map(r => r.scope_id), ['essential', 'hiv'])
 })
 
-test('it reaches Essential commodities and is refused HIV ones', async () => {
+test('it reads both modules, and the sections still bound it', async () => {
   const u = await ecUser()
   const facilityId = await facilityInState()
 
-  const ess = await AclResolver.can(u, 'stock.write',
-    { facilityId, commodityId: await itemIn('essential') })
-  assert.equal(ess.decision, true, 'its own module')
+  // Module dimension: both.
+  for (const mod of ['essential', 'hiv']) {
+    assert.equal(await AclResolver.moduleCovers(u, await itemIn(mod)), true,
+      `the module dimension covers ${mod}`)
+  }
 
-  const hiv = await AclResolver.can(u, 'stock.write',
-    { facilityId, commodityId: await itemIn('hiv') })
-  assert.equal(hiv.decision, false, 'THE FIX — this was true before Phase 2M.2')
-  assert.equal(hiv.reason, 'commodity outside module scope')
+  // And both are actually READABLE. This is what the `essential` section fixed:
+  // sections AND with the module dimension, so while the only sections were
+  // pharmacy and lab, an Essential-module item matched no section and was
+  // refused however wide the module scope was.
+  assert.equal((await AclResolver.can(u, 'stock.read',
+    { facilityId, commodityId: await itemIn('essential') })).decision, true,
+    'an Essential item is reachable through the essential section')
+  assert.equal((await AclResolver.can(u, 'stock.read',
+    { facilityId, commodityId: (await query(
+      `select id from commodities where category = 'Pharmacy drugs' limit 1`)).rows[0].id })).decision,
+    true, 'and so is its HIV pharmacy section')
+
+  // The sections are still a boundary, not a formality: lab is not among them.
+  assert.equal((await AclResolver.can(u, 'stock.read',
+    { facilityId, commodityId: (await query(
+      `select id from commodities where category = 'Lab consumables' limit 1`)).rows[0].id })).decision,
+    false, 'lab is outside its sections')
+
+  // THE ASYMMETRY. Essential sees HIV; HIV must NOT see Essential. Checked
+  // against a real HIV administrator, because it is the half that protects a
+  // programme boundary rather than the half that opens one.
+  const { rows: hivAdmin } = await query(`
+    select u.id, u.raw_user_meta_data->>'admin_state' state
+      from users u join user_roles ur on ur.user_id = u.id
+      join roles r on r.id = ur.role_id
+     where r.name = 'state_admin' and u.email not like '%.invalid'
+       and (u.raw_user_meta_data->>'essential') is null
+       and u.raw_user_meta_data->>'admin_state' is not null limit 1`)
+  const { rows: fac } = await query(
+    `select id from facilities where state = $1 limit 1`, [hivAdmin[0].state])
+  const crossed = await AclResolver.can(hivAdmin[0].id, 'stock.read',
+    { facilityId: fac[0].id, commodityId: await itemIn('essential') })
+  assert.equal(crossed.decision, false, 'an HIV administrator must never reach Essential')
+  assert.equal(crossed.reason, 'commodity outside module scope')
+
+  // …and is not simply denied everything.
+  const own = await AclResolver.can(hivAdmin[0].id, 'stock.read',
+    { facilityId: fac[0].id, commodityId: await itemIn('hiv') })
+  assert.equal(own.decision, true, 'non-vacuous: it still reads its own module')
 })
 
-test('no role holds a module scope it should not', async () => {
+test('an account holds an essential module scope only if it was granted one', async () => {
+  // Not "one module each": 194 DUAL-module logins hold both, because
+  // meta.essential grants HIV *and* Essential (see
+  // 20260907_acl_dual_module_logins.sql). The invariant that actually matters is
+  // that `essential` is never present without the grant behind it.
   const { rows } = await query(`
-    select r.name, s.scope_id, count(*)::int n
+    select u.email,
+           (u.raw_user_meta_data->>'essential')::boolean granted,
+           r.name role
       from user_role_scopes s
       join user_roles ur on ur.user_id = s.user_id and ur.role_id = s.role_id
       join roles r on r.id = ur.role_id
       join users u on u.id = s.user_id
-     where s.dimension = 'module' and u.email not like '%.invalid'
-     group by 1, 2 order by 1`)
+     where s.dimension = 'module' and s.scope_id = 'essential'
+       and u.email not like '%.invalid'`)
+  assert.ok(rows.length > 0, 'non-vacuous')
   for (const r of rows) {
-    const expected = r.name === 'essential_admin' ? 'essential' : 'hiv'
-    assert.equal(r.scope_id, expected, `${r.name} must be scoped to ${expected}`)
+    assert.ok(r.granted === true || r.role === 'essential_admin',
+      `${r.email} holds Essential module scope without meta.essential or the essential_admin role`)
   }
-  assert.ok(rows.some(r => r.name === 'essential_admin'), 'non-vacuous')
-  assert.ok(rows.some(r => r.scope_id === 'hiv'), 'non-vacuous')
+})
+
+test('every dual-module login keeps its HIV half', async () => {
+  // The failure this guards is silent: dropping the hiv row would leave a
+  // pharmacy-section login with no reachable HIV category, and — because scope
+  // ANDs across dimensions — nothing visible at all.
+  const { rows } = await query(`
+    select count(*)::int n from users u
+     where (u.raw_user_meta_data->>'essential')::boolean is true
+       and u.email not like '%.invalid'
+       and not exists (select 1 from user_role_scopes s
+                        where s.user_id = u.id and s.dimension = 'module' and s.scope_id = 'hiv')`)
+  assert.equal(rows[0].n, 0)
 })
 
 test('system_admin still has NO module scope — national means unscoped', async () => {
@@ -152,17 +214,38 @@ test('an essential_admin with no state gets no identity', async () => {
   assert.equal(adminIdentity({ accessLevel: 'essential_admin', adminState: null }, 'a'), null)
 })
 
-test('its user list contains only Essential-module accounts', async () => {
+test('its user list contains only accounts granted the Essential module', async () => {
   const actor = await ecUser()
   const id = adminIdentity({ accessLevel: 'essential_admin', adminState: 'Akwa Ibom' }, actor)
-  const { users } = await listUsers(id, { limit: 200 })
+  const { users } = await listUsers(id, { limit: 400 })
   assert.ok(users.length > 0, 'non-vacuous — it can see itself at least')
+
+  // Dual-module logins ARE its users: meta.essential grants both modules, so
+  // "only Essential-module accounts" means "holds an essential row", not "holds
+  // nothing else".
   for (const u of users) {
     const { rows } = await query(
-      `select scope_id from user_role_scopes where user_id = $1 and dimension = 'module'`, [u.id])
-    assert.deepEqual(rows.map(r => r.scope_id), ['essential'],
-      `${u.email} is not an Essential account and must not be listed`)
+      `select 1 from user_role_scopes
+        where user_id = $1 and dimension = 'module' and scope_id = 'essential'`, [u.id])
+    assert.equal(rows.length, 1, `${u.email} has no Essential grant and must not be listed`)
   }
+  assert.equal(new Set(users.map(u => u.email)).size, users.length,
+    'a dual-module account holds two module rows and must not be listed twice')
+})
+
+test('an HIV-only account is not in its list', async () => {
+  const actor = await ecUser()
+  const id = adminIdentity({ accessLevel: 'essential_admin', adminState: 'Akwa Ibom' }, actor)
+  const { users } = await listUsers(id, { limit: 400 })
+  const emails = new Set(users.map(u => u.email))
+  const { rows } = await query(`
+    select u.email from users u
+     where u.raw_user_meta_data->>'admin_state' = 'Akwa Ibom'
+       and (u.raw_user_meta_data->>'essential') is null
+       and u.email not like '%.invalid'
+     limit 5`)
+  assert.ok(rows.length > 0, 'non-vacuous')
+  for (const r of rows) assert.ok(!emails.has(r.email), `${r.email} is HIV-only and must be hidden`)
 })
 
 test('it cannot open an HIV account, even one in its own state', async () => {
@@ -222,12 +305,12 @@ test('the catalogue accepts an Essential item and refuses an HIV one', async () 
   app.use(express.json())
   app.use('/api', authMiddleware, attachScope)
   app.use('/api/commodities', commodityRoutes)
-  server = app.listen(5098)
+  server = app.listen(0)
 
   const token = m => jwt.sign({ sub: '00000000-0000-0000-0000-000000000001', email: EMAIL, user_metadata: m },
     process.env.JWT_SECRET, { expiresIn: '5m' })
   const post = async (m, body) => {
-    const r = await fetch('http://localhost:5098/api/commodities', {
+    const r = await fetch(`http://localhost:${server.address().port}/api/commodities`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token(m)}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -266,9 +349,13 @@ test('the catalogue accepts an Essential item and refuses an HIV one', async () 
 // ═════════════════════════════════════════════════════════════════════════════
 
 test('no existing role gained or lost a permission', async () => {
+  // Excludes aclFoundation's throwaway 'aclschematest_%' roles, which are created
+  // and dropped concurrently and would otherwise appear as extra rows here.
   const { rows } = await query(`
     select r.name, count(*)::int n from role_permissions rp
-      join roles r on r.id = rp.role_id group by 1 order by 1`)
+      join roles r on r.id = rp.role_id
+     where r.name not like 'aclschematest_%'
+     group by 1 order by 1`)
   assert.deepEqual(rows, [
     { name: 'cluster_admin', n: 15 },
     { name: 'essential_admin', n: 26 },
