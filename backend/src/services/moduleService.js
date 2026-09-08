@@ -19,7 +19,11 @@ export class ModuleService {
       // carries the grant — so existing pharmacy logins at an enrolled facility still see
       // HIV only, and just the separate dual-module store-manager logins get both cards.
       const essentialOk = (k) => k !== 'essential' || (scope.section === 'pharmacy' && scope.essentialAccess === true)
-      enrolled = new Set(all.map(m => m.key).filter(k => set.has(k) && essentialOk(k)))
+      // An Essential-only login greys out every other module card, even one its facility
+      // already has enrolled — e.g. an Essential roster facility that was already an HIV
+      // facility. Without this, HIV would show enrolled from the facility's own row.
+      const restrictionOk = (k) => k === 'essential' || !scope.essentialOnly
+      enrolled = new Set(all.map(m => m.key).filter(k => set.has(k) && essentialOk(k) && restrictionOk(k)))
     } else {
       // Admin tiers oversee every module — but Essential still requires the explicit
       // per-login grant, matching enforceModuleAccess. Without this an ungranted admin
@@ -27,7 +31,8 @@ export class ModuleService {
       // There is no facility_modules row to consult for an admin: they aren't attached
       // to a facility, so the grant on the login is the whole test.
       enrolled = new Set(all.map(m => m.key)
-        .filter(k => k !== 'essential' || scope.essentialAccess === true))
+        .filter(k => k !== 'essential' || scope.essentialAccess === true)
+        .filter(k => k === 'essential' || !scope.essentialOnly))
     }
     return all.map(m => ({ ...m, enrolled: enrolled.has(m.key) }))
   }

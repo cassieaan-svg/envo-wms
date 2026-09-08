@@ -119,6 +119,11 @@ export function attachScope(req, res, next) {
     // logins don't carry it, so they stay HIV-only even at an enrolled facility — only the
     // separate dual-module store-manager logins are granted it.
     essentialAccess: meta.essential === true,
+    // The inverse restriction: THIS login may open Essential only — not any other
+    // module, even one its facility already has enrolled (some of the Essential
+    // facility roster are pre-existing HIV facilities). A temporary lock, lifted by
+    // clearing the flag once the account is meant to see both.
+    essentialOnly: meta.essential_only === true,
   }
   next()
 }
@@ -325,6 +330,11 @@ export async function enforceModuleAccess(req, res) {
   // Admin oversight of Essential is now opt-in per login, exactly like a facility's.
   if (s.module === 'essential' && !s.essentialAccess) {
     return forbid(res, 'This login is not enabled for Essential Commodities'), false
+  }
+  // The inverse: a login locked to Essential-only can't reach any other module, even
+  // one its facility is otherwise enrolled in.
+  if (s.essentialOnly && s.module !== 'essential') {
+    return forbid(res, 'This login is restricted to Essential Commodities'), false
   }
   const mods = await callerModules(req)
   if (mods === null) return true // admin tiers oversee every module they're granted
