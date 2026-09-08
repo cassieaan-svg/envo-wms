@@ -43,6 +43,11 @@ export function UserConfigPanel({ userId, meta, onClose, onSaved }) {
   // and essential).
   const [sections, setSections] = useState([])
   const [modules, setModules] = useState([])
+  // What this administrator may put on an account, and which module it may never
+  // take off — see aclAdminService.adminIdentity. Both null for system_admin and
+  // state_admin, which are unconfined here.
+  const ownModule = meta.identity?.module || null
+  const grantable = meta.identity?.grantableModules || null
   const [facilities, setFacilities] = useState([])
   const [confirm, setConfirm] = useState(null)
 
@@ -248,15 +253,20 @@ export function UserConfigPanel({ userId, meta, onClose, onSaved }) {
       <section className="mb-5">
         <div className={label}>Module access</div>
         <div className="mt-2 flex flex-wrap gap-2">
-          {(meta.modules || []).map(m => {
+          {(meta.modules || [])
+            // Only what this administrator may grant. null = unconfined.
+            .filter(m => !grantable || grantable.includes(m.key))
+            .map(m => {
             const on = modules.includes(m.key)
+            // Its own module is compulsory on every account it administers.
+            const locked = m.key === ownModule
             return (
-              <button key={m.key} type="button" disabled={!cfg.editable}
-                onClick={() => toggleModule(m.key)}
+              <button key={m.key} type="button" disabled={!cfg.editable || locked}
+                onClick={() => !locked && toggleModule(m.key)}
                 className={`text-xs px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
                   on ? 'bg-green-500/20 border-green-500/40 text-green-300'
                      : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'}`}>
-                {m.label}
+                {m.label}{locked ? ' · required' : ''}
               </button>
             )
           })}
@@ -264,7 +274,9 @@ export function UserConfigPanel({ userId, meta, onClose, onSaved }) {
         <div className="text-xs text-gray-500 mt-1.5">
           {modules.length === 0
             ? <span className="text-amber-400">No module selected means every module — pick at least one.</span>
-            : 'An account may hold more than one; the modules are OR-ed together.'}
+            : ownModule
+              ? `An account may hold more than one; the modules are OR-ed together. The ${ownModule} module stays on, because you administer only accounts that hold it.`
+              : 'An account may hold more than one; the modules are OR-ed together.'}
         </div>
       </section>
 

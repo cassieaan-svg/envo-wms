@@ -27,7 +27,13 @@ export function CreateUserModal({ meta, onClose, onCreated }) {
   const [lga, setLga] = useState('')
   const [geoValue, setGeoValue] = useState('')
   const [sections, setSections] = useState([])
-  const [modules, setModules] = useState(['hiv'])
+  // An administrator confined to a module must put that module on every account
+  // it creates — it could not administer one without it. So that module is the
+  // starting selection and cannot be turned off; an unconfined administrator
+  // (system_admin, state_admin) starts on HIV as before.
+  const ownModule = meta.identity?.module || null
+  const grantable = meta.identity?.grantableModules || null
+  const [modules, setModules] = useState(ownModule ? [ownModule] : ['hiv'])
   const [facilities, setFacilities] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -168,15 +174,26 @@ export function CreateUserModal({ meta, onClose, onCreated }) {
       <section className="mt-4">
         <div className={label}>Module access</div>
         <div className="mt-2 flex flex-wrap gap-2">
-          {(meta.modules || []).map(m => (
-            <Chip key={m.key} on={modules.includes(m.key)} onClick={() => toggle(m.key, setModules)}>
-              {m.label}
-            </Chip>
-          ))}
+          {(meta.modules || [])
+            // Offer only what this administrator may actually grant, so the form
+            // cannot compose a request the server will refuse. null = unconfined.
+            .filter(m => !grantable || grantable.includes(m.key))
+            .map(m => (
+              <Chip key={m.key} on={modules.includes(m.key)}
+                onClick={() => m.key !== ownModule && toggle(m.key, setModules)}>
+                {m.label}{m.key === ownModule ? ' · required' : ''}
+              </Chip>
+            ))}
         </div>
         {!modules.length && (
           <div className="text-xs text-amber-400 mt-1.5">
             Pick at least one — none selected means every module.
+          </div>
+        )}
+        {ownModule && (
+          <div className="text-xs text-gray-400 mt-1.5">
+            Every account you create carries the {ownModule} module — you administer
+            only accounts that hold it. Add another to make a dual-module login.
           </div>
         )}
       </section>

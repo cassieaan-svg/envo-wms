@@ -85,20 +85,38 @@ export function adminIdentity(scope, actorId) {
   if (!scope || !actorId) return null
   if (scope.accessLevel === 'system_admin') {
     return { kind: 'system_admin', actorId, rank: ROLE_RANK.system_admin, state: null,
-             module: null, canOverride: true }
+             module: null, grantableModules: null, canOverride: true }
   }
   if (scope.accessLevel === 'state_admin' && scope.adminState) {
     return { kind: 'state_admin', actorId, rank: ROLE_RANK.state_admin, state: scope.adminState,
-             module: null, canOverride: false }
+             module: null, grantableModules: null, canOverride: false }
   }
   // Phase 2M.2. Confined on TWO dimensions, not one: its own state AND the
   // Essential module. "Essential Commodities users within their authorized
   // scope" means it administers its own programme's people, not every account
   // that happens to sit in the same state — so `module` narrows further, and
   // every read and write below intersects both.
+  //
+  // `module` and `grantableModules` answer two different questions and are
+  // deliberately different values:
+  //
+  //   module            'essential' — WHOSE accounts it administers. Every read
+  //                     and write below intersects it, so an account without the
+  //                     Essential module is invisible to it.
+  //   grantableModules  ['essential','hiv'] — which modules it may PUT ON an
+  //                     account. The Essential programme's store managers are
+  //                     dual-module logins by design (the 194 on the
+  //                     essential-commodities branch), so minting one is part of
+  //                     the job.
+  //
+  // What this does NOT touch is the actor's own operational reach, which lives in
+  // user_role_scopes and stays {essential} — see audit finding B-2 and
+  // 20260908_acl_essential_admin_module_boundary.sql. Granting a module is not
+  // holding it.
   if (scope.accessLevel === 'essential_admin' && scope.adminState) {
     return { kind: 'essential_admin', actorId, rank: ROLE_RANK.essential_admin,
-             state: scope.adminState, module: 'essential', canOverride: false }
+             state: scope.adminState, module: 'essential',
+             grantableModules: ['essential', 'hiv'], canOverride: false }
   }
   return null
 }
@@ -331,42 +349,45 @@ async function assertMayWrite(identity, userId, nextRole) {
   return target
 }
 
-/**
- * The modules the ACTOR itself holds. Read from the actor's own scope rows rather
- * than hard-coded, so "what may I grant" tracks "what do I have" without a second
- * copy of that decision in code.
- *
- * An empty result means unconstrained (system_admin), not "nothing".
- */
-async function actorModules(identity) {
-  const { rows } = await query(
-    `select scope_id from user_role_scopes where user_id = $1 and dimension = 'module'`,
-    [identity.actorId])
-  return rows.map(r => r.scope_id)
-}
-
 async function validateScopes(role, scopes, identity) {
-  // A module-confined administrator may only produce users inside the modules it
-  // holds ITSELF. Without this it could hand an account a module it does not have
-  // — or omit the module row entirely, which means unconstrained — and so create
-  // an administrator wider than itself.
+  // WHICH MODULES AN ADMINISTRATOR MAY GRANT — deliberately NOT the same question
+  // as which modules it may operate in.
   //
-  // A SUBSET check, not equality: an Essential administrator holds both hiv and
-  // essential, and must be able to create a single-module user as well as a
-  // dual-module one.
+  // This used to read the actor's own `user_role_scopes` module rows, on the
+  // reasoning that "what may I grant" should track "what do I have" without a
+  // second copy of the decision. That coupling is precisely what audit finding
+  // B-2 was: the module dimension is read by the RESOLVER and means operational
+  // reach, so the only way to let an Essential administrator create dual-module
+  // logins was to give it operational reach into HIV — state-wide stock.write
+  // over another programme's commodities, which legacy denies it outright.
+  //
+  // The two are now separate. Operational reach stays {essential}; the grantable
+  // set is declared here, next to the identity that carries it, in the same shape
+  // as catalogueModulesFor() in routes/commodities.js.
+  //
+  // TWO CONDITIONS, not one. A grant must be a subset of the declared set, AND it
+  // must include the administrator's own module — otherwise it could mint an
+  // HIV-only account that it cannot afterwards see, edit or revoke, because
+  // listUsers and getUserConfig both filter on identity.module. Creating an
+  // account outside your own remit is not a narrower power than granting a module
+  // you lack; it is a different way of escaping the same boundary.
   if (identity?.module) {
-    const mine = await actorModules(identity)
+    const allowed = identity.grantableModules
     const asked = scopes.filter(s => s.dimension === 'module').map(s => s.scope_id)
     if (!asked.length) {
       throw new AclAdminError(
         'A module is required — an account with none is unconstrained across every module.',
         403, 'OUT_OF_MODULE')
     }
-    const outside = asked.filter(mod => !mine.includes(mod))
+    const outside = asked.filter(mod => !allowed.includes(mod))
     if (outside.length) {
       throw new AclAdminError(
-        `You may only grant modules you hold yourself (${mine.join(', ') || 'none'}).`,
-        403, 'OUT_OF_MODULE')
+        `You may only grant these modules: ${allowed.join(', ')}.`, 403, 'OUT_OF_MODULE')
+    }
+    if (!asked.includes(identity.module)) {
+      throw new AclAdminError(
+        `Every account you create must include the ${identity.module} module — ` +
+        `you would not be able to administer one that does not.`, 403, 'OUT_OF_MODULE')
     }
   }
 

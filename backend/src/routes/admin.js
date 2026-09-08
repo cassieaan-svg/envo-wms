@@ -141,7 +141,16 @@ router.get('/meta', async (req, res) => {
         sections: SECTIONS.map(key => ({ key, categories: SECTION_CATEGORIES[key] })),
         features: featureRegistry(),
         permissions,
-        identity: { kind: identity.kind, state: identity.state, canOverride: identity.canOverride },
+        // `module` is the caller's own remit — whose accounts it administers —
+        // and `grantableModules` is what it may put ON an account. They differ
+        // for essential_admin (see aclAdminService.adminIdentity), and the
+        // screens need both: the module pickers offer `grantableModules` and
+        // require `module` among them, which is exactly what validateScopes
+        // enforces. Sent so the UI cannot offer a choice the server will refuse.
+        identity: {
+          kind: identity.kind, state: identity.state, canOverride: identity.canOverride,
+          module: identity.module, grantableModules: identity.grantableModules,
+        },
       },
     })
   } catch (err) { fail(res, err, 'meta') }

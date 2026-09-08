@@ -283,16 +283,21 @@ test('it cannot open an HIV account, even one in its own state', async () => {
     '404, not 403 — it must not be able to probe for accounts it does not administer')
 })
 
-test('it cannot write a scope outside its own module', async () => {
-  // This test used to pass for the wrong reason. Its target was the ACTOR
-  // ITSELF, so setUserRoleAndScope raised SELF_EDIT before the module check ran
-  // and the assertion — which accepted either code — never exercised what its
-  // name claims. It would have passed just as green while essential_admin held
-  // `module = hiv` and could legitimately grant it (audit finding B-2).
+test('it may grant a module it does not itself hold, but not escape its own remit', async () => {
+  // GRANTING A MODULE IS NOT HOLDING ONE. The Essential programme's store
+  // managers are dual-module logins, so minting one is part of this role's job —
+  // while its OWN operational reach stays {essential} (audit finding B-2). The
+  // two questions are answered by identity.grantableModules and the actor's
+  // user_role_scopes rows respectively, and they are deliberately different.
   //
-  // A DIFFERENT target, and OUT_OF_MODULE only.
+  // This test also used to pass for the wrong reason: its target was the ACTOR
+  // ITSELF, so SELF_EDIT fired before the module check ran and the assertion —
+  // which accepted either code — never exercised what its name claimed.
   const actor = await ecUser()
   const id = adminIdentity({ accessLevel: 'essential_admin', adminState: 'Akwa Ibom' }, actor)
+  assert.deepEqual(id.grantableModules, ['essential', 'hiv'])
+  assert.equal(id.module, 'essential', 'whose accounts it administers is a narrower set')
+
   const { rows: other } = await query(`
     select u.id from users u
       join user_roles ur on ur.user_id = u.id
@@ -302,15 +307,53 @@ test('it cannot write a scope outside its own module', async () => {
        and u.email not like '%.invalid' and u.email not like 'probe.create.%'
      limit 1`, [actor])
   if (!other.length) return // no Essential grantee seeded here
-  for (const scopes of [
-    [{ dimension: 'module', scope_type: 'module', scope_id: 'hiv' }],
-    [], // omitting the module row entirely means UNCONSTRAINED
+  const target = other[0].id
+
+  // REFUSED: an account it could not afterwards administer, or an unconstrained one.
+  for (const [scopes, why] of [
+    [[{ dimension: 'module', scope_type: 'module', scope_id: 'hiv' }],
+     'hiv alone — listUsers filters on essential, so it could never see this account again'],
+    [[], 'no module row at all means unconstrained across every module'],
   ]) {
     await assert.rejects(
-      () => setUserRoleAndScope(id, other[0].id, { role: 'facility', scopes }),
-      err => err.code === 'OUT_OF_MODULE',
-      'neither another module nor an absent one may be written')
+      () => setUserRoleAndScope(id, target, { role: 'facility', scopes }),
+      err => err.code === 'OUT_OF_MODULE', why)
   }
+
+  // ALLOWED: dual-module, and single-module within its own programme.
+  //
+  // Only the module dimension varies — the account's real geography and section
+  // rows are carried through unchanged, both because the facility role requires
+  // exactly one facility scope and because a test that rewrote them would be
+  // proving something other than what it claims. Restored in a finally, so the
+  // suite leaves the account as it found it.
+  const scopeRows = async () => (await query(
+    `select dimension, scope_type, scope_id from user_role_scopes
+      where user_id = $1 order by dimension, scope_id`, [target])).rows
+  const modulesOf = rows => rows.filter(r => r.dimension === 'module').map(r => r.scope_id).sort()
+  const before = await scopeRows()
+  const others = before.filter(r => r.dimension !== 'module')
+  try {
+    for (const asked of [['essential', 'hiv'], ['essential']]) {
+      await setUserRoleAndScope(id, target, {
+        role: 'facility',
+        scopes: [...others,
+          ...asked.map(m => ({ dimension: 'module', scope_type: 'module', scope_id: m }))],
+      })
+      assert.deepEqual(modulesOf(await scopeRows()), [...asked].sort(),
+        `granting {${asked}} must be permitted`)
+    }
+  } finally {
+    await setUserRoleAndScope(id, target, { role: 'facility', scopes: before })
+  }
+  assert.deepEqual(await scopeRows(), before, 'the target account was left as found')
+
+  // AND THE POINT OF ALL THIS: granting hiv did not give the ACTOR hiv.
+  const mine = (await query(
+    `select scope_id from user_role_scopes
+      where user_id = $1 and dimension = 'module' order by scope_id`, [actor])).rows.map(r => r.scope_id)
+  assert.deepEqual(mine, ['essential'],
+    'the administrator handed out a module it still does not hold')
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
