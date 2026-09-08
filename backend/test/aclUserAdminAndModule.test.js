@@ -280,8 +280,9 @@ test('this suite restored the scope rows it touched', async () => {
     { dimension: 'commodity', n: 7761 },
     // +1 geography: the essential_admin account's state scope (Phase 2M.2).
     { dimension: 'geography', n: 7564 },
-    // Module rows outnumber accounts: 194 dual-module logins hold two, and
-    // essential_admin holds two (Phase 2M.2c). Counting rows, not holders.
-    { dimension: 'module', n: 7762 },
+    // Module rows outnumber accounts: the 194 dual-module logins hold two each.
+    // essential_admin holds exactly ONE — it lost its `hiv` row to audit finding
+    // B-2, which is why this is 7762 - 1. Counting rows, not holders.
+    { dimension: 'module', n: 7761 },
   ])
 })

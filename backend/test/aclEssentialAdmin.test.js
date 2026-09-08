@@ -59,42 +59,55 @@ const itemIn = async module =>
 // 1. THE REGRESSION GUARD — module confinement
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('the account carries BOTH module scopes', async () => {
+test('the account carries EXACTLY ONE module scope: essential', async () => {
   // Phase 2M.2 confined it to `essential`, which fixed the real defect (an
-  // ABSENT module row means unconstrained). Phase 2M.2c then widened it to both,
-  // per the confirmed requirement that an Essential administrator opens both
-  // modules — the same shape as the 194 dual-module logins.
+  // ABSENT module row means unconstrained). Phase 2M.2c widened it to both, so
+  // one administrator could work across programmes — and that reopened the hole
+  // from the other side, because this dimension is read by the RESOLVER and
+  // means operational reach, not administrative capability. See audit finding
+  // B-2 and 20260908_acl_essential_admin_module_boundary.sql.
   //
-  // The invariant that survives both changes is that the rows are EXPLICIT: zero
-  // rows would again mean every module, including any added later.
+  // Two invariants, not one. The row must be EXPLICIT (zero rows means every
+  // module, including any added later) and it must be ALONE (a second row ORs
+  // and reopens B-2).
   const { rows } = await query(
     `select scope_id from user_role_scopes
       where user_id = $1 and dimension = 'module' order by scope_id`,
     [await ecUser()])
-  assert.deepEqual(rows.map(r => r.scope_id), ['essential', 'hiv'])
+  assert.deepEqual(rows.map(r => r.scope_id), ['essential'])
 })
 
-test('it reads both modules, and the sections still bound it', async () => {
+test('it reads its own module only, and the sections bound it further', async () => {
   const u = await ecUser()
   const facilityId = await facilityInState()
 
-  // Module dimension: both.
-  for (const mod of ['essential', 'hiv']) {
-    assert.equal(await AclResolver.moduleCovers(u, await itemIn(mod)), true,
-      `the module dimension covers ${mod}`)
-  }
+  assert.equal(await AclResolver.moduleCovers(u, await itemIn('essential')), true,
+    'the module dimension covers essential')
+  assert.equal(await AclResolver.moduleCovers(u, await itemIn('hiv')), false,
+    'and does not cover hiv — the B-2 boundary')
 
-  // And both are actually READABLE. This is what the `essential` section fixed:
+  // Essential items are READABLE. This is what the `essential` section fixed:
   // sections AND with the module dimension, so while the only sections were
   // pharmacy and lab, an Essential-module item matched no section and was
   // refused however wide the module scope was.
   assert.equal((await AclResolver.can(u, 'stock.read',
     { facilityId, commodityId: await itemIn('essential') })).decision, true,
     'an Essential item is reachable through the essential section')
-  assert.equal((await AclResolver.can(u, 'stock.read',
-    { facilityId, commodityId: (await query(
-      `select id from commodities where category = 'Pharmacy drugs' limit 1`)).rows[0].id })).decision,
-    true, 'and so is its HIV pharmacy section')
+
+  // HIV Pharmacy drugs are NOT — the finding this fix closes. The account still
+  // carries the `pharmacy` SECTION (Phase 2M.2d's confirmed shape, shared with
+  // the 194 grantees), so the commodity dimension admits this item; the module
+  // dimension is what refuses it, and the two AND. That makes the module row the
+  // single guard here, which is exactly why it is asserted directly above.
+  const pharmDrug = (await query(
+    `select id from commodities where category = 'Pharmacy drugs' limit 1`)).rows[0].id
+  assert.equal(await AclResolver.commodityCovers(u, pharmDrug), true,
+    'the pharmacy section still admits it on the commodity dimension')
+  for (const perm of ['stock.read', 'stock.write']) {
+    const r = await AclResolver.can(u, perm, { facilityId, commodityId: pharmDrug })
+    assert.equal(r.decision, false, `${perm} on an HIV Pharmacy drug must be refused`)
+    assert.match(r.reason, /module/, 'and refused BY THE MODULE DIMENSION, not incidentally')
+  }
 
   // The sections are still a boundary, not a formality: lab is not among them.
   assert.equal((await AclResolver.can(u, 'stock.read',
@@ -271,16 +284,31 @@ test('it cannot open an HIV account, even one in its own state', async () => {
 })
 
 test('it cannot write a scope outside its own module', async () => {
+  // This test used to pass for the wrong reason. Its target was the ACTOR
+  // ITSELF, so setUserRoleAndScope raised SELF_EDIT before the module check ran
+  // and the assertion — which accepted either code — never exercised what its
+  // name claims. It would have passed just as green while essential_admin held
+  // `module = hiv` and could legitimately grant it (audit finding B-2).
+  //
+  // A DIFFERENT target, and OUT_OF_MODULE only.
   const actor = await ecUser()
   const id = adminIdentity({ accessLevel: 'essential_admin', adminState: 'Akwa Ibom' }, actor)
-  const target = await ecUser() // self — but the module check runs first
+  const { rows: other } = await query(`
+    select u.id from users u
+      join user_roles ur on ur.user_id = u.id
+      join roles r on r.id = ur.role_id
+      join user_role_scopes s on s.user_id = u.id and s.dimension = 'module'
+     where r.name = 'facility' and s.scope_id = 'essential' and u.id <> $1
+       and u.email not like '%.invalid' and u.email not like 'probe.create.%'
+     limit 1`, [actor])
+  if (!other.length) return // no Essential grantee seeded here
   for (const scopes of [
     [{ dimension: 'module', scope_type: 'module', scope_id: 'hiv' }],
     [], // omitting the module row entirely means UNCONSTRAINED
   ]) {
     await assert.rejects(
-      () => setUserRoleAndScope(id, target, { role: 'facility', scopes }),
-      err => err.code === 'OUT_OF_MODULE' || err.code === 'SELF_EDIT',
+      () => setUserRoleAndScope(id, other[0].id, { role: 'facility', scopes }),
+      err => err.code === 'OUT_OF_MODULE',
       'neither another module nor an absent one may be written')
   }
 })

@@ -263,12 +263,17 @@ test('the module backfill gave HIV scope to neither national nor cross-module ro
   assert.equal(rows.filter(r => r.name === 'system_admin').length, 0,
     'system_admin carries no module row at all')
 
-  // essential_admin holds BOTH modules by decision (Phase 2M.2c) — an Essential
-  // administrator opens Essential and HIV. What still must not happen is the
-  // reverse: an HIV role acquiring `essential`. That is asserted below.
+  // essential_admin holds EXACTLY ONE module. Phase 2M.2c briefly gave it `hiv`
+  // as well, so one administrator could work across programmes; audit finding
+  // B-2 withdrew that, because this dimension is what the resolver reads to
+  // decide operational reach, and the second row handed the role state-wide
+  // stock.write over HIV Pharmacy drugs — which legacy denies it outright.
+  //
+  // The exclusion is now symmetric: neither module's administrator reaches the
+  // other. The reverse half — an HIV role acquiring `essential` — is below.
   const essentialAdminModules = rows.filter(r => r.name === 'essential_admin')
     .map(r => r.scope_id).sort()
-  assert.deepEqual(essentialAdminModules, ['essential', 'hiv'])
+  assert.deepEqual(essentialAdminModules, ['essential'])
 })
 
 test('no HIV role ever acquires the Essential module', async () => {

@@ -47,6 +47,12 @@ const MIGRATIONS = [
   // HIV. The backfill is `on conflict do nothing` over user_roles, so re-running
   // it picks up exactly the accounts that are missing a row.
   '20260907_acl_module_dimension.sql',
+  // Audit finding B-2. Runs LAST, after every backfill above has had its say, so
+  // the boundary is re-asserted rather than merely set once: essential_admin
+  // holds `module = essential` and nothing else. A second module row would give
+  // it state-wide stock.write over the HIV programme, which legacy denies it
+  // entirely — the widest gap the shadow sweep found.
+  '20260908_acl_essential_admin_module_boundary.sql',
 ]
 
 const MIGRATIONS_DIR = path.resolve(

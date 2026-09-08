@@ -1,20 +1,27 @@
 -- Phase 2M.2c: the Essential administrator opens both modules, and every account
 -- carrying the Essential grant is pinned to the pharmacy section.
 --
--- ── 1. essential_admin gains the HIV module ─────────────────────────────────
+-- ── 1. essential_admin gains the HIV module — WITHDRAWN ─────────────────────
 --
--- Phase 2M.2 confined essential_admin to `module = essential`, which was the
--- right fix for the defect it closed (an ABSENT module row meant unconstrained).
--- The confirmed requirement is different: an Essential administrator opens BOTH
--- modules, the same way the 194 dual-module store-manager logins do.
+-- This step used to add `module = hiv` to essential_admin, to let one
+-- administrator work across both programmes. It was wrong, and the pre-production
+-- audit caught it before cutover: see
+-- 20260908_acl_essential_admin_module_boundary.sql for the full finding.
 --
--- The dimension ORs within itself, so two rows read as "opens hiv or essential".
--- This WIDENS essential_admin's commodity reach to HIV items — deliberately, and
--- it is the one direction in this migration that is not a narrowing.
+-- In short — the module dimension is read by the RESOLVER, and it means one
+-- thing: which commodities are inside the account's OPERATIONAL reach. Adding
+-- `hiv` to widen an administrative capability also handed the role state-wide
+-- stock.write over HIV Pharmacy drugs, which legacy denies it entirely.
 --
--- Note this does NOT make the reverse true: an HIV administrator still holds only
--- `module = hiv` and is still refused Essential commodities by the ACL. The
--- asymmetry is the point.
+-- The capabilities this step was reaching for do not read this dimension:
+-- catalogue writes are pinned by catalogueModulesFor() in routes/commodities.js,
+-- and user creation is governed by actorModules(), which SHOULD narrow with the
+-- role. The insert is removed rather than commented out so a fresh run of the
+-- migration sequence never creates the row at all.
+--
+-- The asymmetry the original note claimed still holds, and now holds both ways:
+-- an HIV administrator cannot reach Essential, and an Essential administrator
+-- cannot reach HIV.
 --
 -- ── 2. The Essential grant implies the pharmacy section ─────────────────────
 --
@@ -36,17 +43,7 @@
 -- Idempotent. Run manually on prod (migrations do not auto-apply here). The
 -- granted accounts exist only locally today.
 
--- ── 1 ────────────────────────────────────────────────────────────────────────
-insert into user_role_scopes (user_id, role_id, dimension, scope_type, scope_id)
-select ur.user_id, ur.role_id, 'module', 'module', 'hiv'
-  from user_roles ur
-  join roles r on r.id = ur.role_id
- where r.name = 'essential_admin'
-   and not exists (
-     select 1 from user_role_scopes s
-      where s.user_id = ur.user_id and s.role_id = ur.role_id
-        and s.dimension = 'module' and s.scope_id = 'hiv')
-on conflict do nothing;
+-- ── 1 ── withdrawn, see the header. No statement here by design. ─────────────
 
 -- ── 2 ────────────────────────────────────────────────────────────────────────
 -- Keyed on the grant, not on the email pattern or the access level: the grant is
