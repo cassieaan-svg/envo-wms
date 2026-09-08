@@ -1,4 +1,5 @@
 import { useAppStore } from '../../store/appStore'
+import { facilityGroupLabel } from '../../utils/helpers'
 
 function Select({ value, onChange, children }) {
   return (
@@ -36,10 +37,13 @@ export function FacilityPicker() {
   // LGAs available given the current state choice (mid-tiers already have allFacs
   // scoped to their area at login, so their full set is their LGA pool).
   const lgaPool = isOverall ? (stState ? allFacs.filter(f => f.state === stState) : []) : allFacs
-  const lgas    = [...new Set(lgaPool.map(f => f.lga).filter(Boolean))].sort()
+  // Bucket by facilityGroupLabel (not raw f.lga) so state-office and cluster hubs —
+  // which have no LGA — appear under their own "State Office" / "<Cluster> Cluster"
+  // option and stay reachable, instead of being dropped from the filter entirely.
+  const lgas    = [...new Set(lgaPool.map(facilityGroupLabel).filter(Boolean))].sort()
   // Facilities available given the current LGA (or state) choice.
   const facPool = stLGA
-    ? allFacs.filter(f => f.lga === stLGA)
+    ? allFacs.filter(f => facilityGroupLabel(f) === stLGA)
     : (isOverall ? (stState ? allFacs.filter(f => f.state === stState) : []) : allFacs)
   const facs = facPool.sort((a, b) => a.name.localeCompare(b.name))
 

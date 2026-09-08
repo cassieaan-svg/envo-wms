@@ -73,9 +73,19 @@ router.post('/', async (req, res) => {
       return sendValidationError(res, 'Quantity must be a positive number', 'quantity')
     }
 
-    // Validate received_at if provided
+    // Validate received_at if provided. Past dates are allowed (a delivery can be
+    // recorded after the fact), but not future ones — you can't receive stock that
+    // hasn't arrived. Compared on the Lagos calendar day so a late-evening entry
+    // isn't wrongly rejected as "tomorrow" in UTC.
     if (received_at && !validators.isValidDate(received_at)) {
       return sendValidationError(res, 'received_at must be a valid date', 'received_at')
+    }
+    if (received_at) {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' })
+      const day = new Date(received_at).toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' })
+      if (day > today) {
+        return sendValidationError(res, 'received_at cannot be in the future', 'received_at')
+      }
     }
 
     // Validate expiry_date: correct format AND a plausible year (rejects a fumbled
@@ -182,8 +192,11 @@ router.get('/', async (req, res) => {
 router.get('/summary', async (req, res) => {
   try {
     const { facility_id, facility_ids, from, to, commodity_ids, section,
-            group_by, commodity_id, category, tz } = req.query
+            group_by, commodity_id, category, tz, supplier } = req.query
     const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+    if (supplier && !['ghsc', 'other'].includes(String(supplier))) {
+      return sendValidationError(res, "supplier must be 'ghsc' or 'other'", 'supplier')
+    }
 
     const groupBy = group_by ? String(group_by) : 'commodity'
     if (!INTAKE_GROUP_BY_KEYS.includes(groupBy)) {
@@ -213,6 +226,7 @@ router.get('/summary', async (req, res) => {
     const base = {
       from, to, commodityIds, categories: tokenCats, commodityNames: grants, section,
       groupBy, commodityId: commodity_id || null, category: category || null, tz: tz || null,
+      supplier: supplier || null,
     }
     let rows
     if (facility_id) {

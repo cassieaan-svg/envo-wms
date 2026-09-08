@@ -322,13 +322,17 @@ export class TransferService {
     await exec(`update stock_lot set ${sets.join(', ')}, updated_at = now() where ${where}`, params)
   }
 
-  static async dispatch(transferId, data) {
+  /**
+   * The body of a dispatch, running inside a caller-supplied transaction.
+   *
+   * Extracted so several transfers can be dispatched atomically in ONE transaction
+   * (dispatchBatch). `dispatch` below is unchanged in behaviour — it opens a
+   * transaction and calls this — so every existing caller is unaffected.
+   */
+  static async _dispatchOne(exec, transfer, data) {
     const { approved_by, carrier, expiry, batch, quantity, lots } = data
-    const transfer = await this.getTransferById(transferId)
-    if (!transfer) return null
     const qty = parseInt(quantity ?? transfer.quantity)
-
-    return withTransaction(async exec => {
+    const transferId = transfer.id
       // Guard: never dispatch more than the sender's store actually holds.
       if (transfer.sending_facility_id) {
         const stk = await StockService.getStockByFacilityAndCommodity(
@@ -433,12 +437,127 @@ export class TransferService {
         [transferId, qty, newNotes, JSON.stringify(drawn)]
       )
       return rows[0] || null
+  }
+
+  static async dispatch(transferId, data) {
+    const transfer = await this.getTransferById(transferId)
+    if (!transfer) return null
+    return withTransaction(async exec => this._dispatchOne(exec, transfer, data))
+  }
+
+  /**
+   * Dispatch SEVERAL pending transfers in one transaction — the source facility's side
+   * of a batch assignment.
+   *
+   * The store picks one commodity off the shelf once and splits it across the
+   * facilities that asked for it, so the natural unit of work is a commodity, not a
+   * request. Each item still carries its own quantity and its own lot allocation.
+   *
+   * ALL-OR-NOTHING, and that matters more here than it does for assignment: this
+   * debits the lot ledger and the store's stock. A half-finished batch would leave the
+   * shelf and the records disagreeing, with no way to tell which lines moved.
+   *
+   * `carrier` applies to every item unless the item overrides it. For a State Office
+   * Store the approving officer IS the carrier — the office drives the stock out to the
+   * facilities — so the caller passes one name for the whole run.
+   */
+  static async dispatchBatch({ items, approved_by, carrier }) {
+    if (!Array.isArray(items) || items.length === 0) {
+      const e = new Error('Select at least one transfer to dispatch'); e.status = 400; throw e
+    }
+    return withTransaction(async exec => {
+      const dispatched = []
+      for (const item of items) {
+        // Locked for the duration: two storekeepers dispatching the same request would
+        // otherwise both pass the stock guard and debit the ledger twice.
+        const { rows } = await exec('select * from stock_transfer_log where id = $1 for update', [item.id])
+        const transfer = rows[0]
+        if (!transfer) { const e = new Error(`Transfer ${item.id} no longer exists`); e.status = 409; throw e }
+        if (transfer.status !== 'pending') {
+          const e = new Error('One of the selected transfers is no longer pending — refresh and try again')
+          e.status = 409; throw e
+        }
+        if (!transfer.sending_facility_id) {
+          const e = new Error('One of the selected transfers has no source facility assigned')
+          e.status = 409; throw e
+        }
+        dispatched.push(await this._dispatchOne(exec, transfer, {
+          approved_by,
+          carrier: item.carrier ?? carrier,
+          quantity: item.quantity,
+          lots: item.lots,
+        }))
+      }
+      return dispatched
     })
   }
 
   /**
    * Admin assigns a source facility to a pending request (no stock movement).
    */
+  /**
+   * Assign ONE source facility to several pending requests at once.
+   *
+   * The admin's real workflow is "these twenty lab requests all come from the State
+   * Office Store", not twenty passes through a single-row form. Quantities stay
+   * per-request, because reviewing them is the part of the job that must not be lost
+   * in a bulk action.
+   *
+   * ALL-OR-NOTHING. Each row is re-checked inside the transaction with FOR UPDATE and
+   * must still be unassigned; if any has been taken by another admin, or cancelled by
+   * the requester, since the list was loaded, nothing is written and the caller is told
+   * which one. A half-assigned batch is the worst outcome here — the admin cannot tell
+   * from the screen which of the twenty went through.
+   *
+   * Callers MUST have already checked write access per row (routes use mayWriteTransfer);
+   * this only re-checks the state that can change underneath them.
+   */
+  static async assignSourceBulk({ items, sendingFacilityId, sendingFacilityName, reviewedBy }) {
+    if (!Array.isArray(items) || items.length === 0) {
+      const e = new Error('Select at least one request'); e.status = 400; throw e
+    }
+    if (!sendingFacilityId) {
+      const e = new Error('sending_facility_id is required'); e.status = 400; throw e
+    }
+    const name = sendingFacilityName ?? (await this._facilityName(sendingFacilityId))
+
+    return withTransaction(async exec => {
+      const assigned = []
+      for (const item of items) {
+        const qty = parseInt(item.quantity)
+        if (!(qty > 0)) {
+          const e = new Error(`Quantity for request ${item.id} must be at least 1`); e.status = 400; throw e
+        }
+        // Locked so two admins cannot assign the same request to different sources.
+        const { rows } = await exec(
+          'select id, sending_facility_id, status, quantity, notes from stock_transfer_log where id = $1 for update',
+          [item.id]
+        )
+        const row = rows[0]
+        if (!row) { const e = new Error(`Request ${item.id} no longer exists`); e.status = 409; throw e }
+        if (row.sending_facility_id) {
+          const e = new Error('One of the selected requests has already been assigned to a source — refresh and try again')
+          e.status = 409; throw e
+        }
+        if (row.status !== 'pending') {
+          const e = new Error(`One of the selected requests is no longer pending (it is ${row.status}) — refresh and try again`)
+          e.status = 409; throw e
+        }
+
+        const note = `[Reviewed by: ${reviewedBy || ''}]`
+        const newNotes = row.notes ? `${row.notes} ${note}` : note
+        const { rows: upd } = await exec(
+          `update stock_transfer_log
+              set sending_facility_id = $2, sending_facility_name = $3, quantity = $4, notes = $5
+            where id = $1 returning *`,
+          [item.id, sendingFacilityId, name || '', qty, newNotes]
+        )
+        assigned.push(upd[0])
+      }
+      return assigned
+    })
+  }
+
   static async assignSource(transferId, data) {
     const { sending_facility_id, sending_facility_name, quantity, reviewed_by } = data
     const transfer = await this.getTransferById(transferId)

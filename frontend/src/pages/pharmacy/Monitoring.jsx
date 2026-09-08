@@ -110,6 +110,7 @@ export function Monitoring() {
   // panel and chart are currently describing.
   const [redistDir, setRedistDir] = useState('in')   // 'in' | 'out'
   const [intakeSource, setIntakeSource] = useState('all') // receipt drill filter: 'all'|'intake'|'transfer'|'out'
+  const [supplierFilter, setSupplierFilter] = useState('') // intake tab: ''=all | 'ghsc' | 'other'
   // ── Adjustments tab ─────────────────────────────────────────────────────────
   const [adjData, setAdjData]     = useState(null)  // aggregates for the Adjustments tab
   const [adjDrill, setAdjDrill]   = useState(null)  // { id, name, unit } commodity drilled into
@@ -142,7 +143,7 @@ export function Monitoring() {
   const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
 
   useEffect(() => { loadConsumption() }, [scopeKey, period, catFilter])
-  useEffect(() => { if (tab==='intake') loadIntake() }, [tab, scopeKey, period, catFilter])
+  useEffect(() => { if (tab==='intake') loadIntake() }, [tab, scopeKey, period, catFilter, supplierFilter])
   useEffect(() => { if (tab==='adjustments') loadAdjustments() }, [tab, scopeKey, period, catFilter])
   useEffect(() => { if (adjDrill?.id) loadAdjustmentRows(adjDrill.id); else setAdjRows(null) }, [adjDrill?.id])
   useEffect(() => {
@@ -256,19 +257,25 @@ export function Monitoring() {
       from: start.toISOString(), to: end.toISOString(),
     }
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    // Supplier filter (GHSC-PSM / others) applies to supplier RECEIPTS only. When one
+    // is chosen, inter-facility transfers — which have no supplier — are excluded, so
+    // the tab shows exactly "what arrived from this kind of supplier".
+    const iq = { ...q, supplier: supplierFilter || undefined }
+    const noTransfers = !!supplierFilter
+    const none = Promise.resolve([])
 
     const [iComm, iFac, iDay, tComm, tFac, tDay, oComm, oFac, oDay] = await Promise.all([
-      api.intake.summary({ ...q, group_by: 'commodity' }).catch(() => []),
-      api.intake.summary({ ...q, group_by: 'facility' }).catch(() => []),
-      api.intake.summary({ ...q, group_by: 'day', tz }).catch(() => []),
-      api.transfers.summary({ ...q, group_by: 'commodity' }).catch(() => []),
-      api.transfers.summary({ ...q, group_by: 'facility' }).catch(() => []),
-      api.transfers.summary({ ...q, group_by: 'day', tz }).catch(() => []),
+      api.intake.summary({ ...iq, group_by: 'commodity' }).catch(() => []),
+      api.intake.summary({ ...iq, group_by: 'facility' }).catch(() => []),
+      api.intake.summary({ ...iq, group_by: 'day', tz }).catch(() => []),
+      noTransfers ? none : api.transfers.summary({ ...q, group_by: 'commodity' }).catch(() => []),
+      noTransfers ? none : api.transfers.summary({ ...q, group_by: 'facility' }).catch(() => []),
+      noTransfers ? none : api.transfers.summary({ ...q, group_by: 'day', tz }).catch(() => []),
       // Stock LEAVING the scope. Not part of any "received" figure — it sits beside
       // them so the tab shows movement in both directions.
-      api.transfers.summary({ ...q, group_by: 'commodity', direction: 'out' }).catch(() => []),
-      api.transfers.summary({ ...q, group_by: 'facility', direction: 'out' }).catch(() => []),
-      api.transfers.summary({ ...q, group_by: 'day', direction: 'out', tz }).catch(() => []),
+      noTransfers ? none : api.transfers.summary({ ...q, group_by: 'commodity', direction: 'out' }).catch(() => []),
+      noTransfers ? none : api.transfers.summary({ ...q, group_by: 'facility', direction: 'out' }).catch(() => []),
+      noTransfers ? none : api.transfers.summary({ ...q, group_by: 'day', direction: 'out', tz }).catch(() => []),
     ])
 
     // One bucket per day of the window, keyed by local date — same seeding as the
@@ -440,7 +447,14 @@ export function Monitoring() {
     const common = { ...scope, section: commoditySection || undefined,
                      from: start.toISOString(), to: end.toISOString() }
 
-    const [receipts, transfers, outbound] = await Promise.all([
+    // With a supplier filter active the drill must match the aggregate above it:
+    // only supplier receipts of that kind, and no inter-facility transfers.
+    const isGhsc = s => /ghsc|psm/i.test(String(s || ''))
+    const supplierOk = r => !supplierFilter || (supplierFilter === 'ghsc' ? isGhsc(r.supplier_source) : !isGhsc(r.supplier_source))
+    const noTransfers = !!supplierFilter
+    const none = Promise.resolve([])
+
+    const [receiptsRaw, transfers, outbound] = await Promise.all([
       api.intake.history({ ...common, commodity_ids: commodityId, limit: 1000 }).catch(() => []),
       // One row per transfer, not per day. `direction: 'incoming'` matters for an
       // admin whose scope contains both endpoints — without it the same internal
@@ -450,17 +464,18 @@ export function Monitoring() {
       // so the window is widened to whole days here and trimmed to the exact
       // instants below — otherwise the itemised list could disagree with the
       // aggregate card above it.
-      api.transfers.list({ ...scope, section: commoditySection || undefined,
+      noTransfers ? none : api.transfers.list({ ...scope, section: commoditySection || undefined,
                            commodity_ids: commodityId, direction: 'incoming',
                            status: 'accepted', date_field: 'resolved_at',
                            from: localDay(start), to: localDay(end), limit: 1000 }).catch(() => []),
       // Outbound, so the commodity drill covers movement in BOTH directions —
       // otherwise Transferred-Out is a headline figure with nothing behind it.
-      api.transfers.list({ ...scope, section: commoditySection || undefined,
+      noTransfers ? none : api.transfers.list({ ...scope, section: commoditySection || undefined,
                            commodity_ids: commodityId, direction: 'outgoing',
                            status: 'accepted', date_field: 'resolved_at',
                            from: localDay(start), to: localDay(end), limit: 1000 }).catch(() => []),
     ])
+    const receipts = (receiptsRaw || []).filter(supplierOk)
 
     const lo = start.getTime(), hi = end.getTime()
     const rows = [
@@ -899,12 +914,24 @@ export function Monitoring() {
     return true
   })
 
-  const TabBtn=({id,label})=>(
-    <button onClick={()=>switchTab(id)}
-      style={{flex:1,padding:'10px',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:'13px',fontWeight:tab===id?500:400,background:tab===id?'rgba(255,255,255,0.08)':'transparent',color:tab===id?'#e6edf3':'#8b949e',borderRight:id!=='expiry'?'1px solid rgba(255,255,255,0.08)':'none'}}>
-      {label}
-    </button>
-  )
+  // Tailwind classes, not inline styles. Light mode is implemented in index.css by
+  // remapping class names (html:not(.dark) [class*="text-gray-100"] { ... }), which
+  // inline styles bypass entirely — so the active tab was #e6edf3 text on
+  // rgba(255,255,255,.08): near-white on white, and effectively invisible in light
+  // mode. The active state is now carried by an accent underline and text weight
+  // rather than a background tint, because every bg-white/* is remapped to solid
+  // white in light mode and would vanish against the bar it sits in.
+  const TabBtn=({id,label})=>{
+    const on = tab===id
+    return (
+      <button type="button" role="tab" aria-selected={on} onClick={()=>switchTab(id)}
+        className={`flex-1 px-4 py-2.5 text-sm border-b-2 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50 ${
+          on ? 'border-green-500 text-gray-100 font-medium bg-white/5'
+             : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-white/2'}`}>
+        {label}
+      </button>
+    )
+  }
 
   return (
     <div>
@@ -913,7 +940,7 @@ export function Monitoring() {
         <p className="text-sm text-gray-500 mt-1">Real-time programme performance</p>
       </div>
 
-      <div style={{display:'flex',gap:0,marginBottom:'1.25rem',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'8px',overflow:'hidden',background:'rgba(255,255,255,0.03)'}}>
+      <div role="tablist" className="flex mb-5 rounded-lg overflow-hidden border border-white/10 bg-white/3">
         <TabBtn id="consumption" label="Consumption"/>
         <TabBtn id="intake"      label="Intake"/>
         <TabBtn id="adjustments" label="Adjustments"/>
@@ -949,6 +976,15 @@ export function Monitoring() {
               <option value="">All categories</option>
               {categories.map(c=><option key={c} value={c}>{c}</option>)}
             </select>
+            {tab==='intake' && (<>
+              <span className="text-xs text-gray-500 uppercase tracking-widest ml-2">Supplier</span>
+              <select value={supplierFilter} onChange={e=>setSupplierFilter(e.target.value)}
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-500">
+                <option value="">All suppliers</option>
+                <option value="ghsc">GHSC-PSM</option>
+                <option value="other">Others</option>
+              </select>
+            </>)}
             <button onClick={tab==='intake'?loadIntake:tab==='adjustments'?loadAdjustments:loadConsumption} disabled={loading} className="ml-auto text-xs text-gray-500 hover:text-gray-300 border border-white/10 rounded px-3 py-1.5 disabled:opacity-60 inline-flex items-center gap-1.5">
               {loading && <Spinner size="sm"/>}{loading ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -1098,8 +1134,12 @@ export function Monitoring() {
                             return seg
                           })}
                         </g>
-                        <text x="50" y="48" textAnchor="middle" style={{fill:'#e6edf3',fontSize:'12px',fontWeight:600}}>{centerVal.toLocaleString()}</text>
-                        <text x="50" y="57" textAnchor="middle" style={{fill:'#8b949e',fontSize:'6px',letterSpacing:'0.3px'}}>{centerSub}</text>
+                        {/* fill-current + a text-* class, not a hardcoded fill: light mode is
+                            applied by remapping `color` on class names, which an SVG fill
+                            attribute bypasses. Hardcoded #e6edf3 left this number
+                            near-white on a white card. */}
+                        <text x="50" y="48" textAnchor="middle" className="fill-current text-gray-100" style={{fontSize:'12px',fontWeight:600}}>{centerVal.toLocaleString()}</text>
+                        <text x="50" y="57" textAnchor="middle" className="fill-current text-gray-500" style={{fontSize:'6px',letterSpacing:'0.3px'}}>{centerSub}</text>
                       </svg>
                       <div className="flex-1 min-w-[180px] space-y-1">
                         {catEntries.map(([cat,qty],i)=>{

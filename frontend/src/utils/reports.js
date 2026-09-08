@@ -14,6 +14,75 @@ export const NON_CRRF_ADJ_REASONS = [
   'Returned from SDP',
 ]
 
+// The subset of NON_CRRF_ADJ_REASONS that the Beginning/Ending Balance rewind (see
+// netStockChange below) ALSO excludes — narrower than the display exclusion above.
+// A Physical count correction genuinely changes what the facility believes it holds
+// (the system catching up to a real count), so the rewind still needs it or it drifts
+// from actual current stock. "Returned from Dispensary/DSD/SDP" does not: an
+// adjustment mutates exactly one bin (see logService.recordAdjustment), so crediting
+// the store this way was never paired with a real debit anywhere else — it isn't a
+// genuine change in the facility's total, just one bin's number moving on its own.
+export const INTRA_FACILITY_ADJ_REASONS = [
+  'Returned from Dispensary',
+  'Returned from DSD',
+  'Returned from SDP',
+]
+
+// Every intake carries a free-text supplier_source. For the CRRF, that text decides
+// where the units land, because the three sources mean three different things:
+//
+//   'ghsc'     GHSC-PSM — a real programme delivery. This is Quantity Received (col B).
+//   'baseline' go-live stock-take: "baseline stock", "stock taking", "physical count",
+//              "SOH", and their many typos. NOT a receipt at all — it is the OPENING
+//              balance the facility already held, so it is excluded from the period's
+//              movement and surfaces as column A instead. (Dated during go-live in
+//              Jun/Jul 2026, it would otherwise read as a July receipt and drive the
+//              beginning balance negative — the whole reason these looked wrong.)
+//   'other'    another real source — state office, CHAI, ECEWS, a redistributing
+//              hospital, the national warehouse. Real stock in, but not a GHSC
+//              delivery, so it is a positive adjustment (Adj+), not Received.
+//
+// With every inflow routed to exactly one of {A, B, Adj+} and every outflow to
+// {C, Adj−, Loss}, the form reconciles: A + B − C + Adj+ − Adj− − Loss = E.
+//
+// Matching is deliberately fuzzy — the data has ~285 distinct supplier strings, most
+// of them typos. GHSC is checked first (most specific), then baseline, else other.
+const GHSC_RE     = /ghsc|psm/i
+const BASELINE_RE = /baseline|base ?line|bas[ae]?li?i?ne|bseline|baeline|baseine|baselie|basic.?entr|stock.?tak|syock.?tak|stake.?tak|stock.?tankng|stock ?on ?hand|\bsoh\b|\bopening\b|go.?live|physical.*count|stock ?count|stock ?intake|stock ?balance|stock ?level|stock ?update|stock ?report|stocks? ?update|\bstocks?\b/i
+
+export function classifyIntakeSupplier(s) {
+  const str = String(s || '')
+  if (GHSC_RE.test(str)) return 'ghsc'
+  if (BASELINE_RE.test(str)) return 'baseline'
+  return 'other'   // real receipt from a non-GHSC source, or an unusable label
+}
+// Kept for the one existing caller; prefer classifyIntakeSupplier for new code.
+export const isGhscPsmSupplier = (s) => classifyIntakeSupplier(s) === 'ghsc'
+
+// The NET change in total stock on hand that a set of movement rows represents.
+// This is a STOCK question, not a CRRF-presentation one, so it counts everything that
+// actually moved stock — including the physical count corrections and site returns the
+// CRRF columns exclude. Leaving those out would make a rewound balance drift.
+//
+// Internal moves (store↔dispensary, store→DSD/SDP) are omitted because SOH here is the
+// facility total across all bins: those shuffle stock between bins without changing it.
+export function netStockChange({ intakes = [], dispenses = [], adjustments = [], transfers = [] }, facilityId) {
+  let net = 0
+  for (const r of intakes)   net += r.quantity || 0
+  for (const r of dispenses) net -= r.quantity || 0
+  for (const r of adjustments) {
+    net += (r.adjustment_type === 'Decrease' ? -1 : 1) * (r.quantity || 0)
+  }
+  for (const r of transfers) {
+    // External redistribution only — see above.
+    if (!r.sending_facility_id || !r.receiving_facility_id) continue
+    if (r.sending_facility_id === r.receiving_facility_id) continue
+    if (r.receiving_facility_id === facilityId)   net += r.quantity || 0
+    else if (r.sending_facility_id === facilityId) net -= r.quantity || 0
+  }
+  return net
+}
+
 export const REPORT_CATEGORIES = [
   { key: 'all', label: 'All' },
   { key: 'dispense', label: 'Consumption' },

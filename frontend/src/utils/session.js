@@ -70,8 +70,9 @@ export async function loadModuleData() {
   const amcWindows = {}
   ;(amcRows || []).forEach(r => { amcWindows[r.facility_id] = { months: r.months || [] } })
 
-  // Restrict to the account's section, plus General Consumables for a State Office
-  // Store. Admins (no section) keep the full catalogue. allowedCats null = all.
+  // Restrict to the account's section, or to the hub-store set (lab + general
+  // consumables) for a State Office / Cluster Lab Store. Admins (no section) keep the
+  // full catalogue. allowedCats null = all.
   // The pharmacy/lab split is an HIV-programme concept only — Essential Commodities
   // has no sections, so a section-pinned account must still see the whole essential
   // catalogue there. Only apply the section filter in the HIV module.

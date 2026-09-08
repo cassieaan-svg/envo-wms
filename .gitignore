@@ -46,6 +46,7 @@ amc_staging_load.csv
 create_new_facility_users.js
 new_facility_logins_confirmed.csv
 *_logins*.csv
+expiry_drift*.csv
 
 # Local migration dumps (contain real data) — but keep the realtime trigger DDL,
 # which the production DB needs (pure schema, no data). Ignore the dir CONTENTS
@@ -57,3 +58,6 @@ db/_migration/*
 # Never commit these; they exist only to be handed to the site and then deleted.
 DSD_Sites_*.csv
 DSD_Sites_*.xlsx
+
+# Undo files written by move_intake_date.mjs (runtime, contain row ids)
+backend/scripts/move_intake_*.undo.json

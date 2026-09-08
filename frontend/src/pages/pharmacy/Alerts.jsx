@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api } from '../../lib/api'
 import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
-import { Card, CardHeader, CardTitle, CardBody } from '../../components/ui/Card'
+import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { Badge, CatBadge } from '../../components/ui/Badge'
@@ -10,8 +10,47 @@ import { LoadingState, EmptyState, Spinner } from '../../components/ui/Loading'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
-import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, transferReason, reviewerNameOf } from '../../utils/helpers'
+import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, transferReason, reviewerNameOf, facilityGroupLabel } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
+
+// Defined at module scope, not inside Alerts(). A component created during render is a
+// new type on every render, so React unmounts and remounts it each time — throwing away
+// any DOM state it held and re-doing the work. What these closed over (tab/setTab,
+// stockPending) is passed as props instead.
+function TabBtn({ id, label, active, onSelect }) {
+  return (
+    <button onClick={() => onSelect(id)}
+      className={`px-4 py-2 text-sm rounded-lg border transition-colors ${active?'bg-white/8 border-white/15 text-gray-100 font-medium':'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+      {label}
+    </button>
+  )
+}
+
+function StockTable({ rows, emptyMsg, qtyClass, onRowClick, stockPending }) {
+  return stockPending ? <LoadingState/> : rows.length===0 ? <EmptyState message={emptyMsg}/> : (
+    <div className="table-wrap"><table className="w-full text-sm">
+      <thead><tr className="border-b border-white/8 bg-white/2">
+        {['Commodity','Category','Unit','Stock on hand','AMC','MOS'].map(h=>(
+          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
+        ))}
+      </tr></thead>
+      <tbody>{rows.map(r=>{
+        const mosColor = r._mos!==null ? (r._mos<2?'text-red-400':r._mos>4?'text-blue-400':'text-green-400') : 'text-gray-500'
+        return (
+          <tr key={r.id} onClick={onRowClick ? ()=>onRowClick(r) : undefined}
+            className={`border-b border-white/5 ${onRowClick?'cursor-pointer hover:bg-white/5':'hover:bg-white/2'}`}>
+            <td className={`px-4 py-3 font-medium ${onRowClick?'text-blue-400 hover:text-blue-300':'text-gray-100'}`}>{r.commodities?.name||'—'}{onRowClick && <span className="text-gray-600 ml-1">›</span>}</td>
+            <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
+            <td className="px-4 py-3 text-xs text-gray-500">{r.commodities?.unit||'—'}</td>
+            <td className={`px-4 py-3 font-mono text-sm font-semibold ${qtyClass}`}>{r.quantity}</td>
+            <td className="px-4 py-3 font-mono text-xs text-gray-500">{r._amc>0?r._amc.toFixed(1):'—'}</td>
+            <td className={`px-4 py-3 font-mono text-sm font-medium ${mosColor}`}>{r._mos!==null?r._mos+'mo':'—'}</td>
+          </tr>
+        )
+      })}</tbody>
+    </table></div>
+  )
+}
 
 export function Alerts() {
   const store = useAppStore()
@@ -23,7 +62,6 @@ export function Alerts() {
   const [expiryRows, setExpiry] = useState([])
   const [stockRows, setStock]   = useState({ out:[], low:[], over:[] })
   const [loading, setLoading]   = useState(true)
-  const stockLoaded             = useAppStore(s => s.stockLoaded)
   // Facility request alerts — own pending redistribution requests
   const [facReqAlerts, setFacReqAlerts] = useState([])
   const [loadingFacReq, setLoadingFacReq] = useState(true)
@@ -39,7 +77,9 @@ export function Alerts() {
   const [stockCat, setStockCat]     = useState('')   // expiry / out / low / overstock: category
   const [drillComm, setDrillComm]   = useState(null) // stock tab: commodity drilled into {id,name,cat,comm}
   const [drillRows, setDrillRows] = useState([])  // per-facility rollup for the drilled commodity
-  const [expDrillComm, setExpDrillComm] = useState(null) // expiry tab: commodity drilled into {id,name,cat}
+  // Value intentionally unread: only the reset (setExpDrillComm(null) on a scope
+  // change) is used. Kept as state so that reset still forces a re-render.
+  const [, setExpDrillComm] = useState(null)
   const [expUrgency, setExpUrgency] = useState('all')    // expiry tab urgency filter: 'all'|Expired|Critical|Warning|Monitor
   const [assigningId, setAssigningId]           = useState(null)
   const [assignFacState, setAssignFacState]     = useState('')
@@ -62,6 +102,19 @@ export function Alerts() {
   // assign a source facility from another state for emergency orders, without
   // widening their scoped dashboard/stock views.
   const [assignFacPool, setAssignFacPool]       = useState([])
+
+  // ── Batch assign ───────────────────────────────────────────────────────────
+  // The admin's real workflow is "these twenty lab requests all come from the State
+  // Office Store". Quantities stay per-request (batchQty), because reviewing them is
+  // the part of the job that must not be lost in a bulk action.
+  const [batchSel, setBatchSel]         = useState({})   // requestId -> true
+  const [batchQty, setBatchQty]         = useState({})   // requestId -> quantity
+  const [batchFacState, setBatchFacState] = useState('')
+  const [batchFacLga, setBatchFacLga]     = useState('')
+  const [batchFacId, setBatchFacId]       = useState('')
+  const [batchReviewedBy, setBatchReviewedBy] = useState('')
+  const [batchStock, setBatchStock]     = useState(null) // commodity_id -> on-hand at source
+  const [batchSending, setBatchSending] = useState(false)
   const [reqHistory, setReqHistory]   = useState([])
   const [loadingHist, setLoadingHist] = useState(false)
   // Admin: requests already assigned to a source but not yet completed —
@@ -392,6 +445,147 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
   const histReqs     = applyReqFilters(reqHistory)
   const inflightList = applyReqFilters(inflightReqs)
   const reqRowCount  = reqView==='inflight' ? inflightList.length : reqView==='history' ? histReqs.length : activeReqs.length
+
+  // NOTE: this block must stay BELOW `activeReqs` above — it reads it, and a const
+  // cannot be read before its declaration has run.
+  // ── Batch assign helpers ───────────────────────────────────────────────────
+  const batchIds = Object.keys(batchSel).filter(id => batchSel[id])
+  const batchRows = activeReqs.filter(r => batchSel[r.id])
+
+  // Source pool, grouped State -> LGA -> Facility, exactly as the single-assign picker
+  // does. A flat list of every facility in the country is unusable to pick from.
+  const batchFacPool = assignFacPool.length ? assignFacPool : store.allFacilities
+  const batchFacGroups = useMemo(() => {
+    const g = {}
+    for (const f of batchFacPool) {
+      // No state at all = not a dispatchable source (leaked test fixtures look like
+      // this). But a State Office Store and a cluster store legitimately have NO LGA —
+      // they serve a whole state / cluster — so facilityGroupLabel gives each its own
+      // bucket rather than dropping them. They are the sources most of these requests
+      // are headed for, so hiding them would defeat the feature.
+      if (!f.state) continue
+      const st = f.state, lg = facilityGroupLabel(f)
+      if (!g[st]) g[st] = {}
+      if (!g[st][lg]) g[st][lg] = []
+      g[st][lg].push(f)
+    }
+    return g
+  }, [batchFacPool])
+
+  // Within an LGA, the State Office Store sorts first — most lab consumables come from
+  // there — but it is never pre-selected: a silent default on a bulk action is how
+  // twenty requests get assigned to the wrong store in one click.
+  const batchFacOptions = useMemo(() => {
+    const list = batchFacGroups[batchFacState]?.[batchFacLga] || []
+    const isStateOffice = f => /state office/i.test(f.name || '')
+    return [...list].sort((a, b) =>
+      ((isStateOffice(b) ? 1 : 0) - (isStateOffice(a) ? 1 : 0)) ||
+      (a.name || '').localeCompare(b.name || ''))
+  }, [batchFacGroups, batchFacState, batchFacLga])
+
+  // Demand per COMMODITY across the selection. Two facilities asking for the same item
+  // must be judged against the combined figure — checked row by row, each would look
+  // satisfiable while together they exceed what the source holds.
+  const batchDemand = useMemo(() => {
+    const m = {}
+    for (const r of batchRows) {
+      const q = parseInt(batchQty[r.id] ?? r.qty_requested ?? r.quantity ?? 0) || 0
+      m[r.commodity_id] = (m[r.commodity_id] || 0) + q
+    }
+    return m
+  }, [batchRows, batchQty])
+
+  // The distinct commodities in the selection, as a stable key. Extracted rather than
+  // computed inside the dependency array: an inline expression there cannot be checked
+  // statically, and it made the linter give up on this whole component — silencing
+  // thirteen pre-existing diagnostics elsewhere in the file.
+  const batchCommodityIds = useMemo(
+    () => [...new Set(batchRows.map(r => r.commodity_id))].sort(),
+    [batchRows])
+  const batchCommodityKey = batchCommodityIds.join(',')
+
+  // On-hand at the chosen source, for the commodities in the selection.
+  useEffect(() => {
+    if (!batchFacId || batchCommodityKey === '') { setBatchStock(null); return }
+    let off = false
+    api.stock.summary({ facility_id: batchFacId, commodity_ids: batchCommodityKey.split(',') })
+      .then(rows => {
+        if (off) return
+        const m = {}
+        for (const row of rows || []) m[row.commodity_id] = Number(row.store_qty || 0)
+        setBatchStock(m)
+      })
+      .catch(() => { if (!off) setBatchStock(null) })
+    return () => { off = true }
+  }, [batchFacId, batchCommodityKey])
+
+  const batchShortfalls = useMemo(() => {
+    if (!batchStock) return []
+    return Object.entries(batchDemand)
+      .filter(([cid, want]) => want > (batchStock[cid] ?? 0))
+      .map(([cid, want]) => ({
+        commodity_id: cid,
+        name: batchRows.find(r => r.commodity_id === cid)?.commodity_name || cid,
+        want, have: batchStock[cid] ?? 0,
+      }))
+  }, [batchDemand, batchStock, batchRows])
+
+  // Select-all applies to activeReqs — the list as currently filtered, not every pending
+  // request in the database. Ticking a box you cannot see would be a nasty surprise on
+  // an action that assigns real stock.
+  const allBatchSelected = activeReqs.length > 0 && activeReqs.every(r => batchSel[r.id])
+
+  function toggleSelectAll() {
+    if (allBatchSelected) { clearBatch(); return }
+    const sel = {}, qty = { ...batchQty }
+    for (const r of activeReqs) {
+      sel[r.id] = true
+      if (qty[r.id] == null) qty[r.id] = r.qty_requested ?? r.quantity ?? 1
+    }
+    setBatchSel(sel)
+    setBatchQty(qty)
+  }
+
+  function toggleBatch(req) {
+    setBatchSel(m => ({ ...m, [req.id]: !m[req.id] }))
+    setBatchQty(m => (m[req.id] != null ? m : { ...m, [req.id]: req.qty_requested ?? req.quantity ?? 1 }))
+  }
+
+  function clearBatch() {
+    setBatchSel({}); setBatchQty({})
+    setBatchFacState(''); setBatchFacLga(''); setBatchFacId('')
+    setBatchStock(null)
+  }
+
+  async function sendBatch() {
+    if (!batchFacId) { toast('Select a source facility','red'); return }
+    if (!batchReviewedBy.trim()) { toast('Reviewed by is required','red'); return }
+    const items = batchRows.map(r => ({
+      id: r.id,
+      quantity: parseInt(batchQty[r.id] ?? r.qty_requested ?? r.quantity ?? 0),
+    }))
+    if (items.some(i => !(i.quantity > 0))) { toast('Every selected request needs a quantity of at least 1','red'); return }
+
+    setBatchSending(true)
+    const src = batchFacPool.find(f => f.id === batchFacId)
+    try {
+      await api.transfers.assignBatch({
+        sending_facility_id: batchFacId,
+        sending_facility_name: src?.name || '',
+        reviewed_by: batchReviewedBy.trim(),
+        items,
+      })
+      toast(`${items.length} request${items.length===1?'':'s'} sent to ${src?.name || 'facility'}`,'green')
+      clearBatch()
+      loadFacReqAlerts()
+    } catch (error) {
+      // All-or-nothing: nothing was assigned, so the list is reloaded to show whatever
+      // changed underneath (another admin assigned one, a requester cancelled one).
+      toast(error.message || 'Could not assign the selected requests','red')
+      loadFacReqAlerts()
+    } finally { setBatchSending(false) }
+  }
+
   // Commodity filter options = only the commodities that were actually requested in
   // the current view (not the whole catalogue), deduped. Fed to a searchable select.
   const reqSourceForView = reqView==='inflight' ? inflightReqs : reqView==='history' ? reqHistory : facReqAlerts
@@ -487,37 +681,6 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     exportCsv(`expiry_${expUrgency.toLowerCase()}_${expiryDays}d.csv`, headers, rows)
   }
 
-  const TabBtn = ({id,label}) => (
-    <button onClick={()=>setTab(id)}
-      className={`px-4 py-2 text-sm rounded-lg border transition-colors ${tab===id?'bg-white/8 border-white/15 text-gray-100 font-medium':'border-white/10 text-gray-400 hover:text-gray-200'}`}>
-      {label}
-    </button>
-  )
-
-  const StockTable = ({rows,emptyMsg,qtyClass,onRowClick}) => stockPending ? <LoadingState/> : rows.length===0 ? <EmptyState message={emptyMsg}/> : (
-    <div className="table-wrap"><table className="w-full text-sm">
-      <thead><tr className="border-b border-white/8 bg-white/2">
-        {['Commodity','Category','Unit','Stock on hand','AMC','MOS'].map(h=>(
-          <th key={h} className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wider font-medium">{h}</th>
-        ))}
-      </tr></thead>
-      <tbody>{rows.map(r=>{
-        const mosColor = r._mos!==null ? (r._mos<2?'text-red-400':r._mos>4?'text-blue-400':'text-green-400') : 'text-gray-500'
-        return (
-          <tr key={r.id} onClick={onRowClick ? ()=>onRowClick(r) : undefined}
-            className={`border-b border-white/5 ${onRowClick?'cursor-pointer hover:bg-white/5':'hover:bg-white/2'}`}>
-            <td className={`px-4 py-3 font-medium ${onRowClick?'text-blue-400 hover:text-blue-300':'text-gray-100'}`}>{r.commodities?.name||'—'}{onRowClick && <span className="text-gray-600 ml-1">›</span>}</td>
-            <td className="px-4 py-3"><CatBadge>{r.commodities?.category||'—'}</CatBadge></td>
-            <td className="px-4 py-3 text-xs text-gray-500">{r.commodities?.unit||'—'}</td>
-            <td className={`px-4 py-3 font-mono text-sm font-semibold ${qtyClass}`}>{r.quantity}</td>
-            <td className="px-4 py-3 font-mono text-xs text-gray-500">{r._amc>0?r._amc.toFixed(1):'—'}</td>
-            <td className={`px-4 py-3 font-mono text-sm font-medium ${mosColor}`}>{r._mos!==null?r._mos+'mo':'—'}</td>
-          </tr>
-        )
-      })}</tbody>
-    </table></div>
-  )
-
   return (
     <div>
       <div className="mb-6">
@@ -538,10 +701,10 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       </MetricGrid>
 
       <div className="flex gap-2 mb-4 flex-wrap">
-        <TabBtn id="expiry"    label="Expiry alerts"/>
-        <TabBtn id="out"       label={`Out of stock${stockPending ? '' : ` (${stockRows.out.length})`}`}/>
-        <TabBtn id="low"       label={`Low stock${stockPending ? '' : ` (${stockRows.low.length})`}`}/>
-        <TabBtn id="overstock" label={`Overstock${stockPending ? '' : ` (${stockRows.over.length})`}`}/>
+        <TabBtn id="expiry"    label="Expiry alerts" active={tab==="expiry"} onSelect={setTab}/>
+        <TabBtn active={tab==="out"} onSelect={setTab} id="out"       label={`Out of stock${stockPending ? '' : ` (${stockRows.out.length})`}`}/>
+        <TabBtn active={tab==="low"} onSelect={setTab} id="low"       label={`Low stock${stockPending ? '' : ` (${stockRows.low.length})`}`}/>
+        <TabBtn active={tab==="overstock"} onSelect={setTab} id="overstock" label={`Overstock${stockPending ? '' : ` (${stockRows.over.length})`}`}/>
         {!store.isOverallAdmin() && store.module !== 'essential' && (
           <button onClick={()=>setTab('fac-requests')}
             className={`px-4 py-2 text-sm rounded-lg border transition-colors flex items-center gap-2 ${tab==='fac-requests'?'bg-white/8 border-white/15 text-gray-100 font-medium':'border-white/10 text-gray-400 hover:text-gray-200'}`}>
@@ -726,18 +889,18 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                   The cards above focus one division; with none selected, both show. */}
               {useFilter !== 'unused' && (
                 <Card className="mb-4"><CardHeader><CardTitle>In use — out of stock ({outInUse.length})</CardTitle></CardHeader>
-                  <StockTable rows={outInUse} emptyMsg="Nothing in use is out of stock ✓" qtyClass="text-red-400"
+                  <StockTable stockPending={stockPending} rows={outInUse} emptyMsg="Nothing in use is out of stock ✓" qtyClass="text-red-400"
                     onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
               )}
               {useFilter !== 'inuse' && (
                 <Card><CardHeader><CardTitle>Not in use — out of stock ({outNotInUse.length})</CardTitle></CardHeader>
-                  <StockTable rows={outNotInUse} emptyMsg="Nothing not-in-use is out of stock" qtyClass="text-red-400"
+                  <StockTable stockPending={stockPending} rows={outNotInUse} emptyMsg="Nothing not-in-use is out of stock" qtyClass="text-red-400"
                     onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>
               )}
             </>
           )}
-          {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable rows={shownLow}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400" onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
-          {tab==='overstock' && <Card><CardHeader><CardTitle>Overstock — above 4 months AMC</CardTitle></CardHeader><StockTable rows={shownOver} emptyMsg="No commodities overstocked ✓" qtyClass="text-blue-400"  onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
+          {tab==='low'       && <Card><CardHeader><CardTitle>Low stock — below 2 months AMC</CardTitle></CardHeader><StockTable stockPending={stockPending} rows={shownLow}  emptyMsg="No commodities below threshold ✓" qtyClass="text-amber-400" onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
+          {tab==='overstock' && <Card><CardHeader><CardTitle>Overstock — above 4 months AMC</CardTitle></CardHeader><StockTable stockPending={stockPending} rows={shownOver} emptyMsg="No commodities overstocked ✓" qtyClass="text-blue-400"  onRowClick={store.isAdmin()?(r)=>setDrillComm({id:r.commodity_id,name:r.commodities?.name,cat:r.commodities?.category,comm:r.commodities}):undefined}/></Card>}
         </>
       )}
 
@@ -873,10 +1036,94 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                 </table></div>
               )
             ) : activeReqs.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
-              activeReqs.map(req => {
+              <>
+              {/* Batch assign. Sits above the list so the admin can tick several
+                  requests — typically every lab consumable heading to the State Office
+                  Store — set one source, and send them together. Quantities stay
+                  editable per request. */}
+              {store.isStateAdmin() && (
+                <div className="px-5 py-3 border-b border-white/8 bg-white/3">
+                  <div className="flex items-center gap-3 flex-wrap mb-2">
+                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                      <input type="checkbox" checked={allBatchSelected} onChange={toggleSelectAll}
+                        className="w-4 h-4 accent-blue-500 cursor-pointer" />
+                      Select all {activeReqs.length}
+                    </label>
+                    {batchIds.length > 0 && (
+                      <span className="text-xs text-gray-500">
+                        {batchIds.length} of {activeReqs.length} selected
+                      </span>
+                    )}
+                  </div>
+                  {batchIds.length === 0 ? (
+                    <div className="text-xs text-gray-500">
+                      Tick requests below to assign several to one source facility at once.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="w-full sm:w-64 space-y-2">
+                          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Source facility *</label>
+                          <select value={batchFacState} onChange={e=>{setBatchFacState(e.target.value);setBatchFacLga('');setBatchFacId('')}}
+                            className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
+                            <option value="">Select state…</option>
+                            {Object.keys(batchFacGroups).sort().map(st => <option key={st} value={st}>{st}</option>)}
+                          </select>
+                          {batchFacState && (
+                            <select value={batchFacLga} onChange={e=>{setBatchFacLga(e.target.value);setBatchFacId('')}}
+                              className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
+                              <option value="">Select LGA…</option>
+                              {Object.keys(batchFacGroups[batchFacState]||{}).sort().map(l => <option key={l} value={l}>{l}</option>)}
+                            </select>
+                          )}
+                          {batchFacLga && (
+                            <select value={batchFacId} onChange={e=>setBatchFacId(e.target.value)}
+                              className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
+                              <option value="">Select source facility…</option>
+                              {batchFacOptions.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                            </select>
+                          )}
+                        </div>
+                        <div className="w-full sm:w-52">
+                          <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1">Reviewed by *</label>
+                          <input value={batchReviewedBy} onChange={e=>setBatchReviewedBy(e.target.value)}
+                            placeholder="Your name"
+                            className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder:text-gray-600 focus:outline-none focus:border-blue-500" />
+                        </div>
+                        <Button variant="primary" size="sm" disabled={batchSending || !batchFacId || !batchReviewedBy.trim()} onClick={sendBatch}>
+                          {batchSending
+                            ? 'Sending…'
+                            : `Send ${batchIds.length} request${batchIds.length===1?'':'s'} to source`}
+                        </Button>
+                        <Button variant="default" size="sm" disabled={batchSending} onClick={clearBatch}>Clear selection</Button>
+                      </div>
+
+                      {/* Shortfalls are a warning, never a block: stock moves between
+                          assignment and dispatch, and the source can still refuse. */}
+                      {batchFacId && batchShortfalls.length > 0 && (
+                        <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2">
+                          <div className="font-medium mb-0.5">Source may not have enough — checked against the combined selection:</div>
+                          {batchShortfalls.map(sf => (
+                            <div key={sf.commodity_id}>
+                              {sf.name}: needs {sf.want}, store holds {sf.have}
+                            </div>
+                          ))}
+                          <div className="text-gray-500 mt-0.5">You can still send — the source facility can dispatch what it has, or decline.</div>
+                        </div>
+                      )}
+                      {batchFacId && batchStock && batchShortfalls.length === 0 && (
+                        <div className="text-xs text-green-400">Source holds enough for every selected request.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {activeReqs.map(req => {
                 const assignFacGroups = {}
-                ;(assignFacPool.length ? assignFacPool : store.allFacilities).filter(f => f.id !== req.receiving_facility_id).forEach(f => {
-                  const s=f.state||'Other', l=f.lga||'Other'
+                ;(assignFacPool.length ? assignFacPool : store.allFacilities)
+                  .filter(f => f.id !== req.receiving_facility_id && f.state)
+                  .forEach(f => {
+                  const s=f.state, l=facilityGroupLabel(f)
                   if(!assignFacGroups[s]) assignFacGroups[s]={}
                   if(!assignFacGroups[s][l]) assignFacGroups[s][l]=[]
                   assignFacGroups[s][l].push(f)
@@ -884,6 +1131,11 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                 return (
                 <div key={req.id} className="px-5 py-4 border-b border-white/8 last:border-0">
                   <div className="flex items-start justify-between gap-4 flex-wrap">
+                    {store.isStateAdmin() && (
+                      <input type="checkbox" checked={!!batchSel[req.id]} onChange={()=>toggleBatch(req)}
+                        aria-label={`Select ${req.commodity_name} for batch assign`}
+                        className="mt-1.5 w-4 h-4 accent-blue-500 cursor-pointer" />
+                    )}
                     <div className="flex-1">
                       <div className="font-medium text-gray-100 mb-1">{req.commodity_name}</div>
                       <div className="text-sm text-gray-400">
@@ -892,6 +1144,21 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                         {facLgaById[req.receiving_facility_id] && facLgaById[req.receiving_facility_id]!=='—' && <> · LGA: <span className="text-gray-300">{facLgaById[req.receiving_facility_id]}</span></>}
                       </div>
                       <div className="text-xs text-gray-600 mt-1">Submitted {fmtDateTime(req.initiated_at)} by {req.initiated_by||'—'}</div>
+                      {store.isStateAdmin() && batchSel[req.id] && (
+                        <div className="flex items-center gap-2 mt-2">
+                          <label className="text-xs text-gray-500 uppercase tracking-widest">Qty to send</label>
+                          <input type="number" min="1" value={batchQty[req.id] ?? ''}
+                            onChange={e=>setBatchQty(m=>({ ...m, [req.id]: e.target.value }))}
+                            className="w-24 bg-white/5 border border-white/15 rounded-lg px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
+                          {/* Availability for THIS commodity at the chosen source; the
+                              combined-demand warning sits in the bar above. */}
+                          {batchFacId && batchStock && (
+                            <span className="text-xs text-gray-500">
+                              source holds {batchStock[req.commodity_id] ?? 0}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {req.notes && <div className="text-xs text-amber-400 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 inline-block">{req.notes}</div>}
                     </div>
                     {store.isStateAdmin() && (
@@ -940,7 +1207,8 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
                   )}
                 </div>
                 )
-              })
+              })}
+              </>
             )
           ) : facReqAlerts.length===0 ? <EmptyState message="No pending redistribution requests ✓"/> : (
             facReqAlerts.map(req => (

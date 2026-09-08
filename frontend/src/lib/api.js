@@ -136,8 +136,7 @@ export const api = {
     // params: facility_id, direction, status (csv), section, date_field, from, to,
     // notes_includes, limit, offset.
     list:   (params) => get('/transfers', params),
-    // Accepted transfers IN, aggregated (Monitoring's "Total transfer-in").
-    // Same group_by / row shape as dispense.summary and intake.summary.
+    // Accepted transfers in/out, aggregated (Monitoring's transfer figures).
     summary: (params) => get('/transfers/summary', params),
     get:    (id)     => get(`/transfers/${id}`),
     create: (lines)  => post('/transfers', lines),          // array | {lines:[]} | single row
@@ -146,6 +145,12 @@ export const api = {
     // lifecycle transitions
     dispatch:        (id, body) => patch(`/transfers/${id}/dispatch`, body),
     assignSource:    (id, body) => patch(`/transfers/${id}/assign`, body),
+    // Assign ONE source to several pending requests at once, all-or-nothing.
+    // body: { sending_facility_id, sending_facility_name, reviewed_by, items:[{id, quantity}] }
+    assignBatch:     (body)     => patch('/transfers/assign-batch', body),
+    // Dispatch several pending transfers in one transaction (source facility side).
+    // body: { approved_by, carrier, items:[{ id, quantity, lots?, carrier? }] }
+    dispatchBatch:   (body)     => patch('/transfers/dispatch-batch', body),
     accept:          (id, body) => patch(`/transfers/${id}/accept`, body),
     dispute:         (id, body) => patch(`/transfers/${id}/dispute`, body),
     cancel:          (id, body) => patch(`/transfers/${id}/cancel`, body),
@@ -159,12 +164,11 @@ export const api = {
   // `update` edits an existing log row's metadata (EditModal); stock is reconciled
   // separately by the caller via the stock methods.
   dispense:    { record: (body) => post('/dispense', body),    history: (params) => get('/dispense', params),    summary: (params) => get('/dispense/summary', params),    update: (id, body) => patch(`/dispense/${id}`, body) },
-  intake:      { record: (body) => post('/intake', body),      history: (params) => get('/intake', params),      summary: (params) => get('/intake/summary', params),      update: (id, body) => patch(`/intake/${id}`, body) },
+  intake:      { record: (body) => post('/intake', body),      history: (params) => get('/intake', params), summary: (params) => get('/intake/summary', params),      update: (id, body) => patch(`/intake/${id}`, body) },
   adjustments: { record: (body) => post('/adjustments', body), history: (params) => get('/adjustments', params), summary: (params) => get('/adjustments/summary', params), update: (id, body) => patch(`/adjustments/${id}`, body) },
 
-  // One time-ordered feed across all four logs, paged server-side.
-  // Returns the raw envelope ({ data, total, ... }) rather than just `data`,
-  // because the caller needs `total` to page.
+  // One time-ordered feed across all four logs, paged server-side. Returns the raw
+  // envelope ({ data, total, ... }) because the caller needs `total` to page.
   activity: (params) => getRaw('/activity', params),
 
   reports: {
@@ -198,7 +202,11 @@ export const api = {
 
   facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
   commodities: {
-    list: () => get('/commodities'),
+    list: (params) => get('/commodities', params),
+    modules: () => get('/commodities/modules'),
+    categories: (params) => get('/commodities/categories', params),
+    create: (body) => post('/commodities', body),
+    createCategory: (body) => post('/commodities/categories', body),
     // Ids ever transacted (any intake/dispense, however old) in the given scope.
     // params: { facility_id } | { state, lga } | { facility_ids }
     transacted: (params) => get('/commodities/transacted', params),

@@ -16,7 +16,11 @@ import { Intake     as PharmIntake     } from './pages/pharmacy/Intake'
 import { Adjustment as PharmAdjustment } from './pages/pharmacy/Adjustment'
 import { Transfers  as PharmTransfers  } from './pages/pharmacy/Transfers'
 import { Log        as PharmLog        } from './pages/pharmacy/Log'
-import { Alerts     as PharmAlerts     } from './pages/pharmacy/Alerts'
+// NOT pharmacy-only despite the path: this is the shared Alerts page, used by pharmacy
+// facilities AND by every admin tier (see adminMap below), lab admins included. Only
+// lab FACILITY users get their own (LabAlerts). The old alias implied lab admins had a
+// separate page; they never did.
+import { Alerts     as SharedAlerts    } from './pages/pharmacy/Alerts'
 import { Monitoring as PharmMonitoring } from './pages/pharmacy/Monitoring'
 
 // Lab pages
@@ -32,6 +36,7 @@ import { Monitoring as LabMonitoring } from './pages/lab/Monitoring'
 
 // Admin pages
 import { AllFacilities } from './pages/admin/AllFacilities'
+import { Catalogue } from './pages/admin/Catalogue'
 
 // DSD pages
 import { Dispense  as DsdDispense  } from './pages/dsd/Dispense'
@@ -65,7 +70,7 @@ const pharmMap = {
   dashboard: PharmDashboard, stock: PharmStock, dispense: PharmDispense,
   intake: PharmIntake, adjustment: PharmAdjustment, transfers: PharmTransfers,
   log: PharmLog, crrf: PharmCRRF,
-  alerts: PharmAlerts, monitoring: PharmMonitoring,
+  alerts: SharedAlerts, monitoring: PharmMonitoring,
   // Essential Commodities: facility-raised priced request to the central warehouse.
   'warehouse-requests': RequestWarehouse,
   // The facility's own purchases, in naira. Same component the admins get — the
@@ -89,7 +94,8 @@ const labMap = {
 // adjustment / transfers), so those pages are deliberately omitted here.
 const adminMap = {
   dashboard: PharmDashboard, stock: PharmStock, 'all-facilities': AllFacilities,
-  alerts: PharmAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
+  alerts: SharedAlerts, log: PharmLog, monitoring: PharmMonitoring, crrf: PharmCRRF,
+  catalogue: Catalogue,
   // Essential-only, and read-only: the admin's view of what facilities have asked
   // the warehouse for. The facility page of the same name is a request FORM, so the
   // two must not share a component — hence a distinct key resolved per role.
@@ -104,7 +110,7 @@ const adminMap = {
 //
 //   pharmacy dispense = pages/pharmacy/RecordStock  → reads (lines 64, 72, 180)
 //   lab      dispense = pages/lab/RecordStock       → does NOT read
-//   pharmacy alerts   = pages/pharmacy/Alerts       → reads only for a FACILITY
+//   shared alerts     = pages/pharmacy/Alerts       → reads only for a FACILITY
 //                                                     user (1 KB scope); its admin
 //                                                     drill-in now uses the rollup
 //   all-facilities    = pages/admin/AllFacilities   → no longer reads it; moved to

@@ -1,5 +1,5 @@
 import { query } from '../db.js'
-import { categoriesForSection, isStateOfficeName, STATE_OFFICE_CATEGORIES,
+import { categoriesForSection, isHubStoreName, HUB_STORE_CATEGORIES,
          extraCommoditiesForFacility, allowsCommodity } from '../constants/sections.js'
 import { MODULES, DEFAULT_MODULE } from '../constants/modules.js'
 
@@ -31,8 +31,12 @@ import { MODULES, DEFAULT_MODULE } from '../constants/modules.js'
 // state_admin reads.
 const READ_ADMIN_LEVELS = {
   stock:          ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
-  dsd_stock:      'public',                                                  // RLS read USING (true)
-  sdp_stock:      'public',
+  // DSD/SDP site stock reads were ported as 'public' because the old RLS said
+  // USING (true). That is stock held at a facility, so it belongs to the same tier
+  // as `stock` — leaving it public let an Akwa Ibom admin pull Lagos and Cross River
+  // site balances (visible in the all-facilities CRRF export, which reads all three).
+  dsd_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
+  sdp_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
   transfers:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
   dispense_log:   ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
   intake_log:     ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
@@ -85,12 +89,13 @@ export function attachScope(req, res, next) {
     ['overall_admin', 'state_admin'].includes(accessLevel)
   const section = bothSections ? null : (meta.commodity_section || null)
 
-  // Section include-list. A State Office Store handles a bespoke set (lab consumables
-  // + general consumables), which REPLACES its normal section list — not RTKs or
-  // reagents. Null-section admins already see everything.
+  // Section include-list. A hub store — state office or cluster store — handles a
+  // bespoke set (lab consumables + general consumables) which REPLACES its normal
+  // section list, so it sees neither RTKs nor reagents. Null-section admins already
+  // see everything.
   let sectionCategories = categoriesForSection(section) // null = all, or [categories]
-  if (sectionCategories && isStateOfficeName(meta.facility_name)) {
-    sectionCategories = [...STATE_OFFICE_CATEGORIES]
+  if (sectionCategories && isHubStoreName(meta.facility_name)) {
+    sectionCategories = [...HUB_STORE_CATEGORIES]
   }
   // Individually-granted commodities that fall outside those categories (see
   // FACILITY_EXTRA_COMMODITIES). Empty for every facility without an explicit grant,
@@ -414,23 +419,30 @@ export async function enforceTransferAccess(req, res, transfer) {
 // rejected even though they can read. Also applies the section gate. When `transfer`
 // carries no nested commodity (e.g. a create line), pass its category via the
 // separate enforceCommoditySection check instead.
-export async function enforceTransferWrite(req, res, transfer) {
+export async function mayWriteTransfer(req, transfer) {
   const s = req.scope
   if (s.sectionCategories) {
     // Unlike the read guard, an absent category is allowed through here (a create line
     // carries no nested commodity — the route checks it via enforceCommoditySection).
     const { category, name } = transfer.commodities || {}
     if (category != null && !allowsCommodity(s.sectionCategories, s.sectionCommodityNames, category, name)) {
-      return forbid(res, 'Not authorized for this transfer'), false
+      return false
     }
   }
   if (isWriteAdmin(s, 'transfers')) { // state_admin
     const allowed = await narrowedAdminFacilityIds(req)
     if (allowed === null) return true
-    if (allowed.includes(transfer.sending_facility_id) || allowed.includes(transfer.receiving_facility_id)) return true
-    return forbid(res, 'Not authorized for this transfer'), false
+    return allowed.includes(transfer.sending_facility_id) || allowed.includes(transfer.receiving_facility_id)
   }
-  if (s.facilityId && (transfer.sending_facility_id === s.facilityId || transfer.receiving_facility_id === s.facilityId)) return true
+  return !!s.facilityId &&
+    (transfer.sending_facility_id === s.facilityId || transfer.receiving_facility_id === s.facilityId)
+}
+
+// Response-writing wrapper. Delegates to mayWriteTransfer so the rule has ONE
+// definition: a bulk endpoint checking rows in a loop must not be able to drift from
+// what the single-row endpoint enforces.
+export async function enforceTransferWrite(req, res, transfer) {
+  if (await mayWriteTransfer(req, transfer)) return true
   return forbid(res, 'Not authorized for this transfer'), false
 }
 
