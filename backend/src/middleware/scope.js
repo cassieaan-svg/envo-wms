@@ -2,6 +2,7 @@ import { query } from '../db.js'
 import { categoriesForSection, isHubStoreName, HUB_STORE_CATEGORIES,
          extraCommoditiesForFacility, allowsCommodity,
          HIV_CATEGORIES, ESSENTIAL_CATEGORIES } from '../constants/sections.js'
+import { gateFacility, gateCommoditySection } from './authorityGate.js'
 
 // Facility + section scoping for the API layer.
 //
@@ -262,7 +263,12 @@ export async function locationFacilityIds(req) {
 
 // Guard a read that targets a single facility_id. Returns true if allowed; on
 // denial it writes a 403 and returns false (caller should `return`).
-export async function enforceFacilityRead(req, res, facilityId, table) {
+//
+// This is the LEGACY implementation. What routes import under this name is the
+// gated version at the bottom of this file, which is a passthrough to exactly
+// this function unless the authorization mode has been switched — see
+// middleware/authorityGate.js and audit finding B-1.
+async function enforceFacilityReadLegacy(req, res, facilityId, table) {
   const s = req.scope
   if (READ_ADMIN_LEVELS[table] === 'public') return true
   if (isReadAdmin(s, table)) {
@@ -276,8 +282,9 @@ export async function enforceFacilityRead(req, res, facilityId, table) {
   return forbid(res), false
 }
 
-// Guard a write that targets a single facility_id.
-export async function enforceFacilityWrite(req, res, facilityId, table) {
+// Guard a write that targets a single facility_id. Legacy implementation; see
+// the note on enforceFacilityReadLegacy.
+async function enforceFacilityWriteLegacy(req, res, facilityId, table) {
   const s = req.scope
   if (isWriteAdmin(s, table)) {
     const allowed = await narrowedAdminFacilityIds(req)
@@ -324,7 +331,7 @@ export function sectionFilter(req) {
 // 403s if it's outside the caller's section. Returns true/false like the facility
 // guards. Pass `category` directly (e.g. from an already-loaded row) to avoid the
 // lookup.
-export async function enforceCommoditySection(req, res, commodityId, category) {
+async function enforceCommoditySectionLegacy(req, res, commodityId, category) {
   const cats = req.scope.sectionCategories
   if (!cats) return true // sees both sections
   let cat = category, name
@@ -420,3 +427,33 @@ export async function mayWriteTransferFacility(req, facilityId) {
 // Expose for routes that need to constrain a list query for an admin (returns
 // null = unconstrained, or an array of facility ids to filter by).
 export { narrowedAdminFacilityIds }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE AUTHORITY GATE — audit finding B-1
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Routes import these three names and always have. What changed is that the
+// name now resolves to a wrapper which asks authorityMode.currentMode() who
+// decides. In 'legacy' — the default, and production's state — the wrapper
+// calls straight through to the function above it and nothing else happens:
+// no resolver, no stub response, no extra query.
+//
+// The point of routing every call site through one switch is that rolling the
+// cutover back is an UPDATE against one row, not a deploy. See
+// db/migrations/20260908_authorization_mode.sql for the modes and the
+// fail-safe rules.
+//
+// The LEGACY implementations stay reachable by name for two callers who must
+// not be affected by the mode: the shadow-comparison suites, which exist to
+// compare the two authorities and would be measuring the gate instead, and
+// anything that needs legacy's answer specifically.
+
+export const enforceFacilityRead = gateFacility(enforceFacilityReadLegacy, 'read')
+export const enforceFacilityWrite = gateFacility(enforceFacilityWriteLegacy, 'write')
+export const enforceCommoditySection = gateCommoditySection(enforceCommoditySectionLegacy)
+
+export const LEGACY = {
+  enforceFacilityRead: enforceFacilityReadLegacy,
+  enforceFacilityWrite: enforceFacilityWriteLegacy,
+  enforceCommoditySection: enforceCommoditySectionLegacy,
+}

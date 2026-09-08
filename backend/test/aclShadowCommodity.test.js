@@ -16,7 +16,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { query, pool } from '../src/db.js'
-import { enforceCommoditySection } from '../src/middleware/scope.js'
+// The LEGACY implementation, so this comparison holds whatever authorization
+// mode is set — see the note in aclShadowComparison.test.js (finding B-1).
+import { LEGACY } from '../src/middleware/scope.js'
+const { enforceCommoditySection } = LEGACY
 import { AclResolver } from '../src/services/aclResolver.js'
 import { scopeFor, verdict } from './helpers/legacyHarness.js'
 

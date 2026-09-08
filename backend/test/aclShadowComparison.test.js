@@ -25,10 +25,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { query, pool } from '../src/db.js'
-import {
-  enforceFacilityRead, enforceFacilityWrite,
-  enforceTransferAccess, mayWriteTransfer, enforceCommoditySection,
-} from '../src/middleware/scope.js'
+// The LEGACY implementations by name, not the gated exports. This suite exists
+// to compare the two authorities against each other, so it must ask legacy for
+// legacy's answer whatever authorization mode happens to be set — otherwise a
+// database left in `enforce` would make every comparison here compare the ACL
+// with itself and pass vacuously. See middleware/authorityGate.js (finding B-1).
+import { LEGACY, enforceTransferAccess, mayWriteTransfer } from '../src/middleware/scope.js'
+const { enforceFacilityRead, enforceFacilityWrite, enforceCommoditySection } = LEGACY
 import { AclResolver } from '../src/services/aclResolver.js'
 import { scopeFor, verdict } from './helpers/legacyHarness.js'
 import { SECTION_CATEGORIES } from '../src/constants/sections.js'
