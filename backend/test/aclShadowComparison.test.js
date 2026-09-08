@@ -31,6 +31,7 @@ import {
 } from '../src/middleware/scope.js'
 import { AclResolver } from '../src/services/aclResolver.js'
 import { scopeFor, verdict } from './helpers/legacyHarness.js'
+import { SECTION_CATEGORIES } from '../src/constants/sections.js'
 
 test.after(async () => { await pool.end() })
 
@@ -216,6 +217,76 @@ test('overall_admin: national read matches; write attempt matches (both deny, by
     await verdict(res => enforceFacilityWrite(req, res, rows[0].id, 'stock')),
     (await AclResolver.can(u.id, 'stock.write', { facilityId: rows[0].id })).decision, true)
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// The HQ viewers — overall_admin accounts carrying a commodity_section tag
+//
+// realUser('overall_admin') above takes `limit 1` with no ordering, so it may
+// pick envo.admin and never touch a tagged account. These two ARE tagged, and
+// the tag is now load-bearing: scope.js used to drop overall_admin into the
+// both-sections branch, which discarded commodity_section before anything could
+// read it, so Lab HQ and Pharmacy HQ each saw every section. Legacy and the ACL
+// agree on them today — nothing asserted it until here, and re-adding
+// 'overall_admin' to that branch would silently widen both accounts back.
+//
+// Named by email on purpose: sampling by role is exactly what missed them.
+// ═════════════════════════════════════════════════════════════════════════════
+
+async function namedUser(email) {
+  const { rows } = await query(
+    `select u.id, u.raw_user_meta_data meta from users u where u.email = $1`, [email])
+  if (!rows.length) throw new Error(`no user ${email}`)
+  return rows[0]
+}
+
+// By SECTION rather than by a named category: which categories a section holds
+// is configuration, and hardcoding one here makes the test fail the day the
+// catalogue drops it rather than the day authorization breaks.
+const oneCommodityIn = async section => (await query(
+  `select id from commodities where category = any($1) limit 1`,
+  [SECTION_CATEGORIES[section]])).rows[0]
+
+for (const [email, own, foreign] of [
+  ['labhq@envo.ng', 'lab', 'pharmacy'],
+  ['pharmacyhq@envo.ng', 'pharmacy', 'lab'],
+]) {
+  test(`${email}: its own section is allowed and the other section is denied — both agree`, async () => {
+    const u = await namedUser(email)
+    const { rows: fac } = await query(`select id from facilities order by random() limit 1`)
+    const req = scopeFor(u.meta)
+
+    // The commodity dimension is the whole point of these two accounts, so it is
+    // compared directly rather than through the facility check alone.
+    for (const [label, section, expected] of [
+      ['own section', own, true],
+      ['other section', foreign, false],
+    ]) {
+      const c = await oneCommodityIn(section)
+      assert.ok(c, `the ${section} section must be seeded for this comparison to mean anything`)
+      const legacy = await verdict(res => enforceCommoditySection(req, res, c.id))
+      const acl = (await AclResolver.can(u.id, 'stock.read',
+        { facilityId: fac[0].id, commodityId: c.id })).decision
+      assert.equal(legacy, expected,
+        `legacy must ${expected ? 'allow' : 'deny'} ${email} a ${section} commodity`)
+      record(`${email} ${label}`, legacy, acl, true)
+    }
+  })
+
+  test(`${email}: Essential is out of reach — both agree`, async () => {
+    // The module dimension, ANDed with the section above. Its absence on the ACL
+    // side would read as "unconstrained", so this is the assertion that keeps
+    // the module row honest.
+    const u = await namedUser(email)
+    const { rows: ess } = await query(`select id from commodities where module = 'essential' limit 1`)
+    if (!ess.length) return // no Essential catalogue in this database
+    const { rows: fac } = await query(`select id from facilities order by random() limit 1`)
+    const legacy = await verdict(res => enforceCommoditySection(scopeFor(u.meta), res, ess[0].id))
+    const acl = (await AclResolver.can(u.id, 'stock.read',
+      { facilityId: fac[0].id, commodityId: ess[0].id })).decision
+    assert.equal(legacy, false, 'an HIV HQ viewer must not reach the Essential module')
+    record(`${email} essential`, legacy, acl, true)
+  })
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Transfer — its own authorization path, not ordinary stock scope
