@@ -31,18 +31,25 @@ import { gateFacility, gateCommoditySection } from './authorityGate.js'
 // included on `stock` too (the old "cluster omitted from stock" RLS quirk is dropped
 // — a cluster viewer must see stock across its cluster). state_viewer reads wherever
 // state_admin reads.
+// essential_admin reads its own module's stock/log oversight (Dashboard, Stock
+// Levels, Monitoring), scoped by state + optional facility level in
+// narrowedAdminFacilityIds. It IS included on `transfers`: Essential Commodities
+// has no HIV-style transfers of its own, but routes/warehouseRequests.js reuses
+// this same table's admin levels to scope its own (Essential-only, read-only)
+// request-oversight list — leaving essential_admin out of it would silently deny
+// warehouse-request visibility too. It never gains transfer.write either way.
 const READ_ADMIN_LEVELS = {
-  stock:          ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
+  stock:          ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'essential_admin'],
   // DSD/SDP site stock reads were ported as 'public' because the old RLS said
   // USING (true). That is stock held at a facility, so it belongs to the same tier
   // as `stock` — leaving it public let an Akwa Ibom admin pull Lagos and Cross River
   // site balances (visible in the all-facilities CRRF export, which reads all three).
-  dsd_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
-  sdp_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
-  transfers:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
-  dispense_log:   ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
-  intake_log:     ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
-  adjustment_log: ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin'],
+  dsd_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'essential_admin'],
+  sdp_stock:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'essential_admin'],
+  transfers:      ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'essential_admin'],
+  dispense_log:   ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'essential_admin'],
+  intake_log:     ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'essential_admin'],
+  adjustment_log: ['state_admin', 'state_viewer', 'cluster_admin', 'lga_admin', 'essential_admin'],
   amc_settings:   'public',
   commodities:    'public',
   facilities:     'public',
@@ -219,6 +226,12 @@ async function narrowedAdminFacilityIds(req) {
     ids = (await query(`select id from facilities where cluster = $1 and ${moduleCond}`, [s.adminCluster, s.module])).rows.map(r => r.id)
   } else if (s.accessLevel === 'lga_admin' && s.adminLga) {
     ids = (await query(`select id from facilities where lga = $1 and ${moduleCond}`, [s.adminLga, s.module])).rows.map(r => r.id)
+  } else if (s.accessLevel === 'essential_admin' && s.adminState) {
+    // A further optional narrowing to one facility level (Primary vs Secondary),
+    // on top of state + module — see adminLevel in attachScope.
+    const levelCond = s.adminLevel ? ' and level = $3' : ''
+    const params = s.adminLevel ? [s.adminState, s.module, s.adminLevel] : [s.adminState, s.module]
+    ids = (await query(`select id from facilities where state = $1 and ${moduleCond}${levelCond}`, params)).rows.map(r => r.id)
   }
   // overall_admin / is_admin / unscoped tier → null (all)
   req._narrowedAdminIds = ids

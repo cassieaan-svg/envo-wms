@@ -23,6 +23,7 @@ export const useAppStore = create((set, get) => ({
   adminState:       null,
   adminLGA:         null,
   adminCluster:     null,
+  adminLevel:       null,   // facility level an essential_admin is confined to: 'primary' | 'secondary' | null (both)
   currentFacility:  null,
 
   // Admin filters
@@ -64,6 +65,7 @@ export const useAppStore = create((set, get) => ({
   setAdminState:       (adminState)       => set({ adminState }),
   setAdminLGA:         (adminLGA)         => set({ adminLGA }),
   setAdminCluster:     (adminCluster)     => set({ adminCluster }),
+  setAdminLevel:       (adminLevel)       => set({ adminLevel }),
   setCurrentFacility:  (currentFacility)  => set({ currentFacility }),
   setAllFacilities:    (allFacilities)    => set({ allFacilities }),
   setAllCommodities:   (allCommodities)   => set({ allCommodities }),
@@ -98,13 +100,17 @@ export const useAppStore = create((set, get) => ({
   // system_admin is DELIBERATELY ABSENT from isAdmin(): it has no operational
   // access at all, so every oversight page this flag unlocks would call endpoints
   // that correctly 403. It administers users, not stock — see isSystemAdmin.
-  isAdmin:        () => ['overall_admin','state_admin','state_viewer','cluster_admin','lga_admin'].includes(get().accessLevel),
+  // essential_admin IS included: it reads real stock/request/spend oversight
+  // within its state (and optional facility level) — see scope.js's
+  // READ_ADMIN_LEVELS — so the oversight pages this flag unlocks work for it.
+  isAdmin:        () => ['overall_admin','state_admin','state_viewer','cluster_admin','lga_admin','essential_admin'].includes(get().accessLevel),
   isOverallAdmin: () => get().accessLevel === 'overall_admin',
   // The system-administration identity (Phase 2M.1). Holds exactly three ACL
   // permissions — user.read, user.write, user_permission.write — and no facility,
   // section or module scope. It is not a super-user: scope.js grants it nothing,
   // and this flag must only ever gate the administration surface.
   isSystemAdmin:  () => get().accessLevel === 'system_admin',
+  isEssentialAdmin: () => get().accessLevel === 'essential_admin',
   isStateAdmin:   () => get().accessLevel === 'state_admin',
   isStateViewer:  () => get().accessLevel === 'state_viewer',
   isClusterAdmin: () => get().accessLevel === 'cluster_admin',
@@ -185,6 +191,10 @@ export const useAppStore = create((set, get) => ({
       const sec = s.commoditySection === 'pharmacy' ? 'Pharmacy' : s.commoditySection === 'lab' ? 'Lab' : ''
       return [`${s.adminLGA} LGA`, sec].filter(Boolean).join(' ')
     }
+    if (s.accessLevel === 'essential_admin') {
+      const lvl = s.adminLevel === 'primary' ? 'Primary' : s.adminLevel === 'secondary' ? 'Secondary' : ''
+      return [`${s.adminState} Essential Admin`, lvl].filter(Boolean).join(' — ')
+    }
     if (s.accessLevel === 'facility') {
       const section = s.commoditySection === 'pharmacy' ? 'Pharmacy'
                     : s.commoditySection === 'lab'      ? 'Lab' : ''
@@ -201,7 +211,7 @@ export const useAppStore = create((set, get) => ({
     apiClearModule()
     set({
       user:null, accessLevel:null, facilityRole:null, sdpName:null, dsdSiteName:null, dsdType:null, commoditySection:null,
-      adminState:null, adminLGA:null, adminCluster:null, currentFacility:null,
+      adminState:null, adminLGA:null, adminCluster:null, adminLevel:null, currentFacility:null,
       adminFilterFacility:null, adminFilterState:null, adminFilterLGA:null,
       allFacilities:[], allCommodities:[], stockData:[], stockLoaded:false, dsdFacilities:[], amcWindows:{},
       module:null, availableModules:[], moduleDataLoaded:false,

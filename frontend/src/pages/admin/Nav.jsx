@@ -60,15 +60,15 @@ export function AdminNav() {
       <NavItem page="all-facilities" icon={icons.facilities}>All Facilities</NavItem>
       <NavItem page="alerts" icon={icons.alerts} badge={pendingRequestCount}>Alerts</NavItem>
 
-      {store.isOverallAdmin() && <><NavSection>Configuration</NavSection>
+      {(store.isOverallAdmin() || store.isEssentialAdmin()) && <><NavSection>Configuration</NavSection>
         <NavItem page="catalogue" icon={icons.stock}>Item Catalogue</NavItem>
       </>}
 
-      {/* Only state_admin administers users among the tiers that share this nav.
-          overall_admin is read-only by design and administers nobody, and the
-          read-only viewers manage no one — the endpoints refuse all of them, so
-          offering the link would only produce a 403. */}
-      {store.isStateAdmin() && <><NavSection>Administration</NavSection>
+      {/* state_admin and essential_admin administer users among the tiers that
+          share this nav. overall_admin is read-only by design and administers
+          nobody, and the read-only viewers manage no one — the endpoints refuse
+          all of them, so offering the link would only produce a 403. */}
+      {(store.isStateAdmin() || store.isEssentialAdmin()) && <><NavSection>Administration</NavSection>
         <NavItem page="users"    icon={icons.facilities}>User &amp; Access</NavItem>
         <NavItem page="features" icon={icons.stock}>Feature Configuration</NavItem>
       </>}

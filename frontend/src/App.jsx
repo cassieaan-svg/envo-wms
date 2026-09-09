@@ -155,7 +155,7 @@ const STOCK_PAGES = {
 
 // Resolve the active role's page set the same way PageRouter picks its map.
 function pageNeedsStockData({ page, section, accessLevel, facilityRole }) {
-  const isAdmin = ['overall_admin', 'state_admin', 'lga_admin'].includes(accessLevel)
+  const isAdmin = ['overall_admin', 'state_admin', 'lga_admin', 'essential_admin'].includes(accessLevel)
   const isDSD   = accessLevel === 'facility' && facilityRole === 'dsd'
   const isSDP   = accessLevel === 'facility' && facilityRole === 'sdp'
   const set = accessLevel === 'system_admin' ? STOCK_PAGES.system
@@ -172,7 +172,10 @@ function PageRouter() {
   const page         = useAppStore(s => s.currentPage)
   const accessLevel  = useAppStore(s => s.accessLevel)
   const facilityRole = useAppStore(s => s.facilityRole)
-  const isAdmin      = ['overall_admin','state_admin','lga_admin'].includes(accessLevel)
+  // essential_admin reads real oversight data (stock, warehouse requests, spend —
+  // see scope.js's READ_ADMIN_LEVELS), so it belongs alongside the other admin
+  // tiers on adminMap, not on the bare users/catalogue-only systemAdminMap.
+  const isAdmin      = ['overall_admin','state_admin','lga_admin','essential_admin'].includes(accessLevel)
   const isDSD        = accessLevel === 'facility' && facilityRole === 'dsd'
   const isSDP        = accessLevel === 'facility' && facilityRole === 'sdp'
   const isLab        = section === 'lab'
@@ -187,7 +190,8 @@ function PageRouter() {
   // existing sessions don't land on "Page not found".
   // A system_admin lands on 'dashboard' — the store's default, and a page it has
   // no access to — so send any unknown page to its own home rather than showing
-  // "Page not found" on every first login and after every sign-out.
+  // "Page not found" on every first login and after every sign-out. essential_admin
+  // needs no such fallback: 'dashboard' is a real page for it via adminMap.
   const PageComponent = map[page]
     || (['report','reports','dailysummary'].includes(page) ? map['log'] : undefined)
     || (isSystemAdmin ? systemAdminMap.users : undefined)

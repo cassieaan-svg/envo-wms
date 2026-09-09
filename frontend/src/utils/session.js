@@ -39,6 +39,7 @@ export async function hydrateSession(user) {
   store.setAdminState(meta.admin_state || null)
   store.setAdminLGA(meta.admin_lga || null)
   store.setAdminCluster(meta.admin_cluster || null)
+  store.setAdminLevel(meta.admin_level || null)
   store.setAvailableModules(modules || [])
 
   return { accessLevel, facilityRole }
