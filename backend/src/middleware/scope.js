@@ -176,6 +176,10 @@ export function attachScope(req, res, next) {
     adminState: meta.admin_state || null,
     adminLga: meta.admin_lga || null,
     adminCluster: meta.admin_cluster || null,
+    // Facility-level narrowing for an essential_admin split by PHC vs Secondary
+    // (facilities.level). Orthogonal to geography — a state-wide PHC admin has
+    // adminState set and adminLevel='phc', no LGA/cluster narrowing at all.
+    adminLevel: meta.admin_level || null,
     section,
     sectionCategories,
     sectionCommodityNames,

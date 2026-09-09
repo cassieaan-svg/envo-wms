@@ -116,6 +116,9 @@ export function adminIdentity(scope, actorId) {
   if (scope.accessLevel === 'essential_admin' && scope.adminState) {
     return { kind: 'essential_admin', actorId, rank: ROLE_RANK.essential_admin,
              state: scope.adminState, module: 'essential',
+             // Optional further narrowing to one facility level (phc | secondary).
+             // null = both levels, matching an unnarrowed essential_admin today.
+             level: scope.adminLevel || null,
              grantableModules: ['essential', 'hiv'], canOverride: false }
   }
   return null
@@ -150,6 +153,16 @@ export async function listUsers(identity, { q = '', limit = 50, offset = 0 } = {
     conds.push(`exists (select 1 from user_role_scopes s
                          where s.user_id = u.id and s.dimension = 'module'
                            and s.scope_id = $${params.length})`)
+  }
+  if (identity.level) {
+    // A PHC-only or Secondary-only essential_admin only administers store-manager
+    // accounts at a facility of that level. Same fail-closed reading as module:
+    // a user with no facility_id (another admin account, say) is excluded, not
+    // treated as within scope.
+    params.push(identity.level)
+    conds.push(`exists (select 1 from facilities f
+                         where f.id::text = u.raw_user_meta_data->>'facility_id'
+                           and f.level = $${params.length})`)
   }
   if (q) {
     params.push(`%${q.toLowerCase()}%`)
@@ -420,6 +433,13 @@ async function validateScopes(role, scopes, identity) {
         && !Object.hasOwn(SECTION_CATEGORIES, s.scope_id)) {
       throw new AclAdminError(`"${s.scope_id}" is not a declared section.`)
     }
+    // Facility-level narrowing (PHC vs Secondary) for an essential_admin — a
+    // second, orthogonal axis alongside its state geography. Only meaningful for
+    // essential_admin today; harmless (and unused) on any other role.
+    if (s.dimension === 'facility_level' &&
+        (s.scope_type !== 'level' || !['phc', 'secondary'].includes(s.scope_id))) {
+      throw new AclAdminError(`"${s.scope_id}" is not a declared facility level (phc or secondary).`)
+    }
   }
 }
 
@@ -504,6 +524,7 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
   await validateScopes(role, scopes, identity)
 
   const geo = scopes.find(s => s.dimension === 'geography')
+  const levelScope = scopes.find(s => s.dimension === 'facility_level')
   const sections = scopes.filter(s => s.dimension === 'commodity' && s.scope_type === 'section')
                          .map(s => s.scope_id)
   const modules = scopes.filter(s => s.dimension === 'module').map(s => s.scope_id)
@@ -518,6 +539,21 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
              and state = $2`, [geo.scope_id, identity.state])).rows.length > 0)
     if (!inState) {
       throw new AclAdminError(`You may only create accounts in ${identity.state}.`, 403, 'OUT_OF_SCOPE')
+    }
+  }
+
+  // A level-confined essential_admin (PHC-only or Secondary-only) may only mint
+  // accounts at a facility of that level — checked the same way as the state
+  // ceiling above: against the geography actually being written, not asked for.
+  if (identity.level) {
+    if (geo?.scope_type !== 'facility') {
+      throw new AclAdminError(
+        `A ${identity.level} administrator may only create facility-level accounts.`, 403, 'OUT_OF_SCOPE')
+    }
+    const { rows: lvl } = await query(`select level from facilities where id = $1`, [geo.scope_id])
+    if (!lvl.length || lvl[0].level !== identity.level) {
+      throw new AclAdminError(
+        `You may only create accounts at a ${identity.level} facility.`, 403, 'OUT_OF_SCOPE')
     }
   }
 
@@ -545,6 +581,7 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
   // The essential-commodities branch's live gate. Set it when the account is
   // actually being given that module, so ACL and legacy agree from the start.
   if (modules.includes('essential')) meta.essential = true
+  if (levelScope) meta.admin_level = levelScope.scope_id
 
   const password = generatePassword()
   const hash = await bcrypt.hash(password, 10)

@@ -172,7 +172,11 @@ async function main() {
       await ensureEssentialModule(facility.id)
       const slug = slugify(item.name, usedSlugs)
       const { email, password } = await ensureLogin(slug, facility, item.name, facility.lga, level)
-      rows.push([slug, password, item.name, facility.lga, level, facility.created ? 'yes' : 'reused', email])
+      // Login username is the FULL local part (slug + .essential), not the bare
+      // slug — the login screen only appends @envo.ng, it does not add the
+      // suffix. Writing the bare slug here previously meant every login typed
+      // exactly as shown failed with "Invalid login credentials".
+      rows.push([`${slug}.essential`, password, item.name, facility.lga, level, facility.created ? 'yes' : 'reused', email])
       if (facility.created) created += 1; else reused += 1
     }
   }
