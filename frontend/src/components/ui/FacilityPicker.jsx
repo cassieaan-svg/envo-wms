@@ -17,6 +17,7 @@ function Select({ value, onChange, children }) {
 //   overall admin              → State → LGA → Facility
 //   state admin / state viewer → LGA → Facility  (state fixed)
 //   cluster admin              → LGA → Facility  (cluster fixed; LGAs = the cluster's)
+//   essential admin            → LGA → Facility  (state fixed, optionally also facility-level)
 //   LGA admin                  → Facility
 // The mid-tiers all have allFacilities pre-scoped to their remit at login, so the
 // LGA list is derived from that scoped set (cluster admin → only its cluster's LGAs).
@@ -27,7 +28,7 @@ export function FacilityPicker() {
   const allFacs   = store.allFacilities
   const isOverall = store.isOverallAdmin()
   // Tiers that pick LGA → Facility (allFacs already scoped to their state/cluster).
-  const isMidTier = store.isStateAdmin() || store.isStateViewer() || store.isClusterAdmin()
+  const isMidTier = store.isStateAdmin() || store.isStateViewer() || store.isClusterAdmin() || store.isEssentialAdmin()
   const isLGA     = store.isLGAAdmin()
   const stState   = store.adminFilterState
   const stLGA     = store.adminFilterLGA

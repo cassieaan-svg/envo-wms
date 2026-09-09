@@ -60,24 +60,26 @@ export function AdminNav() {
       <NavItem page="all-facilities" icon={icons.facilities}>All Facilities</NavItem>
       <NavItem page="alerts" icon={icons.alerts} badge={pendingRequestCount}>Alerts</NavItem>
 
-      {(store.isOverallAdmin() || store.isEssentialAdmin()) && <><NavSection>Configuration</NavSection>
-        <NavItem page="catalogue" icon={icons.stock}>Item Catalogue</NavItem>
-      </>}
-
-      {/* state_admin and essential_admin administer users among the tiers that
-          share this nav. overall_admin is read-only by design and administers
-          nobody, and the read-only viewers manage no one — the endpoints refuse
-          all of them, so offering the link would only produce a 403. */}
-      {(store.isStateAdmin() || store.isEssentialAdmin()) && <><NavSection>Administration</NavSection>
-        <NavItem page="users"    icon={icons.facilities}>User &amp; Access</NavItem>
-        <NavItem page="features" icon={icons.stock}>Feature Configuration</NavItem>
-      </>}
-
       <NavSection>Reports</NavSection>
       <NavItem page="log"          icon={icons.log}>Activity Log</NavItem>
       <NavItem page="monitoring"   icon={icons.monitoring}>Monitoring</NavItem>
       {isEssential && <NavItem page="spend" icon={icons.report}>Spend</NavItem>}
       {!isEssential && <NavItem page="crrf" icon={icons.crrf}>CRRF</NavItem>}
+
+      {/* One Administration section for every tier that gets any of these three —
+          state_admin and essential_admin administer users (overall_admin is
+          read-only by design and administers nobody); essential_admin does NOT get
+          Feature Configuration; overall_admin and essential_admin both get the
+          catalogue, folded in here rather than under its own heading. */}
+      {(store.isOverallAdmin() || store.isStateAdmin() || store.isEssentialAdmin()) && <>
+        <NavSection>Administration</NavSection>
+        {(store.isStateAdmin() || store.isEssentialAdmin()) &&
+          <NavItem page="users" icon={icons.facilities}>User &amp; Access</NavItem>}
+        {store.isStateAdmin() &&
+          <NavItem page="features" icon={icons.stock}>Feature Configuration</NavItem>}
+        {(store.isOverallAdmin() || store.isEssentialAdmin()) &&
+          <NavItem page="catalogue" icon={icons.stock}>Item Catalogue</NavItem>}
+      </>}
     </>
   )
 }

@@ -57,7 +57,7 @@ export async function loadModuleData() {
   // Load facilities (scoped for state/lga admins — the server also enforces this,
   // but we pass the filter so the dropdown matches the admin's remit).
   const facParams = {}
-  if ((accessLevel === 'state_admin' || accessLevel === 'state_viewer') && meta.admin_state) facParams.state = meta.admin_state
+  if ((accessLevel === 'state_admin' || accessLevel === 'state_viewer' || accessLevel === 'essential_admin') && meta.admin_state) facParams.state = meta.admin_state
   if (accessLevel === 'cluster_admin' && meta.admin_cluster) facParams.cluster = meta.admin_cluster
   if (accessLevel === 'lga_admin'   && meta.admin_lga)   facParams.lga   = meta.admin_lga
 
