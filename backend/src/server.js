@@ -26,6 +26,7 @@ import dispatchOrdersRouter from './routes/dispatchOrders.js';
 import alertsRouter from './routes/alerts.js';
 import monitoringRouter from './routes/monitoring.js';
 import syncRouter from './routes/sync.js';
+import syncStatusRouter from './routes/syncStatus.js';
 import facilitiesRouter from './routes/facilities.js';
 import reconciliationRouter from './routes/reconciliation.js';
 import adminUsersRouter from './routes/adminUsers.js';
@@ -65,7 +66,9 @@ app.use('/api/batches', batchesRouter);
 app.use('/api/dispatch-orders', dispatchOrdersRouter);
 app.use('/api/alerts', alertsRouter);
 app.use('/api/monitoring', monitoringRouter);
-app.use('/api/sync', syncRouter);
+// User-facing sync status/trigger only — permission-gated. The Cloud<->CMS protocol
+// (syncRouter) stays mounted exclusively at /sync behind syncAuth, above.
+app.use('/api/sync', syncStatusRouter);
 app.use('/api/reconciliation', reconciliationRouter);
 // Facility CRUD, its commodity assignments, stock proxy and dispatch-order history all
 // hang off /api/facilities.

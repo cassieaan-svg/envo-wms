@@ -269,6 +269,45 @@ test('creating a user and granting a role are both attributed in authz_audit_log
   }
 });
 
+// ── /api/sync is permission-gated, and never exposes the Cloud<->CMS protocol ─────────
+// Regression for the verification-audit finding: /api/sync was previously the same router
+// as /sync (server-to-server, syncAuth), mounted a second time behind nothing but a plain
+// login — reachable by a zero-permission user, and on Cloud including master-data.snapshot,
+// which carries every user's password hash.
+test('a user with no roles cannot read or trigger sync over /api/sync', async () => {
+  const user = await makeUser({ roles: [] });
+  const token = tokenFor(user);
+
+  try {
+    const status = await req('GET', '/api/sync/status', { token });
+    assert.equal(status.status, 403, '/api/sync/status requires sync.view');
+
+    const run = await req('POST', '/api/sync/run', { body: {}, token });
+    assert.equal(run.status, 403, '/api/sync/run requires sync.forceRun');
+  } finally {
+    await cleanup({ userIds: [user.id] });
+  }
+});
+
+test('the Cloud<->CMS sync protocol is not reachable under /api/sync at all', async () => {
+  const user = await makeUser({ roles: ['system_administrator'] }); // holds sync.forceRun/sync.view
+  const token = tokenFor(user);
+
+  try {
+    // Even the most privileged sync role cannot reach the server-to-server protocol routes
+    // here — they simply are not mounted at /api/sync any more. A 404, not a permission
+    // check, is the point: master-data.snapshot (password hashes) must not be behind ANY
+    // user JWT, however privileged.
+    const masterData = await req('GET', '/api/sync/master-data', { token });
+    assert.equal(masterData.status, 404, '/api/sync/master-data does not exist; only /sync/master-data (syncAuth) does');
+
+    const transactions = await req('POST', '/api/sync/transactions', { body: {}, token });
+    assert.equal(transactions.status, 404);
+  } finally {
+    await cleanup({ userIds: [user.id] });
+  }
+});
+
 // ── Idempotency of the sync replacement rule for user_roles ───────────────────────────
 test('MasterDataService.apply replaces user_roles wholesale without duplicating grants', async () => {
   const { MasterDataService } = await import('../src/services/masterDataService.js');
