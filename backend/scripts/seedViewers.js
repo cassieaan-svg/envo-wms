@@ -15,6 +15,7 @@
 
 import bcrypt from 'bcryptjs'
 import { pool } from '../src/db.js'
+import { syncAcl } from '../src/services/aclProvisioning.js'
 
 const password = process.argv[2] || 'Viewer@123'
 
@@ -48,6 +49,11 @@ async function main() {
     console.log(`  ✓ ${a.email}  (${a.meta.access_level}${a.meta.commodity_section ? '/' + a.meta.commodity_section : ''})`)
   }
   console.log(`\nSeeded ${ACCOUNTS.length} accounts. Password: ${password}`)
+
+  // Give the new accounts their ACL role and scope. No-ops where the ACL tables
+  // are absent (production, today) and never throws.
+  await syncAcl()
+
   await pool.end()
 }
 

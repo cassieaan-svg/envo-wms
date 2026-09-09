@@ -243,9 +243,16 @@ export function transferReason(t) {
 }
 
 // ── Section categories ────────────────────────────
+// Mirror of the backend copy in constants/sections.js — keep the two in sync.
+// A section is a named set of categories; `essential` and `general` were added
+// so those category sets are reachable by a section scope at all (see the
+// backend file for why).
 export const SECTION_CATEGORIES = {
   pharmacy: ['Pharmacy drugs'],
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
+  essential: ['Tablets, caplets & capsules', 'Consumables', 'Injections',
+              'Syrups & suspensions', 'Ophthalmic preparations', 'Infusions'],
+  general:   ['General Consumables'],
 }
 
 // The new "General Consumables" category — not part of any section list, so a
@@ -286,10 +293,23 @@ export const facilityGroupLabel = (f) =>
 // The categories a section-pinned account may see. A hub store (state office or
 // cluster store) gets its bespoke set; everyone else gets their section's list.
 // Returns null (= all) when there is no section restriction (admins).
-export function allowedCategoriesFor(commoditySection, facilityName) {
-  if (!commoditySection) return null
-  if (isHubStore(facilityName)) return [...HUB_STORE_CATEGORIES]
-  return [...(SECTION_CATEGORIES[commoditySection] || [])]
+//
+// `essential` is the per-login Essential Commodities grant (meta.essential). It
+// is ADDITIVE to whatever section the account holds, mirroring attachScope: the
+// granted store-manager logins are pinned to `pharmacy`, so a rule that only
+// applied to an unpinned account would leave them holding the grant and seeing
+// no Essential item.
+//
+// Keep in step with attachScope in backend/src/middleware/scope.js — the backend
+// copy is the enforced one; this exists so the catalogue the UI builds matches
+// what the API returns. If they disagree, the client silently filters out rows
+// the server was willing to send.
+export function allowedCategoriesFor(commoditySection, facilityName, essential = false) {
+  if (!commoditySection && !essential) return null
+  const base = !commoditySection ? []
+    : isHubStore(facilityName) ? [...HUB_STORE_CATEGORIES]
+    : [...(SECTION_CATEGORIES[commoditySection] || [])]
+  return essential ? [...new Set([...base, ...SECTION_CATEGORIES.essential])] : base
 }
 
 // Per-facility grants of INDIVIDUAL commodities, on top of the category list above.

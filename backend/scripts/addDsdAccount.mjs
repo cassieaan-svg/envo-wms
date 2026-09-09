@@ -14,6 +14,7 @@ import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { pool } from '../src/db.js'
+import { syncAcl } from '../src/services/aclProvisioning.js'
 
 // ── Config (defaults; override with the flags above) ──────────────────────────
 const DEFAULTS = {
@@ -115,6 +116,12 @@ async function main() {
   console.log(`Created DSD login for ${fac.name} (${fac.state}) — site "${DSD_SITE_NAME}", section ${SECTION}.`)
   console.log(`  username: ${email.replace('@envo.ng', '')}`)
   console.log(`Credentials written to: ${OUT}`)
+
+  // Give the new account its ACL role and scope. No-ops on a database without the
+  // ACL tables (production, today) and never throws — the login above is already
+  // created and must not be failed by a bookkeeping step.
+  await syncAcl()
+
   await pool.end()
 }
 

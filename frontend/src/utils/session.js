@@ -72,11 +72,12 @@ export async function loadModuleData() {
 
   // Restrict to the account's section, or to the hub-store set (lab + general
   // consumables) for a State Office / Cluster Lab Store. Admins (no section) keep the
-  // full catalogue. allowedCats null = all.
-  // The pharmacy/lab split is an HIV-programme concept only — Essential Commodities
-  // has no sections, so a section-pinned account must still see the whole essential
-  // catalogue there. Only apply the section filter in the HIV module.
-  const allowedCats = store.module === 'hiv' ? allowedCategoriesFor(commoditySection, meta.facility_name) : null
+  // full catalogue. allowedCats null = all. A pharmacy/lab section is an HIV-programme
+  // concept; an Essential grant widens the allow-list to the essential categories too
+  // (harmless in either module, since the commodities array is already module-scoped
+  // server-side — the extra categories match nothing outside their own module).
+  const allowedCats = allowedCategoriesFor(
+    commoditySection, meta.facility_name, meta.essential === true)
   let allCommodities = comms || []
   if (allowedCats) {
     // allowsCommodity, not a plain category test: a facility may hold individual

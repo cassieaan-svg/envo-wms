@@ -8,6 +8,8 @@
 import 'dotenv/config'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
+import { syncAcl } from './src/services/aclProvisioning.js'
+import { pool as aclPool } from './src/db.js'
 
 const VIEWERS = [
   { fullName: 'Lab HQ',      section: 'lab',      email: 'labhq@envo.ng',      password: 'CHANGE_ME_1' },
@@ -45,6 +47,14 @@ async function run() {
       console.log(`+ account created : ${v.email}  (${v.fullName} — overall_admin + section ${v.section})`)
     }
   }
+
+  // Give the new accounts their ACL role and scope. No-ops where the ACL tables
+  // are absent (production, today) and never throws. This uses the shared
+  // src/db.js pool, which this script does not otherwise touch — so close that
+  // one too, or node will not exit.
+  await syncAcl()
+  await aclPool.end().catch(() => {})
+
   await pool.end()
   console.log('\ndone')
 }

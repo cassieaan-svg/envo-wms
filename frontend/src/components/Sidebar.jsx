@@ -4,6 +4,7 @@ import { ChangePasswordModal } from './ChangePasswordModal'
 import { PharmacyNav } from '../pages/pharmacy/Nav'
 import { LabNav }      from '../pages/lab/Nav'
 import { AdminNav }    from '../pages/admin/Nav'
+import { SystemAdminNav } from '../pages/admin/SystemAdminNav'
 import { DsdNav }      from '../pages/dsd/Nav'
 import { SdpNav }      from '../pages/sdp/Nav'
 
@@ -26,7 +27,12 @@ export function Sidebar() {
     || (store.module === 'essential' ? 'Essential Commodities' : 'HIV Commodities')
   const canSwitchModule = store.availableModules.filter(m => m.enrolled).length > 1
 
-  const NavComponent = store.isAdmin()
+  // system_admin first: it is NOT in isAdmin() (it has no operational access), so
+  // without this it would fall all the way through to the pharmacy facility nav
+  // and render pages whose every request 403s.
+  const NavComponent = store.isSystemAdmin()
+    ? SystemAdminNav
+    : store.isAdmin()
     ? AdminNav
     : store.isSDP()
     ? SdpNav

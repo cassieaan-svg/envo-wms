@@ -64,6 +64,15 @@ export function AdminNav() {
         <NavItem page="catalogue" icon={icons.stock}>Item Catalogue</NavItem>
       </>}
 
+      {/* Only state_admin administers users among the tiers that share this nav.
+          overall_admin is read-only by design and administers nobody, and the
+          read-only viewers manage no one — the endpoints refuse all of them, so
+          offering the link would only produce a 403. */}
+      {store.isStateAdmin() && <><NavSection>Administration</NavSection>
+        <NavItem page="users"    icon={icons.facilities}>User &amp; Access</NavItem>
+        <NavItem page="features" icon={icons.stock}>Feature Configuration</NavItem>
+      </>}
+
       <NavSection>Reports</NavSection>
       <NavItem page="log"          icon={icons.log}>Activity Log</NavItem>
       <NavItem page="monitoring"   icon={icons.monitoring}>Monitoring</NavItem>

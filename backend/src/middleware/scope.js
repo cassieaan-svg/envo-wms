@@ -1,7 +1,9 @@
 import { query } from '../db.js'
 import { categoriesForSection, isHubStoreName, HUB_STORE_CATEGORIES,
-         extraCommoditiesForFacility, allowsCommodity } from '../constants/sections.js'
+         extraCommoditiesForFacility, allowsCommodity,
+         HIV_CATEGORIES, ESSENTIAL_CATEGORIES } from '../constants/sections.js'
 import { MODULES, DEFAULT_MODULE } from '../constants/modules.js'
+import { gateFacility, gateCommoditySection } from './authorityGate.js'
 
 // Facility + section scoping for the API layer.
 //
@@ -85,8 +87,21 @@ export function attachScope(req, res, next) {
   // Section (pharmacy/lab) is null — "sees both" — for overall_admin / state_admin.
   // Everyone else (cluster_admin, lga_admin, section-scoped state_viewers) is pinned
   // to their token's commodity_section; a state_viewer with none set still sees both.
-  const bothSections = isAdminFlag ||
-    ['overall_admin', 'state_admin'].includes(accessLevel)
+  // overall_admin is NOT here. It was, and that discarded its commodity_section
+  // before anything could read it — so Lab HQ and Pharmacy HQ, provisioned as
+  // overall_admin tagged 'lab' and 'pharmacy', both saw every section. The tag
+  // was read by the frontend to pick which pages to render and by nothing else,
+  // which made a display field the only thing standing between an HQ viewer and
+  // another section's data. create_hq_viewers.mjs says as much: the tag exists
+  // "so the UI shows only that section's data".
+  //
+  // An UNTAGGED overall_admin (envo.admin) still sees every HIV section — it
+  // falls through to the module default below, exactly as before. Only a tagged
+  // one narrows, which is what the tag was always meant to mean.
+  //
+  // state_admin stays: it genuinely oversees both sections, and its own
+  // commodity_section — where one exists — is not an access statement.
+  const bothSections = isAdminFlag || accessLevel === 'state_admin'
   const section = bothSections ? null : (meta.commodity_section || null)
 
   // Section include-list. A hub store — state office or cluster store — handles a
@@ -97,14 +112,60 @@ export function attachScope(req, res, next) {
   if (sectionCategories && isHubStoreName(meta.facility_name)) {
     sectionCategories = [...HUB_STORE_CATEGORIES]
   }
+  // AN UNPINNED CALLER DEFAULTS TO ITS MODULE, NOT TO EVERYTHING.
+  //
+  // `null` here means "no category filter", and that was written when the HIV
+  // programme was the only thing in `commodities` — so "no filter" and "both
+  // sections" described the same set. Essential Commodities then added 450 rows
+  // to the same table and silently widened every unpinned caller: a state_admin
+  // overseeing HIV pharmacy and lab could read Essential stock, because nobody
+  // had written a rule to stop them. Nothing granted that access; it was
+  // inherited from an absent filter.
+  //
+  // So an absent section now resolves to the caller's MODULE rather than to the
+  // whole table. Two accounts keep the old unrestricted meaning, deliberately:
+  //
+  //   system_admin  administers users and holds no operational access at all
+  //                 (Phase 2M.1); it may see the full catalogue and can act on
+  //                 none of it.
+  //   Essential     an account carrying the meta.essential grant, or the
+  //                 essential_admin role, spans both modules by design.
+  const seesEssential = meta.essential === true || accessLevel === 'essential_admin'
+  if (sectionCategories === null && accessLevel !== 'system_admin') {
+    sectionCategories = [...HIV_CATEGORIES]
+  }
+
+  // THE ESSENTIAL GRANT IS ADDITIVE, not a default.
+  //
+  // The 194 granted store-manager logins carry commodity_section = 'pharmacy'
+  // explicitly — the essential-commodities branch requires that section as a
+  // precondition for opening Essential at all. So they are PINNED, and a rule
+  // that only filled in an absent section never reached them: they held the
+  // grant and still could not see a single Essential item.
+  //
+  // Adding the categories to whatever section they already hold is what the
+  // grant means. It also makes legacy agree with the ACL, which has given these
+  // accounts {pharmacy, essential} since Phase 2M.2d — the two were describing
+  // different access for the same people.
+  if (sectionCategories && seesEssential) {
+    sectionCategories = [...new Set([...sectionCategories, ...ESSENTIAL_CATEGORIES])]
+  }
+
+  // An essential_only login is locked out of every other module (enforced in
+  // enforceModuleAccess below) — so its category filter must stay essential-only
+  // too, even though the additive grant above would otherwise union in its HIV
+  // section. Some Essential-roster facilities were already HIV facilities with
+  // real HIV stock history; without this, that history would leak through here,
+  // because stock/dispense/intake read sectionCategories directly and have no
+  // module check of their own — the module gate alone would not stop it.
+  if (meta.essential_only === true) {
+    sectionCategories = [...ESSENTIAL_CATEGORIES]
+  }
+
   // Individually-granted commodities that fall outside those categories (see
-  // FACILITY_EXTRA_COMMODITIES). Empty for every facility without an explicit grant,
-  // and irrelevant to unrestricted admins, whose category filter is null anyway.
-  let sectionCommodityNames = sectionCategories ? extraCommoditiesForFacility(meta.facility_name) : []
-  // Essential Commodities has no pharmacy/lab split, and its categories aren't the HIV
-  // section lists — so the section-category filter must not apply there (it would drop
-  // every essential row). `section` itself is kept for the pharmacy-only module gate.
-  if (module === 'essential') { sectionCategories = null; sectionCommodityNames = [] }
+  // FACILITY_EXTRA_COMMODITIES). Empty for every facility without an explicit grant.
+  const sectionCommodityNames = (sectionCategories && meta.essential_only !== true)
+    ? extraCommoditiesForFacility(meta.facility_name) : []
 
   req.scope = {
     accessLevel,
@@ -237,7 +298,12 @@ export async function locationFacilityIds(req) {
 
 // Guard a read that targets a single facility_id. Returns true if allowed; on
 // denial it writes a 403 and returns false (caller should `return`).
-export async function enforceFacilityRead(req, res, facilityId, table) {
+//
+// This is the LEGACY implementation. What routes import under this name is the
+// gated version at the bottom of this file, which is a passthrough to exactly
+// this function unless the authorization mode has been switched — see
+// middleware/authorityGate.js and audit finding B-1.
+async function enforceFacilityReadLegacy(req, res, facilityId, table) {
   const s = req.scope
   if (READ_ADMIN_LEVELS[table] === 'public') return true
   if (isReadAdmin(s, table)) {
@@ -251,8 +317,9 @@ export async function enforceFacilityRead(req, res, facilityId, table) {
   return forbid(res), false
 }
 
-// Guard a write that targets a single facility_id.
-export async function enforceFacilityWrite(req, res, facilityId, table) {
+// Guard a write that targets a single facility_id. Legacy implementation; see
+// the note on enforceFacilityReadLegacy.
+async function enforceFacilityWriteLegacy(req, res, facilityId, table) {
   const s = req.scope
   // Admin tiers are read-only in Essential Commodities. Checked ahead of
   // isWriteAdmin because state_admin DOES hold cross-facility write on stock /
@@ -365,7 +432,7 @@ export function isEssentialOversight(scope) {
 // 403s if it's outside the caller's section. Returns true/false like the facility
 // guards. Pass `category` directly (e.g. from an already-loaded row) to avoid the
 // lookup.
-export async function enforceCommoditySection(req, res, commodityId, category) {
+async function enforceCommoditySectionLegacy(req, res, commodityId, category) {
   const cats = req.scope.sectionCategories
   if (!cats) return true // sees both sections
   let cat = category, name
@@ -461,3 +528,33 @@ export async function mayWriteTransferFacility(req, facilityId) {
 // Expose for routes that need to constrain a list query for an admin (returns
 // null = unconstrained, or an array of facility ids to filter by).
 export { narrowedAdminFacilityIds }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE AUTHORITY GATE — audit finding B-1
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Routes import these three names and always have. What changed is that the
+// name now resolves to a wrapper which asks authorityMode.currentMode() who
+// decides. In 'legacy' — the default, and production's state — the wrapper
+// calls straight through to the function above it and nothing else happens:
+// no resolver, no stub response, no extra query.
+//
+// The point of routing every call site through one switch is that rolling the
+// cutover back is an UPDATE against one row, not a deploy. See
+// db/migrations/20260908_authorization_mode.sql for the modes and the
+// fail-safe rules.
+//
+// The LEGACY implementations stay reachable by name for two callers who must
+// not be affected by the mode: the shadow-comparison suites, which exist to
+// compare the two authorities and would be measuring the gate instead, and
+// anything that needs legacy's answer specifically.
+
+export const enforceFacilityRead = gateFacility(enforceFacilityReadLegacy, 'read')
+export const enforceFacilityWrite = gateFacility(enforceFacilityWriteLegacy, 'write')
+export const enforceCommoditySection = gateCommoditySection(enforceCommoditySectionLegacy)
+
+export const LEGACY = {
+  enforceFacilityRead: enforceFacilityReadLegacy,
+  enforceFacilityWrite: enforceFacilityWriteLegacy,
+  enforceCommoditySection: enforceCommoditySectionLegacy,
+}

@@ -1,19 +1,57 @@
 import { query, withTransaction } from '../db.js'
+import { SECTION_CATEGORIES, sectionFilterSql } from '../constants/sections.js'
 
 export class CommodityService {
   /**
-   * List commodities, ordered category → name to match the old Supabase query the
-   * session bootstrap relied on. Section-level filtering is applied client-side (see
-   * SECTION_CATEGORIES). When a `module` is given the catalogue is scoped to that
-   * programme (HIV vs Essential Commodities); omitting it returns every module.
+   * List commodities, ordered category → name to match the query the session
+   * bootstrap has always relied on.
+   *
+   * TWO KINDS OF NARROWING, and the distinction matters:
+   *
+   *   scopeCategories / scopeCommodityNames — the CALLER'S OWN scope, from
+   *     req.scope. A ceiling: it is applied whatever else is asked for, so a
+   *     query parameter can never widen past it.
+   *   module / section / category / q — a VIEW FILTER the caller chose. It
+   *     narrows within that ceiling and nothing more.
+   *
+   * The two compose by AND, which is what makes `?module=essential` return an
+   * empty list to a pharmacy user rather than Essential items.
+   *
+   * `section` and `category` narrow on the LEGACY c.category column — the one
+   * the catalogue table displays — so section=lab plus category=RTKs is just
+   * RTKs, and section=lab alone is every lab category.
    */
-  static async getCommodities({ module, activeOnly = false, q } = {}) {
+  static async getCommodities({
+    module, section, category, activeOnly = false, q,
+    scopeCategories = null, scopeCommodityNames = [],
+  } = {}) {
     const params = []
     const where = []
+
+    // The caller's own ceiling, applied FIRST. sectionFilterSql is the same
+    // helper the seven operational routes use, so the catalogue narrows by
+    // exactly the rule that governs stock, dispensing and transfers — including
+    // the per-facility commodity grant, which must ride along or Akwa Ibom's
+    // state office loses Alere Determine.
+    const scopeCond = sectionFilterSql('c', scopeCategories, scopeCommodityNames, params)
+    if (scopeCond) where.push(scopeCond)
+
     if (module) { params.push(module); where.push(`cm.module = $${params.length}`) }
     if (activeOnly) where.push('c.is_active = true and cm.is_active = true')
+    if (category) { params.push(category); where.push(`c.category = $${params.length}`) }
+    else if (section) {
+      const cats = SECTION_CATEGORIES[section]
+      // An undeclared section matches nothing rather than everything — the same
+      // fail-closed choice the scope guards make.
+      params.push(Array.isArray(cats) ? cats : [])
+      where.push(`c.category = any($${params.length})`)
+    }
     if (q) { params.push(`%${q}%`); where.push(`(c.name ilike $${params.length} or c.item_code ilike $${params.length})`) }
     const { rows } = await query(
+      // Every column qualified with c. — commodity_modules ALSO has is_active,
+      // so the unqualified list was ambiguous the moment the join was added, and
+      // any module-filtered or active-only request 500'd. The catalogue's module
+      // filter silently did nothing because the frontend swallowed that error.
       `select c.id, c.name, c.category, c.unit, c.pack_size, c.dispensing_unit, c.module,
               c.wms_commodity_id, c.unit_price, c.item_type, c.item_code, c.is_active, c.description
          from commodities c

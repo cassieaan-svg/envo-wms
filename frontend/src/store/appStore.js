@@ -95,8 +95,16 @@ export const useAppStore = create((set, get) => ({
   // isAdmin = "sees the multi-facility oversight views" — all tiers above facility,
   // including the read-only viewers. It does NOT imply write access; gate write
   // actions on canManageStock()/isReadOnly() instead.
+  // system_admin is DELIBERATELY ABSENT from isAdmin(): it has no operational
+  // access at all, so every oversight page this flag unlocks would call endpoints
+  // that correctly 403. It administers users, not stock — see isSystemAdmin.
   isAdmin:        () => ['overall_admin','state_admin','state_viewer','cluster_admin','lga_admin'].includes(get().accessLevel),
   isOverallAdmin: () => get().accessLevel === 'overall_admin',
+  // The system-administration identity (Phase 2M.1). Holds exactly three ACL
+  // permissions — user.read, user.write, user_permission.write — and no facility,
+  // section or module scope. It is not a super-user: scope.js grants it nothing,
+  // and this flag must only ever gate the administration surface.
+  isSystemAdmin:  () => get().accessLevel === 'system_admin',
   isStateAdmin:   () => get().accessLevel === 'state_admin',
   isStateViewer:  () => get().accessLevel === 'state_viewer',
   isClusterAdmin: () => get().accessLevel === 'cluster_admin',
@@ -158,6 +166,7 @@ export const useAppStore = create((set, get) => ({
 
   getSectionLabel: () => {
     const s = get()
+    if (s.accessLevel === 'system_admin') return 'System Administrator'
     if (s.accessLevel === 'overall_admin') {
       if (s.commoditySection === 'lab')      return 'Lab HQ'
       if (s.commoditySection === 'pharmacy') return 'Pharmacy HQ'

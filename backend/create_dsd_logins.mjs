@@ -19,6 +19,8 @@
 import 'dotenv/config'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
+import { syncAcl } from './src/services/aclProvisioning.js'
+import { pool as aclPool } from './src/db.js'
 
 // Each batch: the hub facility (matched by EXACT name — must already exist), the
 // commodity section its spokes work in, and its spoke sites.
@@ -115,6 +117,14 @@ async function run() {
       console.log(`+ account created  : ${s.email}  (${s.site} / ${s.dsd_type})`)
     }
   }
+
+  // Give the new accounts their ACL role and scope. No-ops where the ACL tables
+  // are absent (production, today) and never throws. This uses the shared
+  // src/db.js pool, which this script does not otherwise touch — so close that
+  // one too, or node will not exit.
+  await syncAcl()
+  await aclPool.end().catch(() => {})
+
   await pool.end()
   console.log('\ndone')
 }

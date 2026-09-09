@@ -15,6 +15,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pool } from '../src/db.js'
+import { syncAcl } from '../src/services/aclProvisioning.js'
 
 const OUT = process.argv[2] || path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), 'state_section_viewer_logins.csv')
 const SECTIONS = ['pharmacy', 'lab']
@@ -64,6 +65,11 @@ async function main() {
   fs.writeFileSync(OUT, rows.map(r => r.map(csvCell).join(',')).join('\r\n'))
   console.log(`Provisioned ${accounts.length} section-scoped state viewers (${states.length} states x 2 sections).`)
   console.log(`Credentials written to: ${OUT}`)
+
+  // Give the new accounts their ACL role and scope. No-ops where the ACL tables
+  // are absent (production, today) and never throws.
+  await syncAcl()
+
   await pool.end()
 }
 

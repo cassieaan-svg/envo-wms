@@ -6,11 +6,47 @@
 export const SECTION_CATEGORIES = {
   pharmacy: ['Pharmacy drugs'],
   lab:      ['RTKs', 'Lab reagents', 'Lab consumables'],
+
+  // A section is just "a named set of categories". It was originally only the
+  // pharmacy/lab split inside HIV, but nothing in the mechanism requires that —
+  // and treating it as an HIV-only concept left two category sets unreachable by
+  // any section scope, which is a gap rather than a design.
+  //
+  // essential — the Essential Commodities module's own six categories. Without
+  //   this, an Essential account pinned to a section could never see an Essential
+  //   item: sections AND with the module dimension, and no section contained an
+  //   Essential category.
+  // general  — the hub-store category. It belongs to neither pharmacy nor lab
+  //   (that is deliberate: a section-pinned facility must not see it), so it was
+  //   reachable only through the STATE_OFFICE_CATEGORIES override and could not
+  //   be granted to anyone else.
+  //
+  // ADDITIVE AND PROVABLY LIVE-SAFE: no account carries either value in
+  // raw_user_meta_data.commodity_section (only lab, pharmacy, tools and none
+  // exist), so categoriesForSection resolves these for nobody until an ACL scope
+  // row names them. The pharmacy and lab lists are untouched.
+  essential: ['Tablets, caplets & capsules', 'Consumables', 'Injections',
+              'Syrups & suspensions', 'Ophthalmic preparations', 'Infusions'],
+  general:   ['General Consumables'],
 }
 
-// The new "General Consumables" category — not part of any section list, so a
-// regular section-pinned caller never sees it (excluded by the include-list filter).
+// The new "General Consumables" category — not part of the pharmacy or lab lists,
+// so a caller pinned to either never sees it (excluded by the include-list filter).
 export const GENERAL_CONSUMABLES = 'General Consumables'
+
+// Which sections belong to which module. A module is the set of its sections'
+// categories, so this is the one place that says what "the HIV catalogue" means.
+//
+// KEEP `me` IN MIND: when the envo-tools branch lands it adds an `me` section
+// (M&E Tools) to the HIV module, and it must be added to HIV_SECTIONS here or
+// admins will stop seeing those items.
+const HIV_SECTIONS = ['pharmacy', 'lab', 'general']
+const ESSENTIAL_SECTIONS = ['essential']
+
+const categoriesOf = keys => [...new Set(keys.flatMap(k => SECTION_CATEGORIES[k] || []))]
+
+export const HIV_CATEGORIES = categoriesOf(HIV_SECTIONS)
+export const ESSENTIAL_CATEGORIES = categoriesOf(ESSENTIAL_SECTIONS)
 
 // The COMPLETE category set a per-state "State Office Store" sees — it replaces the
 // caller's normal section list (it is NOT the lab section): a state office handles

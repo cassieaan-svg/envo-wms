@@ -11,6 +11,7 @@ import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { pool } from '../src/db.js'
+import { syncAcl } from '../src/services/aclProvisioning.js'
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const FACILITY = {
@@ -91,6 +92,12 @@ async function main() {
 
   fs.writeFileSync(OUT, rows.map(r => r.map(csvCell).join(',')).join('\r\n'))
   console.log(`\nDone. ${ROLES.length} logins written to ${OUT}`)
+
+  // Give the new accounts their ACL role and scope. No-ops on a database without
+  // the ACL tables (production, today) and never throws — the logins above are
+  // already created and must not be failed by a bookkeeping step.
+  await syncAcl()
+
   await pool.end()
 }
 

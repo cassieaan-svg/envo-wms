@@ -74,6 +74,12 @@ function assertSameBuckets(expected, actual, label) {
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 let states = [], busiestFacility = null, topCommodity = null, aCategory = null
+// Separate from busiestFacility on purpose. busiestFacility is chosen ALL-TIME
+// and gates suite availability; the scoping test below queries inside the
+// 30-day window W, where the all-time busiest facility may have no rows at all
+// — which produced an empty result and an assertion failure reading "leaked
+// another facility", describing the opposite of what had happened.
+let busiestFacilityInWindow = null
 let unavailable = false
 try {
   states = (await query('select distinct state from facilities where state is not null order by 1')).rows.map(r => r.state)
@@ -98,6 +104,14 @@ const dbTest = (name, fn) => test(name, { skip: unavailable }, fn)
 const win = periodWindow(30)
 const W = { from: win.start.toISOString(), to: win.end.toISOString() }
 const call = (opts) => LogService.getDispenseSummary(null, { ...W, ...opts })
+
+// Resolved now that W exists — see the note at the declaration.
+if (!unavailable) {
+  busiestFacilityInWindow = (await query(
+    `select facility_id from dispense_log
+      where dispensed_at >= $1 and dispensed_at <= $2 and facility_id is not null
+      group by 1 order by count(*) desc limit 1`, [W.from, W.to])).rows[0]?.facility_id ?? null
+}
 
 // ── Grain equivalence ───────────────────────────────────────────────────────
 dbTest('group_by=commodity matches the browser reduction (qty + txn)', async () => {
@@ -175,11 +189,19 @@ dbTest('zero-quantity dispenses are counted as records but add no units', async 
 
 // ── Scoping ─────────────────────────────────────────────────────────────────
 dbTest('facility scoping matches and excludes out-of-scope facilities', async () => {
-  const rows = await rawRows({ ...W, facilityIds: [busiestFacility] })
-  const agg = await LogService.getDispenseSummary(null, { ...W, groupBy: 'commodity', facilityIds: [busiestFacility] })
+  // Scoped to a facility that actually has rows INSIDE W. Using the all-time
+  // busiest facility here asserted that scoping "leaked" whenever that facility
+  // happened to be quiet for 30 days — the result was empty, not leaked.
+  const fac = busiestFacilityInWindow
+  if (!fac) return  // no dispensing anywhere in the window; nothing to scope
+
+  const rows = await rawRows({ ...W, facilityIds: [fac] })
+  const agg = await LogService.getDispenseSummary(null, { ...W, groupBy: 'commodity', facilityIds: [fac] })
   assertSameBuckets(reduce(rows, r => r.commodity_id), index(agg, r => r.commodity_id), 'one facility')
-  const scopedFacs = await LogService.getDispenseSummary(null, { ...W, groupBy: 'facility', facilityIds: [busiestFacility] })
-  assert.deepEqual(scopedFacs.map(r => r.facility_id), [busiestFacility], 'leaked another facility')
+
+  const scopedFacs = await LogService.getDispenseSummary(null, { ...W, groupBy: 'facility', facilityIds: [fac] })
+  assert.deepEqual(scopedFacs.map(r => r.facility_id), [fac],
+    'scoping to one facility must return that facility and no other')
 })
 
 dbTest('state scoping matches for every state', async () => {
@@ -274,14 +296,40 @@ dbTest('the default grouping is unchanged, so the AMC caller is unaffected', asy
 
 // ── Scalability guardrail ───────────────────────────────────────────────────
 dbTest('initial-load facets track commodities/facilities, not dispense_log size', async () => {
-  const { rows: [{ c: logRows }] } = await query(
-    'select count(*)::int c from dispense_log where dispensed_at >= $1 and dispensed_at <= $2', [W.from, W.to])
+  // The property under test: each grouping returns ONE ROW PER DISTINCT VALUE,
+  // never one row per log record. That is what stops the payload growing with
+  // data volume.
+  //
+  // This was previously asserted as `total < logRows / 5`, a proxy that only
+  // holds when there are many rows per facet. It is not a property of the code:
+  // a thin window (few rows spread across many facilities) inverts the ratio
+  // while the aggregation is behaving perfectly. Asserting the real bound
+  // instead makes the test independent of how much data happens to be present.
+  const { rows: [d] } = await query(`
+    select count(distinct commodity_id)::int comms,
+           count(distinct facility_id)::int facs,
+           count(distinct (dispensed_at at time zone 'Africa/Lagos')::date)::int days
+      from dispense_log where dispensed_at >= $1 and dispensed_at <= $2`, [W.from, W.to])
+
   const byComm = await call({ groupBy: 'commodity' })
   const byFac = await call({ groupBy: 'facility' })
   const byDay = await call({ groupBy: 'day', tz: 'Africa/Lagos' })
+
+  assert.ok(byComm.length <= d.comms,
+    `commodity grain returned ${byComm.length} rows for ${d.comms} distinct commodities`)
+  assert.ok(byFac.length <= d.facs,
+    `facility grain returned ${byFac.length} rows for ${d.facs} distinct facilities`)
+  assert.ok(byDay.length <= d.days,
+    `day grain returned ${byDay.length} rows for ${d.days} distinct days`)
+
+  // And the guard the original was reaching for: the payload must not scale with
+  // row count. One row per log record would blow straight past the distinct
+  // bounds above, so this is belt-and-braces rather than the primary assertion.
+  const { rows: [{ c: logRows }] } = await query(
+    'select count(*)::int c from dispense_log where dispensed_at >= $1 and dispensed_at <= $2', [W.from, W.to])
   const total = byComm.length + byFac.length + byDay.length
-  assert.ok(total < logRows / 5,
-    `initial facets returned ${total} rows against ${logRows} log rows — payload is tracking data volume`)
+  assert.ok(total <= d.comms + d.facs + d.days && total <= logRows * 3,
+    `facets (${total}) must be bounded by distinct values, not by ${logRows} log rows`)
 })
 
 // ── Interim ("weekly") AMC: the lifetime grouping ────────────────────────────
@@ -299,19 +347,50 @@ dbTest('lifetime excludes junk dates that would corrupt the week span', async ()
   // dispense_log holds rows dated before 2024 and in the future. A single stray
   // early date would stretch a commodity's span and drive its AMC toward zero,
   // hiding a stockout — so the aggregate must bound the range.
+  //
+  // WHY THIS IS BRACKETED RATHER THAN COMPARED TO A SINGLE SUM. `npm test` runs
+  // suites in PARALLEL against one database, and seven of them write
+  // dispense_log. The aggregate and any verification sum are therefore two
+  // different instants, and this test used to assert they were equal — so a row
+  // inserted between the two statements failed it, intermittently, with a
+  // difference equal to whatever that row's quantity happened to be (observed:
+  // once by 10, once by 1). The bug was in the measurement, not the aggregate.
+  //
+  // Reading the sums either side of the aggregate pins it to a range. When
+  // nothing is writing concurrently the two readings are identical and this is
+  // exactly the equality assertion it replaces; when something is, it is still a
+  // real constraint rather than a coin toss. Same technique, same reason, as the
+  // category-set comparisons in commodityListScope.test.js.
+  const sums = async () => (await query(`
+    select coalesce(sum(quantity) filter (
+             where dispensed_at >= '2024-01-01' and dispensed_at <= now()), 0)::int bounded,
+           coalesce(sum(quantity) filter (
+             where dispensed_at <  '2024-01-01' or  dispensed_at >  now()), 0)::int junk
+      from dispense_log`)).rows[0]
+
+  const before = await sums()
   const rows = await LogService.getDispenseSummary(null, { groupBy: 'commodity,lifetime' })
+  const after = await sums()
+
   const now = new Date(), floor = new Date('2024-01-01')
   for (const r of rows) {
     assert.ok(r.first_at >= floor, `first_at ${r.first_at} predates the floor`)
     assert.ok(r.last_at <= now, `last_at ${r.last_at} is in the future`)
   }
-  const { rows: [{ c: outOfRange }] } = await query(
-    `select count(*)::int c from dispense_log where dispensed_at < '2024-01-01' or dispensed_at > now()`)
-  const bounded = await query(
-    `select sum(quantity)::int s from dispense_log where dispensed_at >= '2024-01-01' and dispensed_at <= now()`)
-  if (outOfRange > 0) {
-    assert.equal(rows.reduce((s, r) => s + r.qty, 0), bounded.rows[0].s,
-      'lifetime total must exclude out-of-range rows')
+
+  // Only meaningful while junk rows carrying quantity actually exist — otherwise
+  // "excludes them" is vacuously true and this asserts nothing.
+  if (Math.min(before.junk, after.junk) > 0) {
+    const total = rows.reduce((s, r) => s + r.qty, 0)
+    const lo = Math.min(before.bounded, after.bounded)
+    const hi = Math.max(before.bounded, after.bounded)
+    assert.ok(total >= lo && total <= hi,
+      `lifetime total ${total} must exclude out-of-range rows — expected the in-range sum, ` +
+      `which was ${lo === hi ? lo : `between ${lo} and ${hi} across the read`}`)
+    // The exclusion is observable, not just consistent: the junk rows carry
+    // quantity, and the aggregate is below the unfiltered total.
+    assert.ok(total < hi + Math.min(before.junk, after.junk),
+      'the aggregate must be strictly below the unfiltered total')
   }
 })
 
