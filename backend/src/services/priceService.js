@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db.js';
 import { OutboxService } from './outboxService.js';
+import { IS_CLOUD } from '../lib/role.js';
 
 export class PriceService {
   static async history(commodityId) {
@@ -32,7 +33,21 @@ export class PriceService {
       // Push the new price to EnVo through the outbox, in the same transaction — so a
       // change made while EnVo is down (or offline) is delivered the moment it's back,
       // rather than lost after a few retries. causeKey chains per-commodity price rows.
-      await OutboxService.enqueue(
+      //
+      // EnVo is Cloud's relationship, not the warehouse's — same reasoning as
+      // RequestService's status callbacks. On CMS this queued a callback the instance can
+      // never deliver: it has no ENVO_API_URL by design, so the row failed on every attempt
+      // and retried forever (see requestService.js's IS_CLOUD guards for the same fix,
+      // found the same way — a two-instance commissioning drill).
+      //
+      // NOTE this does not make a CMS-side price change reach EnVo some other way: master
+      // data sync is one-directional, Cloud -> CMS only (see MasterDataService's own header
+      // comment) — commodity_prices is a table CMS mirrors, not one it feeds back. A price
+      // set locally at CMS today is silently overwritten by the next Cloud sync pull and
+      // never seen by EnVo either way; this guard only stops that from ALSO leaving a
+      // permanently-failing outbox row behind. Whether CMS should be allowed to set prices
+      // at all is a separate question this fix does not resolve.
+      if (IS_CLOUD) await OutboxService.enqueue(
         'commodity_price',
         { wmsCommodityId: commodityId, unitPrice: Number(unitPrice), causeKey: `price:${commodityId}` },
         client

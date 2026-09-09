@@ -124,6 +124,7 @@ export async function cleanup({ batchIds = [], commodityIds = [], facilityIds = 
   const steps = [
     ['discrepancies', 'DELETE FROM stock_discrepancies WHERE batch_id = ANY($1)', [batchIds]],
     ['movements', 'DELETE FROM batch_movements WHERE batch_id = ANY($1)', [batchIds]],
+    ['prices', 'DELETE FROM commodity_prices WHERE commodity_id = ANY($1)', [commodityIds]],
     ['order items', `DELETE FROM dispatch_order_items WHERE dispatch_order_id IN (
                        SELECT id FROM dispatch_orders WHERE facility_id = ANY($1))`, [facilityIds]],
     ['payments', `DELETE FROM dispatch_order_payments WHERE dispatch_order_id IN (
