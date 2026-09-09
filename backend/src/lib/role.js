@@ -90,6 +90,26 @@ export function requireStockAuthority(req, res, next) {
   }
 }
 
+// Same discipline as stock, for a different reason: pricing is set operationally, at the
+// warehouse, by the people who negotiate with vendors and know what a commodity actually
+// costs to lay in — not at Cloud, which has no relationship with a vendor at all. Unlike
+// stock authority there is no phased handover here: CMS has always been where a price is
+// decided, this just makes the code refuse the write Cloud was never supposed to make.
+//
+// Ingest is the exception, exactly as for stock: Cloud applying a price CMS already set is
+// not Cloud authoring a price, it is Cloud recording what CMS decided.
+export function assertCanSetPrices({ viaIngest = false } = {}) {
+  if (viaIngest) return;
+  if (IS_CMS) return;
+  const err = new Error(
+    'This instance does not set prices. CMS is the price authority — pricing is decided at ' +
+    'the warehouse. Perform this operation on the CMS instance.'
+  );
+  err.status = 403;
+  err.code = 'NOT_PRICE_AUTHORITY';
+  throw err;
+}
+
 export function describeRole() {
   return {
     role: ROLE,

@@ -50,6 +50,18 @@ export async function pushRequestStatus(envelope) {
   return res.json().catch(() => ({}));
 }
 
+/** Push one price CMS has decided to Cloud. One attempt — the outbox retries. */
+export async function pushPrice(envelope) {
+  const res = await fetch(cloudUrl('/sync/prices'), {
+    method: 'POST', headers: headers(), body: JSON.stringify(envelope),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Cloud price ingest returned ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
+  }
+  return res.json().catch(() => ({}));
+}
+
 /** Pull the master-data snapshot. Retried here because it is a foreground operation. */
 export function fetchMasterData() {
   return retry(async () => {

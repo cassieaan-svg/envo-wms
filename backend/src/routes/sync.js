@@ -3,6 +3,7 @@ import { SyncService } from '../services/syncService.js';
 import { MasterDataService } from '../services/masterDataService.js';
 import { RequestSyncService } from '../services/requestSyncService.js';
 import { RequestStatusService } from '../services/requestStatusService.js';
+import { PriceService } from '../services/priceService.js';
 
 const router = express.Router();
 
@@ -62,6 +63,22 @@ router.post('/transactions', async (req, res, next) => {
 router.post('/request-status', async (req, res, next) => {
   try {
     const result = await RequestStatusService.ingest(req.body);
+    return res.status(result.duplicate ? 200 : 201).json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    return next(err);
+  }
+});
+
+/**
+ * POST /sync/prices — ingest one price CMS has decided, from CMS.
+ *
+ * Idempotent on the price's own uid. CMS is the price authority; this is Cloud recording
+ * what CMS decided and, in the same transaction, queuing the push on to EnVo.
+ */
+router.post('/prices', async (req, res, next) => {
+  try {
+    const result = await PriceService.ingest(req.body);
     return res.status(result.duplicate ? 200 : 201).json(result);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });

@@ -1,4 +1,5 @@
 import { query, withTransaction } from '../db.js';
+import { PriceService } from './priceService.js';
 
 // On-hand deliberately excludes expired batches — expired stock is still on the shelf but
 // isn't dispensable, and counting it would mask an understock alert.
@@ -67,13 +68,16 @@ export class CommodityService {
       );
       const commodity = rows[0];
 
+      // Routed through PriceService rather than a second raw INSERT here — a commodity's
+      // opening price is not a different kind of write from any later price change, and
+      // duplicating the logic (uid stamping, the CMS->Cloud sync_price push, the price
+      // authority check) is exactly how the two drift apart. See PriceService for why only
+      // CMS may do this.
       if (unitPrice != null) {
-        await client.query(
-          `INSERT INTO commodity_prices (commodity_id, unit_price, is_current, created_by)
-           VALUES ($1, $2, TRUE, $3)`,
-          [commodity.id, unitPrice, createdBy ?? null]
-        );
-        commodity.current_price = unitPrice;
+        const price = await PriceService.setCurrentPrice(commodity.id, {
+          unitPrice, createdBy, client,
+        });
+        commodity.current_price = price.unit_price;
       }
 
       return commodity;

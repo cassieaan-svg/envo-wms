@@ -30,7 +30,7 @@ export const MASTER_DATA_WARN_HOURS = Number(process.env.MASTER_DATA_WARN_HOURS 
 // that has stopped functioning for a reason its staff cannot fix. Staleness is now something
 // the operator is TOLD about and can judge, not something that takes decisions away.
 
-const TABLES = ['commodities', 'commodity_prices', 'facilities', 'facility_commodities',
+const TABLES = ['commodities', 'facilities', 'facility_commodities',
                 'schemes', 'vendors', 'users', 'user_roles'];
 
 // user_roles is Cloud-authoritative — see the Phase 1 authorization design and migration
@@ -38,6 +38,17 @@ const TABLES = ['commodities', 'commodity_prices', 'facilities', 'facility_commo
 // seeded identically by migration 040 on both instances, so there is nothing to replicate.
 // users.is_locally_disabled is likewise never part of this payload in either direction —
 // it is this instance's own emergency-lockout state, and must survive a sync untouched.
+//
+// commodity_prices is deliberately ABSENT, as of migration 042. It used to be pulled down
+// here like any other master-data table, but CMS is the price authority (see
+// priceService.js) — a price now flows the other way, CMS -> Cloud, through its own
+// sync_price outbox kind and /sync/prices ingest, exactly like commodity_batches and
+// dispatch_orders already do for stock. Serving it back down here would not just be
+// redundant: CMS's and Cloud's commodity_prices rows have independent id sequences (only
+// their shared `uid` ties a price to the same logical decision across instances), so
+// re-inserting Cloud's copy of a price CMS itself authored would land under a DIFFERENT id,
+// creating a second `is_current` row for the same commodity and breaking the
+// commodity_prices_one_current constraint on the very next sync.
 
 /**
  * The staleness policy itself, as a pure function of "when did we last hear from Cloud".
@@ -73,14 +84,11 @@ export class MasterDataService {
       const e = new Error('only the Cloud instance serves master data'); e.status = 403; throw e;
     }
 
-    const [commodities, prices, facilities, facilityCommodities, schemes, vendors, users, userRoles] =
+    const [commodities, facilities, facilityCommodities, schemes, vendors, users, userRoles] =
       await Promise.all([
         query(`SELECT id, envo_commodity_id, name, category, unit, is_active,
                       reorder_level, max_level
                  FROM commodities ORDER BY id`),
-        query(`SELECT id, commodity_id, vendor_id, brand_name, unit_price, effective_date,
-                      is_current, created_by
-                 FROM commodity_prices ORDER BY id`),
         query(`SELECT id, envo_facility_id, name, state, lga, is_active
                  FROM facilities ORDER BY id`),
         query(`SELECT id, facility_id, commodity_id, is_default, added_by, added_at
@@ -98,7 +106,6 @@ export class MasterDataService {
 
     const payload = {
       commodities: commodities.rows,
-      commodity_prices: prices.rows,
       facilities: facilities.rows,
       facility_commodities: facilityCommodities.rows,
       schemes: schemes.rows,
@@ -165,16 +172,6 @@ export class MasterDataService {
          ON CONFLICT (key) DO UPDATE SET label=EXCLUDED.label, creates_debt=EXCLUDED.creates_debt,
            active=EXCLUDED.active, sort_order=EXCLUDED.sort_order`,
         d.schemes, (r) => [r.key, r.label, r.creates_debt, r.active, r.sort_order]);
-
-      await upsert(
-        `INSERT INTO commodity_prices
-           (id, commodity_id, vendor_id, brand_name, unit_price, effective_date, is_current, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (id) DO UPDATE SET vendor_id=EXCLUDED.vendor_id,
-           brand_name=EXCLUDED.brand_name, unit_price=EXCLUDED.unit_price,
-           effective_date=EXCLUDED.effective_date, is_current=EXCLUDED.is_current`,
-        d.commodity_prices, (r) => [r.id, r.commodity_id, r.vendor_id, r.brand_name, r.unit_price,
-                                    r.effective_date, r.is_current, r.created_by]);
 
       await upsert(
         `INSERT INTO facility_commodities (id, facility_id, commodity_id, is_default, added_by, added_at)
@@ -260,11 +257,12 @@ export class MasterDataService {
       version: st?.cursor ?? null,
       warnAfterHours: MASTER_DATA_WARN_HOURS,
       message: c.neverSynced
-        ? 'This warehouse has not yet received master data from Cloud. Prices and the facility '
-          + 'list are whatever was seeded locally.'
+        ? 'This warehouse has not yet received master data from Cloud. The facility and '
+          + 'commodity list are whatever was seeded locally. (Prices are set here and are '
+          + 'unaffected by this.)'
         : c.level === 'warn'
-        ? `Master data is ${Math.round(c.ageHours)}h old. Prices and the facility list may have `
-          + 'changed in Cloud since this copy was taken. Warehouse operations are unaffected.'
+        ? `Master data is ${Math.round(c.ageHours)}h old. The facility and commodity list may `
+          + 'have changed in Cloud since this copy was taken. Warehouse operations are unaffected.'
         : null,
     };
   }

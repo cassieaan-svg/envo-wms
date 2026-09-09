@@ -1,8 +1,9 @@
 import { query } from '../db.js';
 import { postRequestStatus, postPriceUpdate } from '../lib/envoClient.js';
-import { pushTransaction, pushRequestStatus } from '../lib/cloudClient.js';
+import { pushTransaction, pushRequestStatus, pushPrice } from '../lib/cloudClient.js';
 import { SyncService } from './syncService.js';
 import { RequestStatusService } from './requestStatusService.js';
+import { PriceService } from './priceService.js';
 
 // Durable delivery of outbound calls to EnVo.
 //
@@ -44,6 +45,16 @@ const SENDERS = {
     if (!envelope) return { skipped: 'status event no longer present locally' };
     const res = await pushRequestStatus(envelope);
     await RequestStatusService.markSynced(payload.eventUid);
+    return res;
+  },
+
+  // CMS -> Cloud. CMS is the price authority (see priceService.js) but has no relationship
+  // with EnVo; this is how a price it decides reaches the system that does.
+  sync_price: async (payload) => {
+    const envelope = await PriceService.envelope(payload.priceUid);
+    if (!envelope) return { skipped: 'price no longer present locally' };
+    const res = await pushPrice(envelope);
+    await PriceService.markSynced(payload.priceUid);
     return res;
   },
 };
