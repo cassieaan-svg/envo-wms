@@ -1,6 +1,7 @@
 import express from 'express';
 import { RequestService } from '../services/requestService.js';
 import { IdempotencyService } from '../services/idempotencyService.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 
 const router = express.Router();
 
@@ -32,7 +33,7 @@ router.get('/:id', async (req, res) => {
 });
 
 /** PATCH /api/requests/:id/picking — mark as being picked. Body: { pickedBy }. */
-router.patch('/:id/picking', async (req, res) => {
+router.patch('/:id/picking', requirePermission('requests.fulfil'), async (req, res) => {
   try {
     const request = await RequestService.markPicking(Number(req.params.id), {
       pickedBy: req.body?.pickedBy,
@@ -47,8 +48,12 @@ router.patch('/:id/picking', async (req, res) => {
   }
 });
 
-/** POST /api/requests/:id/fulfil — dispatch. Body: { carrierName, carrierPhone, pickedBy?, dispatchedBy? }. */
-router.post('/:id/fulfil', async (req, res) => {
+/**
+ * POST /api/requests/:id/fulfil — dispatch. Body: { carrierName, carrierPhone, pickedBy?, dispatchedBy? }.
+ * Previously reachable by any logged-in user with no role check — a gap the Phase 1 audit
+ * flagged explicitly. Now requires requests.fulfil.
+ */
+router.post('/:id/fulfil', requirePermission('requests.fulfil'), async (req, res) => {
   try {
     const request = await RequestService.fulfil(Number(req.params.id), {
       // Typed name wins; who(req) (the login) is only the fallback. Store logins are
@@ -70,8 +75,12 @@ router.post('/:id/fulfil', async (req, res) => {
   }
 });
 
-/** POST /api/requests/:id/reject — reject a request the warehouse can't fill. Body: { reason }. */
-router.post('/:id/reject', async (req, res) => {
+/**
+ * POST /api/requests/:id/reject — reject a request the warehouse can't fill. Body: { reason }.
+ * Shares requests.fulfil rather than a separate permission: rejecting is the negative branch
+ * of the same fulfilment decision, not a distinct capability — see the Phase 1 design.
+ */
+router.post('/:id/reject', requirePermission('requests.fulfil'), async (req, res) => {
   try {
     const request = await RequestService.reject(Number(req.params.id), {
       rejectedBy: (typeof req.body?.rejectedBy === 'string' && req.body.rejectedBy.trim())
@@ -86,8 +95,12 @@ router.post('/:id/reject', async (req, res) => {
   }
 });
 
-/** POST /api/requests/:id/receipt — record who received it at the facility. */
-router.post('/:id/receipt', async (req, res) => {
+/**
+ * POST /api/requests/:id/receipt — record who received it at the facility.
+ * Previously reachable by any logged-in user with no role check — a gap the Phase 1 audit
+ * flagged explicitly. Now requires requests.receipt.
+ */
+router.post('/:id/receipt', requirePermission('requests.receipt'), async (req, res) => {
   try {
     const { receivedBy } = req.body || {};
     if (!receivedBy?.trim()) return res.status(400).json({ error: 'receivedBy is required' });

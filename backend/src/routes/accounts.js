@@ -1,6 +1,6 @@
 import express from 'express';
 import { AccountService } from '../services/accountService.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 import { IdempotencyService } from '../services/idempotencyService.js';
 
 const router = express.Router();
@@ -55,7 +55,7 @@ router.get('/orders/:id/payments', async (req, res, next) => {
  * Admin-only: this moves a facility's balance, and the store's own staff record it from
  * the teller the facility brings in.
  */
-router.post('/orders/:id/payments', requireAdmin, async (req, res, next) => {
+router.post('/orders/:id/payments', requirePermission('accounts.recordPayment'), async (req, res, next) => {
   try {
     const balance = await AccountService.recordPayment(Number(req.params.id), {
       amount: req.body?.amount,

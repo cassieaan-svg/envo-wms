@@ -1,6 +1,7 @@
 import express from 'express';
 import { UserService } from '../services/userService.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { AuthzService } from '../services/authzService.js';
 
 const router = express.Router();
 
@@ -48,7 +49,20 @@ router.get('/me', authMiddleware, async (req, res, next) => {
   try {
     const user = await UserService.getById(req.user.id);
     if (!user) return res.status(404).json({ error: 'user not found' });
-    return res.json({ id: user.id, username: user.username, fullName: user.full_name, role: user.role });
+    // roles/permissions drive the frontend nav going forward; `role` is kept only as a
+    // legacy display label — no authorization decision anywhere still reads it.
+    const [roles, permissions] = await Promise.all([
+      AuthzService.rolesForUser(user.id),
+      AuthzService.permissionsForUser(user.id),
+    ]);
+    return res.json({
+      id: user.id,
+      username: user.username,
+      fullName: user.full_name,
+      role: user.role,
+      roles: roles.map((r) => r.key),
+      permissions: [...permissions],
+    });
   } catch (err) {
     return next(err);
   }

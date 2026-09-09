@@ -31,7 +31,13 @@ export const MASTER_DATA_WARN_HOURS = Number(process.env.MASTER_DATA_WARN_HOURS 
 // the operator is TOLD about and can judge, not something that takes decisions away.
 
 const TABLES = ['commodities', 'commodity_prices', 'facilities', 'facility_commodities',
-                'schemes', 'vendors', 'users'];
+                'schemes', 'vendors', 'users', 'user_roles'];
+
+// user_roles is Cloud-authoritative — see the Phase 1 authorization design and migration
+// 040. roles/permissions/role_permissions are NOT synced: they are static catalogue data,
+// seeded identically by migration 040 on both instances, so there is nothing to replicate.
+// users.is_locally_disabled is likewise never part of this payload in either direction —
+// it is this instance's own emergency-lockout state, and must survive a sync untouched.
 
 /**
  * The staleness policy itself, as a pure function of "when did we last hear from Cloud".
@@ -67,7 +73,7 @@ export class MasterDataService {
       const e = new Error('only the Cloud instance serves master data'); e.status = 403; throw e;
     }
 
-    const [commodities, prices, facilities, facilityCommodities, schemes, vendors, users] =
+    const [commodities, prices, facilities, facilityCommodities, schemes, vendors, users, userRoles] =
       await Promise.all([
         query(`SELECT id, envo_commodity_id, name, category, unit, is_active,
                       reorder_level, max_level
@@ -84,6 +90,10 @@ export class MasterDataService {
                  FROM vendors ORDER BY id`),
         query(`SELECT id, uid, username, password_hash, full_name, role, is_active
                  FROM users ORDER BY id`),
+        // Cloud is the sole writer of role assignments (Phase 1 design, section 6) — CMS
+        // never authors this table, only mirrors it, exactly like every other master-data row.
+        query(`SELECT id, user_id, role_id, facility_scope_id, granted_by, granted_at
+                 FROM user_roles ORDER BY id`),
       ]);
 
     const payload = {
@@ -94,6 +104,7 @@ export class MasterDataService {
       schemes: schemes.rows,
       vendors: vendors.rows,
       users: users.rows,
+      user_roles: userRoles.rows,
     };
 
     return {
@@ -180,6 +191,27 @@ export class MasterDataService {
            password_hash=EXCLUDED.password_hash, full_name=EXCLUDED.full_name,
            role=EXCLUDED.role, is_active=EXCLUDED.is_active`,
         d.users, (r) => [r.id, r.uid, r.username, r.password_hash, r.full_name, r.role, r.is_active]);
+
+      // user_roles is the one table in this payload that is fully replaced rather than only
+      // upserted. Every other table's "no deletes" rule exists because a local row might
+      // still be referenced by warehouse history a deletion would break; a role grant has no
+      // such downstream reference, and unlike master data, a STALE grant is itself a live
+      // access-control defect — a revocation made in Cloud must actually take effect here,
+      // not linger because nothing told this table to drop it. Cloud is the sole writer of
+      // this table (Phase 1 design, section 6), so replacing wholesale from its snapshot is
+      // safe: there is no local edit this could ever clobber.
+      const incomingIds = (d.user_roles || []).map((r) => r.id);
+      await client.query(
+        'DELETE FROM user_roles WHERE id != ALL($1::int[])',
+        [incomingIds.length ? incomingIds : [0]]
+      );
+      await upsert(
+        `INSERT INTO user_roles (id, user_id, role_id, facility_scope_id, granted_by, granted_at)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (id) DO UPDATE SET user_id=EXCLUDED.user_id, role_id=EXCLUDED.role_id,
+           facility_scope_id=EXCLUDED.facility_scope_id, granted_by=EXCLUDED.granted_by,
+           granted_at=EXCLUDED.granted_at`,
+        d.user_roles, (r) => [r.id, r.user_id, r.role_id, r.facility_scope_id, r.granted_by, r.granted_at]);
 
       await client.query(
         `INSERT INTO sync_state (stream, cursor, last_success_at, last_attempt_at, last_error, detail, updated_at)

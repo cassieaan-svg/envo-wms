@@ -1,6 +1,6 @@
 import express from 'express';
 import { VendorService } from '../services/vendorService.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 
 const router = express.Router();
 
@@ -13,7 +13,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.post('/', requireAdmin, async (req, res, next) => {
+router.post('/', requirePermission('vendors.manage'), async (req, res, next) => {
   try {
     const { name } = req.body || {};
     if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
@@ -25,7 +25,7 @@ router.post('/', requireAdmin, async (req, res, next) => {
   }
 });
 
-router.put('/:id', requireAdmin, async (req, res, next) => {
+router.put('/:id', requirePermission('vendors.manage'), async (req, res, next) => {
   try {
     const vendor = await VendorService.update(Number(req.params.id), req.body || {});
     if (!vendor) return res.status(404).json({ error: 'vendor not found' });
@@ -35,7 +35,7 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
   }
 });
 
-router.delete('/:id', requireAdmin, async (req, res, next) => {
+router.delete('/:id', requirePermission('vendors.manage'), async (req, res, next) => {
   try {
     const vendor = await VendorService.deactivate(Number(req.params.id));
     if (!vendor) return res.status(404).json({ error: 'vendor not found' });

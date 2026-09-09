@@ -15,7 +15,7 @@
 // decremented stock first and claimed afterwards, a duplicate would already have moved the
 // stock by the time it discovered it was a duplicate.
 //
-// AUTHORIZATION IS NOT DELEGATED HERE. Callers run behind authMiddleware and requireAdmin;
+// AUTHORIZATION IS NOT DELEGATED HERE. Callers run behind authMiddleware and requirePermission;
 // by the time claim() is reached the user is authenticated and permitted. What claim() adds
 // is ownership: a replay is served only to the account that created the transaction, so a
 // guessed or stolen client_txn_id returns a conflict rather than another user's order.

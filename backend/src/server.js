@@ -28,6 +28,7 @@ import monitoringRouter from './routes/monitoring.js';
 import syncRouter from './routes/sync.js';
 import facilitiesRouter from './routes/facilities.js';
 import reconciliationRouter from './routes/reconciliation.js';
+import adminUsersRouter from './routes/adminUsers.js';
 
 dotenv.config();
 
@@ -69,6 +70,8 @@ app.use('/api/reconciliation', reconciliationRouter);
 // Facility CRUD, its commodity assignments, stock proxy and dispatch-order history all
 // hang off /api/facilities.
 app.use('/api/facilities', facilitiesRouter);
+// User/role administration — see the Phase 1 authorization design.
+app.use('/api/admin', adminUsersRouter);
 
 // ── Serve the warehouse app itself ──────────────────────────────────────────
 //

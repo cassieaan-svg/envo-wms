@@ -1,6 +1,6 @@
 import express from 'express';
 import { DispatchService } from '../services/dispatchService.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 import { IdempotencyService } from '../services/idempotencyService.js';
 
 const router = express.Router();
@@ -28,7 +28,7 @@ router.get('/:id', async (req, res, next) => {
 
 // Correct an already-dispatched order. Stock is returned to its original lots and drawn
 // again — see DispatchService.updateOrder.
-router.put('/:id', requireAdmin, async (req, res, next) => {
+router.put('/:id', requirePermission('dispatchOrders.edit'), async (req, res, next) => {
   try {
     const { items, notes } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
@@ -64,8 +64,11 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
  * Returns the label the sheet should carry (ORIGINAL, then REPRINT #1, #2 …). Writes no
  * movement and no inventory transaction: printing is not a stock operation, and there is a
  * test that holds it to that.
+ *
+ * Previously reachable by any logged-in user with no role check at all — a gap the Phase 1
+ * audit flagged explicitly. Now requires dispatchOrders.print.
  */
-router.post('/:id/print', async (req, res, next) => {
+router.post('/:id/print', requirePermission('dispatchOrders.print'), async (req, res, next) => {
   try {
     const record = await DispatchService.recordPrint(Number(req.params.id), {
       printedBy: (typeof req.body?.printedBy === 'string' && req.body.printedBy.trim())

@@ -2,7 +2,7 @@ import express from 'express';
 import { CommodityService } from '../services/commodityService.js';
 import { PriceService } from '../services/priceService.js';
 import { BatchService } from '../services/batchService.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 
 const router = express.Router();
 
@@ -37,7 +37,7 @@ router.get('/:id', async (req, res, next) => {
   }
 });
 
-router.post('/', requireAdmin, async (req, res, next) => {
+router.post('/', requirePermission('commodities.manage'), async (req, res, next) => {
   try {
     const { name, unitPrice } = req.body || {};
     if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
@@ -56,7 +56,7 @@ router.post('/', requireAdmin, async (req, res, next) => {
   }
 });
 
-router.put('/:id', requireAdmin, async (req, res, next) => {
+router.put('/:id', requirePermission('commodities.manage'), async (req, res, next) => {
   try {
     const commodity = await CommodityService.update(Number(req.params.id), req.body || {});
     if (!commodity) return res.status(404).json({ error: 'commodity not found' });
@@ -66,7 +66,7 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
   }
 });
 
-router.put('/:id/stock-levels', requireAdmin, async (req, res, next) => {
+router.put('/:id/stock-levels', requirePermission('commodities.setStockLevels'), async (req, res, next) => {
   try {
     const { reorderLevel, maxLevel } = req.body || {};
     if (reorderLevel != null && maxLevel != null && Number(reorderLevel) > Number(maxLevel)) {
@@ -90,7 +90,7 @@ router.get('/:id/prices', async (req, res, next) => {
 });
 
 // Adjusting a price adds a new current row and retires the old one — see PriceService.
-router.put('/:id/prices', requireAdmin, async (req, res, next) => {
+router.put('/:id/prices', requirePermission('commodities.setPrices'), async (req, res, next) => {
   try {
     const { unitPrice, effectiveDate } = req.body || {};
     if (unitPrice == null || Number.isNaN(Number(unitPrice)) || Number(unitPrice) < 0) {

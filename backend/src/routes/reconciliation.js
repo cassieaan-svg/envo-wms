@@ -1,6 +1,6 @@
 import express from 'express';
 import { ReconciliationService } from '../services/reconciliationService.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 
 const router = express.Router();
 
@@ -9,7 +9,7 @@ const router = express.Router();
 // and never on a schedule this process decides for itself.
 
 /** GET /api/reconciliation — open findings, worst variance first. Cheap; reads recorded rows. */
-router.get('/', requireAdmin, async (req, res, next) => {
+router.get('/', requirePermission('reconciliation.view'), async (req, res, next) => {
   try {
     return res.json(await ReconciliationService.listOpen());
   } catch (err) {
@@ -21,7 +21,7 @@ router.get('/', requireAdmin, async (req, res, next) => {
  * GET /api/reconciliation/check — run the comparison and report, recording nothing.
  * The read-only view, for looking before deciding to record.
  */
-router.get('/check', requireAdmin, async (req, res, next) => {
+router.get('/check', requirePermission('reconciliation.view'), async (req, res, next) => {
   try {
     const commodityId = req.query.commodityId ? Number(req.query.commodityId) : null;
     const discrepancies = await ReconciliationService.check({ commodityId });
@@ -36,7 +36,7 @@ router.get('/check', requireAdmin, async (req, res, next) => {
  * Records only. Nothing here alters stock: a variance is evidence, and correcting it is a
  * physical count raised as a `count_correction` adjustment by someone who has looked.
  */
-router.post('/run', requireAdmin, async (req, res, next) => {
+router.post('/run', requirePermission('reconciliation.run'), async (req, res, next) => {
   try {
     const commodityId = req.body?.commodityId ? Number(req.body.commodityId) : null;
     const result = await ReconciliationService.run({
@@ -54,7 +54,7 @@ router.post('/run', requireAdmin, async (req, res, next) => {
  * Reporting only. Several counts are expected to be non-zero on an existing database
  * (rows that predate Phase 1/2); what matters is that they do not grow.
  */
-router.get('/anomalies', requireAdmin, async (req, res, next) => {
+router.get('/anomalies', requirePermission('reconciliation.view'), async (req, res, next) => {
   try {
     const anomalies = await ReconciliationService.anomalies();
     return res.json({
@@ -75,7 +75,7 @@ router.get('/anomalies', requireAdmin, async (req, res, next) => {
  * and it does so by writing an attributed count_correction movement for the difference —
  * so the ledger, not this endpoint, remains the explanation for the new figure.
  */
-router.post('/:id/resolve-by-count', requireAdmin, async (req, res, next) => {
+router.post('/:id/resolve-by-count', requirePermission('reconciliation.resolve'), async (req, res, next) => {
   try {
     const row = await ReconciliationService.resolveByCount(Number(req.params.id), {
       countedQuantity: req.body?.countedQuantity,
@@ -94,7 +94,7 @@ router.post('/:id/resolve-by-count', requireAdmin, async (req, res, next) => {
  * POST /api/reconciliation/:id/resolve — close a finding that has been investigated.
  * Body: { resolvedBy, note }. Records that a person dealt with it; touches no stock.
  */
-router.post('/:id/resolve', requireAdmin, async (req, res, next) => {
+router.post('/:id/resolve', requirePermission('reconciliation.resolve'), async (req, res, next) => {
   try {
     const row = await ReconciliationService.resolve(Number(req.params.id), {
       resolvedBy: req.body?.resolvedBy || req.user?.username,

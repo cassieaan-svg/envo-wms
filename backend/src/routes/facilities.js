@@ -2,7 +2,7 @@ import express from 'express';
 import { FacilityService } from '../services/facilityService.js';
 import { DispatchService } from '../services/dispatchService.js';
 import { fetchEnvoStock } from '../lib/envoClient.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 import { IdempotencyService } from '../services/idempotencyService.js';
 import { query } from '../db.js';
 
@@ -32,7 +32,7 @@ router.get('/lgas', async (req, res, next) => {
   }
 });
 
-router.post('/', requireAdmin, async (req, res, next) => {
+router.post('/', requirePermission('facilities.manage'), async (req, res, next) => {
   try {
     const { name, state } = req.body || {};
     if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
@@ -44,7 +44,7 @@ router.post('/', requireAdmin, async (req, res, next) => {
   }
 });
 
-router.put('/:id', requireAdmin, async (req, res, next) => {
+router.put('/:id', requirePermission('facilities.manage'), async (req, res, next) => {
   try {
     const facility = await FacilityService.update(Number(req.params.id), req.body || {});
     if (!facility) return res.status(404).json({ error: 'facility not found' });
@@ -62,7 +62,7 @@ router.get('/:id/commodities', async (req, res, next) => {
   }
 });
 
-router.post('/:id/commodities', requireAdmin, async (req, res, next) => {
+router.post('/:id/commodities', requirePermission('facilities.assignCommodities'), async (req, res, next) => {
   try {
     const facilityId = Number(req.params.id);
     const { commodityId, commodityIds, isDefault } = req.body || {};
@@ -90,7 +90,7 @@ router.post('/:id/commodities', requireAdmin, async (req, res, next) => {
   }
 });
 
-router.delete('/:id/commodities/:commodityId', requireAdmin, async (req, res, next) => {
+router.delete('/:id/commodities/:commodityId', requirePermission('facilities.assignCommodities'), async (req, res, next) => {
   try {
     const removed = await FacilityService.removeCommodity(
       Number(req.params.id),
@@ -104,7 +104,7 @@ router.delete('/:id/commodities/:commodityId', requireAdmin, async (req, res, ne
 });
 
 // Multi-line dispatch: several commodities, each with its own quantity and price.
-router.post('/:id/dispatch-orders', requireAdmin, async (req, res, next) => {
+router.post('/:id/dispatch-orders', requirePermission('dispatchOrders.edit'), async (req, res, next) => {
   try {
     const { items, notes } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {

@@ -1,6 +1,6 @@
 import express from 'express';
 import { BatchService } from '../services/batchService.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 import { IdempotencyService } from '../services/idempotencyService.js';
 
 const router = express.Router();
@@ -17,7 +17,7 @@ router.get('/adjustment-reasons', (req, res) => {
   );
 });
 
-router.post('/', requireAdmin, async (req, res, next) => {
+router.post('/', requirePermission('batches.create'), async (req, res, next) => {
   try {
     const { commodityId, expiryDate, quantity } = req.body || {};
     if (!commodityId) return res.status(400).json({ error: 'commodityId is required' });
@@ -54,7 +54,7 @@ router.post('/', requireAdmin, async (req, res, next) => {
 });
 
 // Label a lot after the fact — opening stock from a physical count has no number yet.
-router.put('/:id/number', requireAdmin, async (req, res, next) => {
+router.put('/:id/number', requirePermission('batches.editNumber'), async (req, res, next) => {
   try {
     const batch = await BatchService.setBatchNumber(Number(req.params.id), {
       batchNumber: req.body?.batchNumber,
@@ -77,7 +77,7 @@ router.get('/:id/movements', async (req, res, next) => {
   }
 });
 
-router.post('/:id/adjust', requireAdmin, async (req, res, next) => {
+router.post('/:id/adjust', requirePermission('batches.adjust'), async (req, res, next) => {
   try {
     const { delta, quantity, reason, note, adjustedBy } = req.body || {};
     const amount = quantity ?? delta;

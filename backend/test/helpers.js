@@ -20,14 +20,32 @@ export const uniq = () => `${Date.now()}-${process.pid}-${counter++}`;
 // A ULID-shaped id, the same shape the frontend generates.
 export const txnId = (label = 'T') => `${label}-${uniq()}`.replace(/[^A-Za-z0-9_-]/g, '-');
 
-export async function makeUser({ role = 'admin' } = {}) {
+// `role` is kept for the legacy users.role column (display only, post Phase 1). What
+// actually gates a route now is user_roles/role_permissions, so this also grants the
+// permission-bundle role that matches the legacy meaning of `role`: 'admin' -> the full
+// operational role (warehouse_admin), so existing tests written against "an admin user"
+// keep exercising exactly the same permissions the old requireAdmin gate gave them.
+// Pass `roles: []` for a plain authenticated user with no grants, or `roles: [...]` for
+// anything more specific (e.g. ['picker_dispatcher']).
+export async function makeUser({ role = 'admin', roles } = {}) {
   const username = `test-user-${uniq()}`;
   const { rows } = await query(
     `INSERT INTO users (username, password_hash, full_name, role)
      VALUES ($1, 'x', 'Test User', $2) RETURNING id, username, role`,
     [username, role]
   );
-  return rows[0];
+  const user = rows[0];
+
+  const roleKeys = roles !== undefined ? roles : (role === 'admin' ? ['warehouse_admin'] : []);
+  for (const key of roleKeys) {
+    await query(
+      `INSERT INTO user_roles (user_id, role_id)
+       SELECT $1, id FROM roles WHERE key = $2
+       ON CONFLICT (user_id, role_id) WHERE facility_scope_id IS NULL DO NOTHING`,
+      [user.id, key]
+    );
+  }
+  return user;
 }
 
 export async function makeFacility() {
@@ -121,6 +139,11 @@ export async function cleanup({ batchIds = [], commodityIds = [], facilityIds = 
     ['batches', 'DELETE FROM commodity_batches WHERE id = ANY($1)', [batchIds]],
     ['commodities', 'DELETE FROM commodities WHERE id = ANY($1)', [commodityIds]],
     ['facilities', 'DELETE FROM facilities WHERE id = ANY($1)', [facilityIds]],
+    // authz_audit_log and user_roles.granted_by both reference users with no cascade — a
+    // test user who acted as an admin (granting a role, disabling someone) leaves rows that
+    // block their own deletion otherwise.
+    ['authz audit rows', 'DELETE FROM authz_audit_log WHERE actor_user_id = ANY($1) OR target_user_id = ANY($1)', [userIds]],
+    ['role grants (as grantor)', 'UPDATE user_roles SET granted_by = NULL WHERE granted_by = ANY($1)', [userIds]],
     ['users', 'DELETE FROM users WHERE id = ANY($1)', [userIds]],
   ];
   for (const [label, sql, params] of steps) {
