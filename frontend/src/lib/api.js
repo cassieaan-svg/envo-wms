@@ -236,6 +236,7 @@ export const api = {
     users:       (params)      => getRaw('/admin/users', params),
     user:        (id)          => get(`/admin/users/${id}`),
     createUser:  (body)        => post('/admin/users', body),
+      deleteUser:  (id)          => del(`/admin/users/${id}`),
     setRole:     (id, body)    => put(`/admin/users/${id}/role`, body),
     setOverride: (id, body)    => put(`/admin/users/${id}/permission`, body),
     featureConfig:    ()       => get('/admin/feature-config'),

@@ -645,6 +645,26 @@ export async function setUserOverride(identity, userId, { permission_key, effect
   return getUserConfig(identity, userId)
 }
 
+/** Delete a user account and its ACL rows. System administrators only. */
+export async function deleteUser(identity, userId) {
+  if (!identity.canOverride) {
+    throw new AclAdminError(
+      'Only a system administrator may delete users.', 403, 'FORBIDDEN')
+  }
+  if (userId === identity.actorId) {
+    throw new AclAdminError('You cannot delete your own account.', 403, 'SELF_DELETE')
+  }
+
+  const deleted = await withTransaction(async exec => {
+    const { rows } = await exec('select id from users where id = $1 for update', [userId])
+    if (!rows.length) throw new AclAdminError('User not found', 404, 'NOT_FOUND')
+    const result = await exec('delete from users where id = $1', [userId])
+    return result.rowCount
+  })
+
+  return { deleted: deleted === 1 }
+}
+
 // ── Feature configuration ───────────────────────────────────────────────────
 
 /**

@@ -1,6 +1,6 @@
 import express from 'express'
 import {
-  adminIdentity, listUsers, getUserConfig, createUser, setUserRoleAndScope, setUserOverride,
+  adminIdentity, listUsers, getUserConfig, createUser, deleteUser, setUserRoleAndScope, setUserOverride,
   listFeatureConfig, setFeatureConfig, featureRegistry,
   ASSIGNABLE_ROLES, SECTIONS, AclAdminError,
 } from '../services/aclAdminService.js'
@@ -85,6 +85,14 @@ router.get('/users/:id', async (req, res) => {
   try {
     res.json({ success: true, data: await getUserConfig(identity, req.params.id) })
   } catch (err) { fail(res, err, 'get user') }
+})
+
+/** DELETE /api/admin/users/:id — system administrator only. */
+router.delete('/users/:id', async (req, res) => {
+  const identity = requireAdmin(req, res); if (!identity) return
+  try {
+    res.json({ success: true, data: await deleteUser(identity, req.params.id) })
+  } catch (err) { fail(res, err, 'delete user') }
 })
 
 /**

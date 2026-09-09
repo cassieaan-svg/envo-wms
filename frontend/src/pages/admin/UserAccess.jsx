@@ -69,6 +69,18 @@ export function UserAccess() {
   const scopeLabel = meta.identity.state
     ? `${meta.identity.state} state only`
     : 'All states'
+  const canDelete = meta.identity.kind === 'system_admin'
+
+  async function removeUser(user) {
+    if (!window.confirm(`Delete ${user.email}? This permanently removes the account and its ACL configuration.`)) return
+    try {
+      await api.admin.deleteUser(user.id)
+      setSelected(null)
+      const res = await api.admin.users({ q: q.trim() || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+      setRows(res?.data || []); setTotal(res?.total ?? 0)
+      toast('User deleted', 'green')
+    } catch (err) { toast(err.message || 'Could not delete user.', 'red') }
+  }
 
   return (
     <div className="space-y-5">
@@ -134,7 +146,10 @@ export function UserAccess() {
                         {u.acl_section || <span className="text-gray-600">all sections</span>}
                       </td>
                       <td className="py-2.5 text-right">
-                        <Button size="sm" onClick={() => setSelected(u.id)}>Configure</Button>
+                        <div className="flex justify-end gap-2">
+                          <Button size="sm" onClick={() => setSelected(u.id)}>Configure</Button>
+                          {canDelete && <Button size="sm" variant="danger" onClick={() => removeUser(u)}>Delete</Button>}
+                        </div>
                       </td>
                     </tr>
                   ))}
