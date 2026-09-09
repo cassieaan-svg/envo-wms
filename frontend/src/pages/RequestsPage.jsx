@@ -7,9 +7,9 @@ import { printDrfVoucher } from '../lib/drfVoucher.js';
 import { isValidNgPhone } from '../lib/phone.js';
 import { withTxn } from '../lib/txn';
 
-const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched', rejected: 'Rejected', cancelled: 'Cancelled' };
+const STATUS_LABEL = { pending: 'Pending', picking: 'Picking', dispatched: 'Dispatched', received: 'Received', rejected: 'Rejected', cancelled: 'Cancelled' };
 // Reuses the shared badge palette rather than a private set of chip classes.
-const STATUS_BADGE = { pending: 'soon', picking: 'default', dispatched: 'ok', rejected: 'inactive', cancelled: 'inactive' };
+const STATUS_BADGE = { pending: 'soon', picking: 'default', dispatched: 'ok', received: 'ok', rejected: 'inactive', cancelled: 'inactive' };
 
 // The day's requests — matched on the day they arrived or the day they shipped, since
 // both are that day's work.
@@ -80,10 +80,14 @@ export default function RequestsPage() {
     load();
   }, []);
 
+  // 'received' is a real status now (previously dispatched requests stayed 'dispatched'
+  // forever, with received_by/received_at bolted on as side-facts). Folded into the same
+  // "Dispatched" tab rather than given its own — it's still the "already shipped" bucket,
+  // whether or not the facility has since signed for it.
   const counts = useMemo(
     () => ({
       open: rows.filter((r) => r.status === 'pending' || r.status === 'picking').length,
-      dispatched: rows.filter((r) => r.status === 'dispatched').length,
+      dispatched: rows.filter((r) => r.status === 'dispatched' || r.status === 'received').length,
       all: rows.length,
     }),
     [rows]
@@ -92,6 +96,7 @@ export default function RequestsPage() {
   const shown = useMemo(() => {
     if (filter === 'open') return rows.filter((r) => r.status === 'pending' || r.status === 'picking');
     if (filter === 'all') return rows;
+    if (filter === 'dispatched') return rows.filter((r) => r.status === 'dispatched' || r.status === 'received');
     return rows.filter((r) => r.status === filter);
   }, [rows, filter]);
 
@@ -642,7 +647,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         </form>
       )}
 
-      {request.status === 'dispatched' && !request.received_by && (
+      {request.status === 'dispatched' && (
         <form
           className="card"
           onSubmit={(e) => {
@@ -704,10 +709,16 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         <span className="amount">{money(request.total_amount)}</span>
       </div>
 
-      {request.status === 'dispatched' && (
+      {(request.status === 'dispatched' || request.status === 'received') && (
         <p className="muted" style={{ marginBottom: 0 }}>
           Dispatched {dateTime(request.dispatched_at)}
           {request.dispatched_by ? ` by ${request.dispatched_by}` : ''}.
+          {request.status === 'received' && (
+            <>
+              {' '}Received {dateTime(request.received_at)}
+              {request.received_by ? ` by ${request.received_by}` : ''}.
+            </>
+          )}
         </p>
       )}
     </Modal>

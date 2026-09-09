@@ -224,14 +224,36 @@ export class RequestService {
     return upd[0];
   }
 
-  // Delivery confirmation, pushed back from EnVo once the facility signs for the stock.
+  /**
+   * Delivery confirmation — pushed back from EnVo once the facility signs for the stock
+   * (recordReceiptByEnvoId), or entered directly by warehouse staff who heard it some other
+   * way (the /:id/receipt route).
+   *
+   * 'received' is a real terminal status, not a side-fact bolted onto 'dispatched' — a
+   * request that has been signed for is done, and the queue should say so. Only reachable
+   * from 'dispatched': nothing can be received before it shipped, and a rejected/cancelled
+   * request was never delivered to receive. Row-locked and idempotent — a retried or
+   * re-delivered confirmation (EnVo's callback can arrive twice) finds the request already
+   * 'received' and returns it unchanged rather than erroring or overwriting who/when.
+   */
   static async recordReceipt(id, { receivedBy, receivedAt } = {}) {
-    const { rows } = await query(
-      `UPDATE requests
-          SET received_by = $2, received_at = COALESCE($3::timestamptz, now())
-        WHERE id = $1 RETURNING *`,
-      [id, receivedBy ?? null, receivedAt ?? null]);
-    return rows[0] || null;
+    return withTransaction(async (client) => {
+      const { rows } = await client.query('SELECT * FROM requests WHERE id = $1 FOR UPDATE', [id]);
+      const req = rows[0];
+      if (!req) return null;
+      if (req.status === 'received') return req;
+      if (req.status !== 'dispatched') {
+        const e = new Error(`Cannot record receipt for a ${req.status} request — it has not been dispatched`);
+        e.status = 409; throw e;
+      }
+
+      const { rows: upd } = await client.query(
+        `UPDATE requests
+            SET status = 'received', received_by = $2, received_at = COALESCE($3::timestamptz, now())
+          WHERE id = $1 RETURNING *`,
+        [id, receivedBy ?? null, receivedAt ?? null]);
+      return upd[0];
+    });
   }
 
   // Fulfil: record the dispatched quantities + price the order, mark dispatched, and tell
