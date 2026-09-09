@@ -515,7 +515,9 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
           onSubmit={(e) => {
             e.preventDefault();
             onAct(
-              () => api.requests.markPicking(request.id, { pickedBy: pickedBy.trim() }),
+              () =>
+                withTxn(`picking:${request.id}`, (clientTxnId) =>
+                  api.requests.markPicking(request.id, { pickedBy: pickedBy.trim(), clientTxnId })),
               `Picking started by ${pickedBy.trim()}.`
             );
           }}
@@ -621,7 +623,9 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
           onSubmit={(e) => {
             e.preventDefault();
             onAct(
-              () => api.requests.reject(request.id, { reason: rejectReason.trim() }),
+              () =>
+                withTxn(`reject:${request.id}`, (clientTxnId) =>
+                  api.requests.reject(request.id, { reason: rejectReason.trim(), clientTxnId })),
               'Request rejected — the facility will be notified to re-request.'
             );
           }}

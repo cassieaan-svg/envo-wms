@@ -141,15 +141,32 @@ export class RequestService {
 
   // The store officer who starts picking is named, so the order is never in an
   // unattributed half-picked state.
-  static async markPicking(id, { pickedBy } = {}) {
+  //
+  // `clientTxnId` names this transition — required, like every other write that reaches
+  // EnVo, so a retried "mark picking" (a flaky connection, a double-tap) is answered with
+  // the original result rather than raising a second status_event and a second EnVo
+  // callback. Claimed before the row is even touched, same discipline as fulfil.
+  static async markPicking(id, { pickedBy, clientTxnId = null, actorUserId = null } = {}) {
     if (!pickedBy?.trim()) { const e = new Error('the name of the person picking is required'); e.status = 400; throw e; }
 
     return withTransaction(async (client) => {
+      let txnId = null;
+      if (clientTxnId) {
+        const { txn, replay } = await IdempotencyService.claim(client, {
+          clientTxnId, operation: 'request_mark_picking', actorUserId, actor: pickedBy ?? null,
+        });
+        if (replay) return txn.result;
+        txnId = txn.id;
+      }
+
       const { rows } = await client.query(
         `UPDATE requests SET status = 'picking', picked_by = $2, picked_at = now()
           WHERE id = $1 AND status = 'pending' RETURNING *`, [id, pickedBy.trim()]);
       const req = rows[0];
-      if (!req) return null;
+      if (!req) {
+        if (txnId) await IdempotencyService.complete(client, txnId, null, { requestId: id });
+        return null;
+      }
 
       // Recorded as an event so it can travel. On CMS this queues it for Cloud; on Cloud it
       // is history beside the callback below.
@@ -165,6 +182,8 @@ export class RequestService {
         { envoRequestId: req.envo_request_id, wmsRequestId: req.id, status: 'picking', pickedBy: req.picked_by },
         client
       );
+
+      if (txnId) await IdempotencyService.complete(client, txnId, req, { requestId: id });
       return req;
     });
   }
@@ -172,9 +191,21 @@ export class RequestService {
   // Reject a request the warehouse can't fill (nothing in stock). Marks it 'rejected' and
   // tells EnVo — which cancels it, so the facility simply re-requests once CMS has stock.
   // Only a request still in the queue (pending/picking) can be rejected. No stock has moved.
-  static async reject(id, { rejectedBy, reason } = {}) {
+  //
+  // `clientTxnId` required for the same reason as markPicking: a rejection triggers a real
+  // EnVo cancellation, and a retried reject must not raise it twice.
+  static async reject(id, { rejectedBy, reason, clientTxnId = null, actorUserId = null } = {}) {
     if (!reason?.trim()) { const e = new Error('a reason for rejecting is required'); e.status = 400; throw e; }
     return withTransaction(async (client) => {
+      let txnId = null;
+      if (clientTxnId) {
+        const { txn, replay } = await IdempotencyService.claim(client, {
+          clientTxnId, operation: 'request_reject', actorUserId, actor: rejectedBy ?? null,
+        });
+        if (replay) return txn.result;
+        txnId = txn.id;
+      }
+
       const { rows } = await client.query('SELECT * FROM requests WHERE id = $1 FOR UPDATE', [id]);
       const req = rows[0];
       if (!req) { const e = new Error('request not found'); e.status = 404; throw e; }
@@ -198,6 +229,8 @@ export class RequestService {
         { envoRequestId: request.envo_request_id, wmsRequestId: request.id, status: 'cancelled', reason: reason.trim() },
         client
       );
+
+      if (txnId) await IdempotencyService.complete(client, txnId, request, { requestId: id });
       return request;
     });
   }

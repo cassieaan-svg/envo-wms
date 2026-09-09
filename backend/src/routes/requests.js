@@ -32,12 +32,13 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-/** PATCH /api/requests/:id/picking — mark as being picked. Body: { pickedBy }. */
+/** PATCH /api/requests/:id/picking — mark as being picked. Body: { pickedBy, clientTxnId }. */
 router.patch('/:id/picking', requirePermission('requests.fulfil'), async (req, res) => {
   try {
     const request = await RequestService.markPicking(Number(req.params.id), {
       pickedBy: req.body?.pickedBy,
-
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user?.id ?? null,
     });
     if (!request) return res.status(409).json({ error: 'request is not pending' });
     res.json(request);
@@ -76,9 +77,10 @@ router.post('/:id/fulfil', requirePermission('requests.fulfil'), async (req, res
 });
 
 /**
- * POST /api/requests/:id/reject — reject a request the warehouse can't fill. Body: { reason }.
- * Shares requests.fulfil rather than a separate permission: rejecting is the negative branch
- * of the same fulfilment decision, not a distinct capability — see the Phase 1 design.
+ * POST /api/requests/:id/reject — reject a request the warehouse can't fill.
+ * Body: { reason, clientTxnId }. Shares requests.fulfil rather than a separate permission:
+ * rejecting is the negative branch of the same fulfilment decision, not a distinct
+ * capability — see the Phase 1 design.
  */
 router.post('/:id/reject', requirePermission('requests.fulfil'), async (req, res) => {
   try {
@@ -86,6 +88,8 @@ router.post('/:id/reject', requirePermission('requests.fulfil'), async (req, res
       rejectedBy: (typeof req.body?.rejectedBy === 'string' && req.body.rejectedBy.trim())
         || who(req),
       reason: req.body?.reason,
+      clientTxnId: IdempotencyService.require(req.body?.clientTxnId),
+      actorUserId: req.user?.id ?? null,
     });
     res.json(request);
   } catch (err) {
