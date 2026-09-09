@@ -176,9 +176,10 @@ export function attachScope(req, res, next) {
     adminState: meta.admin_state || null,
     adminLga: meta.admin_lga || null,
     adminCluster: meta.admin_cluster || null,
-    // Facility-level narrowing for an essential_admin split by PHC vs Secondary
-    // (facilities.level). Orthogonal to geography — a state-wide PHC admin has
-    // adminState set and adminLevel='phc', no LGA/cluster narrowing at all.
+    // Facility-level narrowing for an essential_admin split by Primary vs
+    // Secondary (facilities.level). Orthogonal to geography — a state-wide
+    // Primary admin has adminState set and adminLevel='primary', no LGA/cluster
+    // narrowing at all.
     adminLevel: meta.admin_level || null,
     section,
     sectionCategories,
@@ -205,13 +206,19 @@ export function attachScope(req, res, next) {
 async function narrowedAdminFacilityIds(req) {
   if (req._narrowedAdminIds !== undefined) return req._narrowedAdminIds
   const s = req.scope
+  // Every geography branch also confines to facilities enrolled in the caller's
+  // ACTIVE module. Without this, an HIV-module LGA admin saw every Essential-only
+  // facility in their LGA (and vice versa) — different modules have different
+  // facility rosters, and a facility with no row in facility_modules for this
+  // module simply isn't part of it, geography aside.
+  const moduleCond = 'exists (select 1 from facility_modules fm where fm.facility_id = facilities.id and fm.module = $2)'
   let ids = null
   if ((s.accessLevel === 'state_admin' || s.accessLevel === 'state_viewer') && s.adminState) {
-    ids = (await query('select id from facilities where state = $1', [s.adminState])).rows.map(r => r.id)
+    ids = (await query(`select id from facilities where state = $1 and ${moduleCond}`, [s.adminState, s.module])).rows.map(r => r.id)
   } else if (s.accessLevel === 'cluster_admin' && s.adminCluster) {
-    ids = (await query('select id from facilities where cluster = $1', [s.adminCluster])).rows.map(r => r.id)
+    ids = (await query(`select id from facilities where cluster = $1 and ${moduleCond}`, [s.adminCluster, s.module])).rows.map(r => r.id)
   } else if (s.accessLevel === 'lga_admin' && s.adminLga) {
-    ids = (await query('select id from facilities where lga = $1', [s.adminLga])).rows.map(r => r.id)
+    ids = (await query(`select id from facilities where lga = $1 and ${moduleCond}`, [s.adminLga, s.module])).rows.map(r => r.id)
   }
   // overall_admin / is_admin / unscoped tier → null (all)
   req._narrowedAdminIds = ids

@@ -116,7 +116,7 @@ export function adminIdentity(scope, actorId) {
   if (scope.accessLevel === 'essential_admin' && scope.adminState) {
     return { kind: 'essential_admin', actorId, rank: ROLE_RANK.essential_admin,
              state: scope.adminState, module: 'essential',
-             // Optional further narrowing to one facility level (phc | secondary).
+             // Optional further narrowing to one facility level (primary | secondary).
              // null = both levels, matching an unnarrowed essential_admin today.
              level: scope.adminLevel || null,
              grantableModules: ['essential', 'hiv'], canOverride: false }
@@ -437,8 +437,8 @@ async function validateScopes(role, scopes, identity) {
     // second, orthogonal axis alongside its state geography. Only meaningful for
     // essential_admin today; harmless (and unused) on any other role.
     if (s.dimension === 'facility_level' &&
-        (s.scope_type !== 'level' || !['phc', 'secondary'].includes(s.scope_id))) {
-      throw new AclAdminError(`"${s.scope_id}" is not a declared facility level (phc or secondary).`)
+        (s.scope_type !== 'level' || !['primary', 'secondary'].includes(s.scope_id))) {
+      throw new AclAdminError(`"${s.scope_id}" is not a declared facility level (primary or secondary).`)
     }
   }
 }

@@ -166,7 +166,7 @@ async function main() {
   const rows = [['username', 'password', 'facility', 'lga', 'level', 'facility_created', 'email']]
 
   let created = 0, reused = 0
-  for (const [key, level] of [['secondary', 'secondary'], ['phc', 'phc']]) {
+  for (const [key, level] of [['secondary', 'secondary'], ['phc', 'primary']]) {
     for (const item of sheets[key]) {
       const facility = await ensureFacility(item.name, item.lga, level)
       await ensureEssentialModule(facility.id)
