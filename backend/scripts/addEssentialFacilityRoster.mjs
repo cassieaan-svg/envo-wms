@@ -42,6 +42,11 @@ const CANON_LGAS = [
 // "Urue-Offong/Oruko", etc.
 const lettersOnly = s => s.toLowerCase().replace(/[^a-z]/g, '')
 const LGA_BY_LETTERS = new Map(CANON_LGAS.map(l => [lettersOnly(l), l]))
+// Known misspellings in the source sheets that don't reduce to a canonical LGA by
+// letters alone (a wrong first letter, not just missing punctuation). Found via a
+// real duplicate: 11 facilities landed under literal "NDUNG UKO" instead of
+// Udung-Uko, including two exact re-creations of already-existing facilities.
+LGA_BY_LETTERS.set(lettersOnly('Ndung Uko'), 'Udung-Uko')
 function canonLga(raw) {
   const key = lettersOnly(raw || '')
   return LGA_BY_LETTERS.get(key) || raw
