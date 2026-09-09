@@ -82,7 +82,10 @@ export function UserAccess() {
         <Button variant="success" onClick={() => setCreating(true)}>+ Create user</Button>
       </div>
 
-      <ShadowBanner />
+      {/* Hidden per request — the fact it states (role/scope edits here are staged,
+          not yet enforced; live access still runs off legacy sign-in metadata) is
+          still true. Re-enable if that stops being confusing to explain elsewhere. */}
+      {false && <ShadowBanner />}
 
       <Card><CardBody>
         <input

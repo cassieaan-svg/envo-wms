@@ -106,7 +106,8 @@ export function FeatureConfig() {
         </p>
       </div>
 
-      <ShadowBanner />
+      {/* Hidden per request — see the note on this in UserAccess.jsx. */}
+      {false && <ShadowBanner />}
 
       <div className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-gray-400 leading-relaxed">
         <span className="text-gray-300 font-medium">Off suppresses. On does not grant.</span>{' '}
