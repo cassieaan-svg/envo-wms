@@ -6,6 +6,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { toast } from '../../components/ui/Toast'
 import { UserConfigPanel } from '../../components/admin/UserConfigPanel'
 import { CreateUserModal } from '../../components/admin/CreateUserModal'
+import { AddFacilityModal } from '../../components/admin/AddFacilityModal'
 
 const field = 'w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-green-500'
 
@@ -31,6 +32,7 @@ export function UserAccess() {
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [addingFacility, setAddingFacility] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -96,7 +98,10 @@ export function UserAccess() {
             Roles, scope and permissions · {scopeLabel}
           </p>
         </div>
-        <Button variant="success" onClick={() => setCreating(true)}>+ Create user</Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setAddingFacility(true)}>+ Add facility</Button>
+          <Button variant="success" onClick={() => setCreating(true)}>+ Create user</Button>
+        </div>
       </div>
 
       {/* Hidden per request — the fact it states (role/scope edits here are staged,
@@ -187,6 +192,14 @@ export function UserAccess() {
             const res = await api.admin.users({ q: q.trim() || undefined, limit: PAGE_SIZE })
             setRows(res?.data || []); setTotal(res?.total ?? 0); setPage(0)
           }}
+        />
+      )}
+
+      {addingFacility && (
+        <AddFacilityModal
+          meta={meta}
+          onClose={() => setAddingFacility(false)}
+          onCreated={() => setAddingFacility(false)}
         />
       )}
 

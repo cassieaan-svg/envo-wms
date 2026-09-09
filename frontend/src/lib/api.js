@@ -200,7 +200,7 @@ export const api = {
     receive: (id)         => patch(`/warehouse-requests/${id}/receive`),
   },
 
-  facilities:  { list: (params) => get('/facilities', params), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
+  facilities:  { list: (params) => get('/facilities', params), listAll: () => get('/facilities', { all: true }), get: (id) => get(`/facilities/${id}`), dsdSites: (id) => get(`/facilities/${id}/dsd-sites`) },
   commodities: {
     list: (params) => get('/commodities', params),
     modules: () => get('/commodities/modules'),

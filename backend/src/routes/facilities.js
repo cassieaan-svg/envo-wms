@@ -17,9 +17,21 @@ const router = express.Router()
 router.get('/', async (req, res) => {
   try {
     if (!(await enforceModuleAccess(req, res))) return
-    const { state, lga, cluster, name } = req.query
+    const { state, lga, cluster, name, all } = req.query
 
-    const facilities = await FacilityService.getFacilities({ state, lga, cluster, name, module: scopedModule(req) })
+    // `?all=true` — the escape hatch for administration screens (Create User's
+    // facility picker) that need the WHOLE roster to assign a scope, not just
+    // the caller's own ambient active module. Facility metadata (name/state/
+    // lga/level) was already public to any authenticated caller before the
+    // module filter existed — see the file header — so this widens nothing
+    // that wasn't already readable, it just stops silently hiding facilities
+    // from the picker because of an unrelated session's active module (a
+    // system_admin that never picks one, say, defaults to 'hiv' and would
+    // otherwise never see the Essential roster here).
+    const wantsAll = all === 'true' || all === '1'
+    const facilities = await FacilityService.getFacilities({
+      state, lga, cluster, name, module: wantsAll ? undefined : scopedModule(req),
+    })
 
     res.json({
       success: true,

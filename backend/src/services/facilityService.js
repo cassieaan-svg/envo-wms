@@ -22,7 +22,10 @@ export class FacilityService {
                             where fm.facility_id = facilities.id and fm.module = $${params.length})`)
     }
 
-    let sql = `select id, name, code, state, lga, cluster from facilities`
+    // level (primary/secondary — Essential's own facility split) is additive:
+    // every existing caller ignores an unknown column, and CreateUserModal's
+    // facility-level filter needs it to work at all.
+    let sql = `select id, name, code, state, lga, cluster, level from facilities`
     if (conds.length) sql += ` where ${conds.join(' and ')}`
     sql += ` order by state nulls last, lga nulls last, name`
 

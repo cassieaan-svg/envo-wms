@@ -3,7 +3,7 @@ import {
   adminIdentity, listUsers, getUserConfig, createUser, createFacility, deleteUser,
   setUserRoleAndScope, setUserOverride,
   listFeatureConfig, setFeatureConfig, featureRegistry,
-  assignableRolesFor, SECTIONS, AclAdminError,
+  assignableRolesFor, AclAdminError,
 } from '../services/aclAdminService.js'
 import { SECTION_CATEGORIES } from '../constants/sections.js'
 import { query } from '../db.js'
@@ -165,8 +165,14 @@ router.get('/meta', async (req, res) => {
         // this list is deliberately shorter than the module list. essential_admin
         // gets none at all: it cannot grant HIV, so pinning a caller to one of
         // HIV's own pharmacy/lab/general sections is meaningless for it.
-        sections: identity.kind === 'essential_admin'
-          ? [] : SECTIONS.map(key => ({ key, categories: SECTION_CATEGORIES[key] })),
+        //
+        // Everyone else gets 'pharmacy' only, not the full SECTIONS list. This
+        // screen's real-world use is minting the dual-module (essential + hiv)
+        // store-manager accounts documented in scope.js — pharmacy is the only
+        // section that combination has ever meant. 'lab' and 'general' pin an
+        // account OUT of Essential-relevant stock entirely and belong to HIV's
+        // own lab/hub-store provisioning scripts, not this form.
+        sections: identity.kind === 'essential_admin' ? [] : [{ key: 'pharmacy', categories: SECTION_CATEGORIES.pharmacy }],
         features: featureRegistry(),
         permissions,
         // `module` is the caller's own remit — whose accounts it administers —

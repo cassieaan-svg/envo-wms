@@ -54,7 +54,12 @@ export function CreateUserModal({ meta, onClose, onCreated }) {
   const [error, setError] = useState('')
   const [created, setCreated] = useState(null)
 
-  useEffect(() => { api.facilities.list().then(f => setFacilities(f || [])).catch(() => {}) }, [])
+  // The WHOLE roster, not the caller's own ambient active module — an admin
+  // assigning scope needs to see facilities across every module, and a
+  // system_admin in particular never sets a module at all (see App.jsx), which
+  // would otherwise silently default this to HIV-only and hide the Essential
+  // roster entirely.
+  useEffect(() => { api.facilities.listAll().then(f => setFacilities(f || [])).catch(() => {}) }, [])
 
   const geoType = role ? GEOGRAPHY_FOR[role] : undefined
   const states = useMemo(() => [...new Set(facilities.map(f => f.state).filter(Boolean))].sort(), [facilities])
