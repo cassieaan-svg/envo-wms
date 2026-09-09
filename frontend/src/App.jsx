@@ -274,6 +274,13 @@ export default function App() {
   const user             = useAppStore(s => s.user)
   const module           = useAppStore(s => s.module)
   const moduleDataLoaded = useAppStore(s => s.moduleDataLoaded)
+  const accessLevel      = useAppStore(s => s.accessLevel)
+  // system_admin has no module scope at all — see isSystemAdmin's own comment —
+  // and PageRouter already sends it to systemAdminMap regardless of `module`. So
+  // the two-card picker is not just unneeded for it, it actively blocks it: the
+  // Essential card shows disabled (no essential grant on the account), and there
+  // was no way past it. Skip the picker for this tier entirely.
+  const isSystemAdmin    = accessLevel === 'system_admin'
   const [checking, setChecking] = useState(true)
 
   useEffect(() => {
@@ -296,11 +303,15 @@ export default function App() {
 
   // Once a module is chosen (fresh pick or restored from sessionStorage on refresh),
   // load its scoped data. Runs for the pick flow and the refresh flow alike.
+  // system_admin never picks one, so it marks itself loaded directly — its pages
+  // (users, features, catalogue) are all self-contained and read no module data.
   useEffect(() => {
     if (user && module && !moduleDataLoaded) {
       loadModuleData().catch(() => auth.signOut())
+    } else if (user && isSystemAdmin && !moduleDataLoaded) {
+      useAppStore.getState().setModuleDataLoaded(true)
     }
-  }, [user, module, moduleDataLoaded])
+  }, [user, module, moduleDataLoaded, isSystemAdmin])
 
   if (checking) return <Spinner />
 
@@ -314,7 +325,7 @@ export default function App() {
   }
 
   // Signed in but no module chosen yet → the two-card landing picker.
-  if (!module) {
+  if (!module && !isSystemAdmin) {
     return (
       <>
         <ModulePicker />
