@@ -186,22 +186,45 @@ export class BatchService {
         throw err;
       }
 
-      const updated = await client.query(
-        `UPDATE commodity_batches SET quantity_remaining = $2 WHERE id = $1
-         RETURNING id, commodity_id, batch_number, quantity_remaining`,
-        [batchId, next]
-      );
+      const updated = await BatchService.writeAdjustmentMovement(client, batchId, {
+        delta, newQuantityRemaining: next, reason, note, createdBy, txnId,
+      });
 
-      await client.query(
-        `INSERT INTO batch_movements
-           (batch_id, movement_type, quantity, reason, note, created_by, txn_id, origin, source_instance)
-         VALUES ($1, 'adjustment', $2, $3, $4, $5, $6, $7, $8)`,
-        [batchId, delta, reason, note?.trim() || null, createdBy ?? null, txnId, ORIGIN, INSTANCE_ID]
-      );
+      if (txnId) await IdempotencyService.complete(client, txnId, updated, { batchId });
 
-      if (txnId) await IdempotencyService.complete(client, txnId, updated.rows[0], { batchId });
-
-      return updated.rows[0];
+      return updated;
     });
+  }
+
+  /**
+   * The one place an 'adjustment' movement is written and commodity_batches.quantity_remaining
+   * moves in step with it. Shared by applyAdjustment (a relative delta against the current
+   * balance) and ReconciliationService.resolveByCount (an absolute counted figure that may
+   * ALSO be closing pre-existing drift between the balance and its own ledger — the two are
+   * not interchangeable operations, see resolveByCount's own comment, but they were writing
+   * this exact pair of statements independently, which is exactly how they'd have drifted
+   * apart the day one of them changed and the other didn't).
+   *
+   * The caller has already locked the batch row and decided what the new balance should be
+   * — this only writes it consistently. `delta` is the size and direction of the movement
+   * row (not necessarily `newQuantityRemaining` minus the batch's balance before this call —
+   * resolveByCount's delta is against the LEDGER, not the balance, which is the whole point
+   * of what it's correcting).
+   */
+  static async writeAdjustmentMovement(client, batchId, { delta, newQuantityRemaining, reason, note, createdBy, txnId = null }) {
+    const updated = await client.query(
+      `UPDATE commodity_batches SET quantity_remaining = $2 WHERE id = $1
+       RETURNING id, commodity_id, batch_number, quantity_remaining`,
+      [batchId, newQuantityRemaining]
+    );
+
+    await client.query(
+      `INSERT INTO batch_movements
+         (batch_id, movement_type, quantity, reason, note, created_by, txn_id, origin, source_instance)
+       VALUES ($1, 'adjustment', $2, $3, $4, $5, $6, $7, $8)`,
+      [batchId, delta, reason, note?.trim() || null, createdBy ?? null, txnId, ORIGIN, INSTANCE_ID]
+    );
+
+    return updated.rows[0];
   }
 }

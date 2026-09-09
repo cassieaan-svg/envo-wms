@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db.js';
-import { ORIGIN, INSTANCE_ID } from '../lib/instance.js';
+import { BatchService } from './batchService.js';
 
 // Does the shelf figure still agree with the ledger?
 //
@@ -212,18 +212,24 @@ export class ReconciliationService {
       // The correction is the gap between what the ledger believed and what was counted. A
       // count that agrees with the ledger writes no movement — there is nothing to correct —
       // but still closes the finding and retires the allowance.
+      //
+      // Routed through BatchService.writeAdjustmentMovement — the same primitive
+      // BatchService.applyAdjustment uses — so the shape of an 'adjustment' movement row is
+      // written in exactly one place, not two independent copies of the same INSERT/UPDATE
+      // pair. This call sets the balance to the COUNTED figure, not `ledger + delta` against
+      // the batch's own current balance (applyAdjustment's usual arithmetic) — deliberately,
+      // because closing pre-existing drift between the balance and its own ledger is the
+      // entire point of a reconciliation resolution.
       if (delta !== 0) {
+        await BatchService.writeAdjustmentMovement(client, finding.batch_id, {
+          delta, newQuantityRemaining: counted, reason: 'count_correction',
+          note: `Physical count: ${counted}. ${note.trim()}`, createdBy: resolvedBy.trim(),
+        });
+      } else {
         await client.query(
-          `INSERT INTO batch_movements
-             (batch_id, movement_type, quantity, reason, note, created_by, origin, source_instance)
-           VALUES ($1, 'adjustment', $2, 'count_correction', $3, $4, $5, $6)`,
-          [finding.batch_id, delta,
-           `Physical count: ${counted}. ${note.trim()}`, resolvedBy.trim(), ORIGIN, INSTANCE_ID]);
+          'UPDATE commodity_batches SET quantity_remaining = $2 WHERE id = $1',
+          [finding.batch_id, counted]);
       }
-
-      await client.query(
-        'UPDATE commodity_batches SET quantity_remaining = $2 WHERE id = $1',
-        [finding.batch_id, counted]);
 
       // The allowance existed only because nobody had counted. Somebody has now.
       await client.query('DELETE FROM batch_balance_variance WHERE batch_id = $1', [finding.batch_id]);
