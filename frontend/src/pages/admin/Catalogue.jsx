@@ -15,7 +15,13 @@ export function Catalogue() {
   // Mirrors isCatalogueManager in routes/commodities.js. The button is a
   // convenience — the endpoint enforces the same rule, and hiding it protects
   // nobody.
-  const canManage = useAppStore(s => s.isOverallAdmin() || s.isSystemAdmin())
+  const canManage = useAppStore(s => s.isOverallAdmin() || s.isSystemAdmin() || s.isEssentialAdmin())
+  // Mirrors mayViewUnscopedCatalogue in routes/commodities.js — NOT the same set
+  // as canManage. essential_admin may manage its own module's items but its view
+  // stays scoped to its remit (essential + HIV pharmacy-drugs); only the two
+  // true catalogue owners get the cross-module ?all=true escape hatch.
+  const canViewAll = useAppStore(s => s.isOverallAdmin() || s.isSystemAdmin())
+  const isEssentialAdmin = useAppStore(s => s.isEssentialAdmin())
   const [items, setItems] = useState([])
   const [modules, setModules] = useState([])
   const [categories, setCategories] = useState([])
@@ -29,11 +35,12 @@ export function Catalogue() {
   async function load() {
     const [list, mods, cats] = await Promise.all([
       api.commodities.list({
-        // The one caller that asks for the UNSCOPED catalogue. Everywhere else
-        // the endpoint now narrows to the caller's own sections, but this page
-        // administers the item list itself, so it must show modules the manager
-        // does not operate in. The server permission-checks the flag.
-        all: true,
+        // The UNSCOPED catalogue — only for the two true catalogue owners (see
+        // canViewAll). essential_admin also administers the item list, but its
+        // remit itself IS a scope (essential + HIV pharmacy-drugs), so it gets
+        // the normal server-scoped view like any other read. The server
+        // permission-checks the flag either way.
+        all: canViewAll || undefined,
         module: moduleFilter || undefined,
         section: sectionFilter || undefined,
         category: categoryFilter || undefined,
@@ -71,20 +78,23 @@ export function Catalogue() {
     <Card><CardBody>
       <div className="space-y-3">
         <input className={field} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search item name or code…" />
-        <div className="grid gap-3 sm:grid-cols-3">
-          <select className={field} value={moduleFilter}
+        {/* essential_admin's whole remit is one module plus one borrowed HIV
+            section (pharmacy-drugs) — module and section filters are an HIV-era
+            concept it has no use for; category alone covers its catalogue. */}
+        <div className={`grid gap-3 ${isEssentialAdmin ? '' : 'sm:grid-cols-3'}`}>
+          {!isEssentialAdmin && <select className={field} value={moduleFilter}
                   onChange={e => { setModuleFilter(e.target.value); setSectionFilter(''); setCategoryFilter('') }}>
             <option value="">All modules</option>{modules.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-          </select>
+          </select>}
           {/* Driven by SECTION_CATEGORIES rather than hardcoded, so a section
               added there (essential, general) appears here automatically. */}
-          <select className={field} value={sectionFilter}
+          {!isEssentialAdmin && <select className={field} value={sectionFilter}
                   onChange={e => { setSectionFilter(e.target.value); setCategoryFilter('') }}>
             <option value="">All sections</option>
             {Object.keys(SECTION_CATEGORIES).map(k => (
               <option key={k} value={k}>{k}</option>
             ))}
-          </select>
+          </select>}
           <select className={field} value={categoryFilter}
                   onChange={e => setCategoryFilter(e.target.value)}>
             <option value="">All categories</option>
@@ -99,7 +109,14 @@ export function Catalogue() {
         <tbody>{shown.map(i => <tr key={i.id} className="border-t border-white/5"><td className="py-2.5 text-gray-100">{i.name}</td><td className="py-2.5 text-gray-400">{i.category || '—'}</td><td className="py-2.5 text-gray-400">{i.item_type}</td><td className="py-2.5">{i.is_active ? <span className="text-green-400">Active</span> : <span className="text-gray-500">Inactive</span>}</td></tr>)}</tbody>
       </table></div>
     </CardBody></Card>
-    {showAdd && <AddItemModal modules={modules} categories={categories} onClose={() => setShowAdd(false)} onSaved={async () => { setShowAdd(false); await load() }} />}
+    {showAdd && <AddItemModal
+      // essential_admin may only WRITE to its own module (catalogueModulesFor
+      // in routes/commodities.js rejects anything else server-side) — even
+      // though it can now VIEW HIV's pharmacy-drugs section, adding an item
+      // there would be writing another programme's master data. So the "Add
+      // item" form only ever offers Essential Commodities to it.
+      modules={isEssentialAdmin ? modules.filter(m => m.key === 'essential') : modules}
+      categories={categories} onClose={() => setShowAdd(false)} onSaved={async () => { setShowAdd(false); await load() }} />}
   </div>
 }
 

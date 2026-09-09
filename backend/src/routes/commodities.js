@@ -25,6 +25,16 @@ const isCatalogueManager = req =>
   req.scope?.accessLevel === 'essential_admin' ||
   req.scope?.accessLevel === 'system_admin'
 
+// Catalogue managers who may request the UNSCOPED (?all=true) view — every module,
+// not just their own remit. Deliberately excludes essential_admin: its remit is
+// Essential + HIV's pharmacy-drugs section (see scope.js), and that IS its scoped
+// view, not something narrower than what "all" would give it. Handing it "all"
+// would show HIV lab/general/M&E categories it has no programme reason to see —
+// exactly the leak this restriction closes.
+const mayViewUnscopedCatalogue = req =>
+  req.scope?.accessLevel === 'overall_admin' || req.scope?.isAdmin === true ||
+  req.scope?.accessLevel === 'system_admin'
+
 // The modules a catalogue manager may create items in. The catalogue is ONE
 // shared table across modules, so "may add items" is not the whole question —
 // an essential_admin adding an item to the `hiv` module would be writing another
@@ -72,7 +82,7 @@ router.get('/', async (req, res) => {
     // Catalogue page, which is the distinction between overseeing a programme and
     // administering the item list.
     const wantsAll = all === 'true' || all === '1'
-    if (wantsAll && !isCatalogueManager(req)) {
+    if (wantsAll && !mayViewUnscopedCatalogue(req)) {
       return res.status(403).json({
         success: false, code: 'FORBIDDEN',
         error: 'Only a catalogue manager may request the unscoped catalogue.',

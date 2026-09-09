@@ -1,8 +1,9 @@
 import express from 'express'
 import {
-  adminIdentity, listUsers, getUserConfig, createUser, deleteUser, setUserRoleAndScope, setUserOverride,
+  adminIdentity, listUsers, getUserConfig, createUser, createFacility, deleteUser,
+  setUserRoleAndScope, setUserOverride,
   listFeatureConfig, setFeatureConfig, featureRegistry,
-  ASSIGNABLE_ROLES, SECTIONS, AclAdminError,
+  assignableRolesFor, SECTIONS, AclAdminError,
 } from '../services/aclAdminService.js'
 import { SECTION_CATEGORIES } from '../constants/sections.js'
 import { query } from '../db.js'
@@ -96,6 +97,20 @@ router.delete('/users/:id', async (req, res) => {
 })
 
 /**
+ * POST /api/admin/facilities  { name, lga, state?, level?, module? }
+ * Adds a facility the master roster left out. state/level/module are filled in
+ * from the caller's own remit where it has one (essential_admin) and required
+ * only from an unconfined caller (system_admin) — see createFacility.
+ */
+router.post('/facilities', async (req, res) => {
+  const identity = requireAdmin(req, res); if (!identity) return
+  try {
+    const { name, lga, state, level, module } = req.body || {}
+    res.status(201).json({ success: true, data: await createFacility(identity, { name, lga, state, level, module }) })
+  } catch (err) { fail(res, err, 'create facility') }
+})
+
+/**
  * PUT /api/admin/users/:id/role  { role, scopes: [{dimension, scope_type, scope_id}] }
  * Role and scope are written together, in one transaction.
  */
@@ -141,12 +156,17 @@ router.get('/meta', async (req, res) => {
     res.json({
       success: true,
       data: {
-        roles: ASSIGNABLE_ROLES,
+        // Narrowed per caller — see assignableRolesFor. A UI convenience only;
+        // assertMayWrite enforces the real ceiling on every write regardless.
+        roles: assignableRolesFor(identity),
         modules,
         // Sections partition the HIV module only. Essential has categories, not
         // sections, and M&E's section arrives with the envo-tools branch — so
-        // this list is deliberately shorter than the module list.
-        sections: SECTIONS.map(key => ({ key, categories: SECTION_CATEGORIES[key] })),
+        // this list is deliberately shorter than the module list. essential_admin
+        // gets none at all: it cannot grant HIV, so pinning a caller to one of
+        // HIV's own pharmacy/lab/general sections is meaningless for it.
+        sections: identity.kind === 'essential_admin'
+          ? [] : SECTIONS.map(key => ({ key, categories: SECTION_CATEGORIES[key] })),
         features: featureRegistry(),
         permissions,
         // `module` is the caller's own remit — whose accounts it administers —
@@ -157,6 +177,10 @@ router.get('/meta', async (req, res) => {
         // enforces. Sent so the UI cannot offer a choice the server will refuse.
         identity: {
           kind: identity.kind, state: identity.state, canOverride: identity.canOverride,
+          // A Primary-only or Secondary-only essential_admin (see createUser's
+          // level ceiling) — sent so the form can confine itself to that level
+          // rather than let the caller pick a facility the server will reject.
+          level: identity.level || null,
           module: identity.module, grantableModules: identity.grantableModules,
         },
       },

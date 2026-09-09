@@ -66,6 +66,18 @@ const REQUIRED_GEOGRAPHY = {
 export const ASSIGNABLE_ROLES = Object.keys(ROLE_RANK)
 export const SECTIONS = Object.keys(SECTION_CATEGORIES)
 
+// The roles a create-user FORM should offer, narrowed per identity. This is a UI
+// convenience only — assertMayWrite/ROLE_RANK still enforce the real ceiling on
+// every write — but essential_admin's remit is one programme, and state_viewer /
+// cluster_admin / lga_admin / state_admin describe the HIV geography model
+// (region-tiered oversight roles that Essential's own facility roster and
+// primary/secondary split have no use for). Offering them would invite an
+// essential_admin to mint an HIV-shaped account it cannot actually operate.
+export function assignableRolesFor(identity) {
+  if (identity?.kind === 'essential_admin') return ['facility', 'essential_admin']
+  return ASSIGNABLE_ROLES
+}
+
 export class AclAdminError extends Error {
   constructor(message, status = 400, code = 'VALIDATION') {
     super(message)
@@ -103,11 +115,9 @@ export function adminIdentity(scope, actorId) {
   //   module            'essential' — WHOSE accounts it administers. Every read
   //                     and write below intersects it, so an account without the
   //                     Essential module is invisible to it.
-  //   grantableModules  ['essential','hiv'] — which modules it may PUT ON an
-  //                     account. The Essential programme's store managers are
-  //                     dual-module logins by design (the 194 on the
-  //                     essential-commodities branch), so minting one is part of
-  //                     the job.
+  //   grantableModules  ['essential'] — which modules it may PUT ON an account.
+  //                     Essential Commodities does not hand out HIV access — its
+  //                     administrators create Essential-only accounts, full stop.
   //
   // What this does NOT touch is the actor's own operational reach, which lives in
   // user_role_scopes and stays {essential} — see audit finding B-2 and
@@ -119,7 +129,7 @@ export function adminIdentity(scope, actorId) {
              // Optional further narrowing to one facility level (primary | secondary).
              // null = both levels, matching an unnarrowed essential_admin today.
              level: scope.adminLevel || null,
-             grantableModules: ['essential', 'hiv'], canOverride: false }
+             grantableModules: ['essential'], canOverride: false }
   }
   return null
 }
@@ -454,6 +464,14 @@ async function validateScopes(role, scopes, identity) {
  * applied and the other is not.
  */
 export async function setUserRoleAndScope(identity, userId, { role, scopes = [] }) {
+  // Editing an EXISTING account's role/scope is a system_admin job — the one
+  // administrator who owns the whole ACL model, not one confined to a single
+  // programme. essential_admin still creates its own accounts (createUser
+  // below); it just does not reach back in and reconfigure one afterward.
+  if (identity.kind === 'essential_admin') {
+    throw new AclAdminError(
+      'Only a system administrator may edit an existing account’s role or scope.', 403, 'FORBIDDEN')
+  }
   if (!ASSIGNABLE_ROLES.includes(role)) {
     throw new AclAdminError(`Unknown role "${role}".`)
   }
@@ -612,6 +630,65 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
   // Returned ONCE. The caller shows it to the administrator and it is never
   // retrievable again — only a bcrypt hash is stored.
   return { user: await getUserConfig(identity, id), username: name, password }
+}
+
+/**
+ * Add a facility that the master roster left out. Same administration surface
+ * and the same ceilings as createUser — a state/level-confined essential_admin
+ * gets its own state and level stamped on regardless of what it asks for, so
+ * this can never become a side door around those ceilings. The new facility is
+ * enrolled in the caller's own module (essential_admin: 'essential' only,
+ * matching its grantableModules) — a system_admin, having none, must say which.
+ */
+export async function createFacility(identity, { name, lga, state, level, module: moduleParam } = {}) {
+  // Same tier as user administration — an unconfined viewer has no business
+  // minting master data, and this is real operational data, not ACL config.
+  if (!['system_admin', 'state_admin', 'essential_admin'].includes(identity.kind)) {
+    throw new AclAdminError('Only an administrator may add a facility.', 403, 'FORBIDDEN')
+  }
+  name = String(name || '').trim()
+  if (!name) throw new AclAdminError('A facility name is required.')
+  lga = String(lga || '').trim()
+  if (!lga) throw new AclAdminError('An LGA is required.')
+
+  // State: a state/level-confined administrator can only ever add inside its
+  // own state — the same ceiling createUser applies to a geography scope.
+  const facilityState = identity.state || String(state || '').trim()
+  if (!facilityState) throw new AclAdminError('A state is required.')
+  if (identity.state && facilityState !== identity.state) {
+    throw new AclAdminError(`You may only add facilities in ${identity.state}.`, 403, 'OUT_OF_SCOPE')
+  }
+
+  // Level: a Primary-only or Secondary-only essential_admin is stamped to its
+  // own level regardless of what was asked for — mirrors the level ceiling in
+  // createUser, so this cannot become a way to plant a facility at the level
+  // an admin is otherwise blocked from touching.
+  let facilityLevel = identity.level || (level ? String(level).trim() : null)
+  if (facilityLevel && !['primary', 'secondary'].includes(facilityLevel)) {
+    throw new AclAdminError(`"${facilityLevel}" is not a declared facility level (primary or secondary).`)
+  }
+  if (identity.level) facilityLevel = identity.level
+
+  // Module: the caller's own remit if it has one (essential_admin: always
+  // 'essential' — it cannot enroll a facility in a module it cannot itself
+  // administer); a national caller must say which.
+  const enrollModule = identity.module || String(moduleParam || '').trim()
+  if (!enrollModule) throw new AclAdminError('A module is required.')
+  if (identity.grantableModules && !identity.grantableModules.includes(enrollModule)) {
+    throw new AclAdminError(`You may only add facilities to: ${identity.grantableModules.join(', ')}.`, 403, 'OUT_OF_MODULE')
+  }
+  const { rows: mod } = await query(`select 1 from modules where key = $1`, [enrollModule])
+  if (!mod.length) throw new AclAdminError(`Unknown module "${enrollModule}".`)
+
+  const facility = await withTransaction(async exec => {
+    const { rows } = await exec(
+      `insert into facilities (id, name, state, lga, level)
+       values (gen_random_uuid(), $1, $2, $3, $4) returning id, name, state, lga, level`,
+      [name, facilityState, lga, facilityLevel])
+    await exec(`insert into facility_modules (facility_id, module) values ($1, $2)`, [rows[0].id, enrollModule])
+    return rows[0]
+  })
+  return { ...facility, module: enrollModule }
 }
 
 /**

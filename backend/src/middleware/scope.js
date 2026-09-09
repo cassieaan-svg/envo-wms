@@ -164,7 +164,10 @@ export function attachScope(req, res, next) {
   // section. Some Essential-roster facilities were already HIV facilities with
   // real HIV stock history; without this, that history would leak through here,
   // because stock/dispense/intake read sectionCategories directly and have no
-  // module check of their own — the module gate alone would not stop it.
+  // module check of their own — the module gate alone would not stop it. This
+  // applies to essential_admin too: its catalogue and oversight stay Essential-
+  // only, full stop — it does not borrow into any HIV category, pharmacy-drugs
+  // included.
   if (meta.essential_only === true) {
     sectionCategories = [...ESSENTIAL_CATEGORIES]
   }

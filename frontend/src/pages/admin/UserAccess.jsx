@@ -70,6 +70,11 @@ export function UserAccess() {
     ? `${meta.identity.state} state only`
     : 'All states'
   const canDelete = meta.identity.kind === 'system_admin'
+  // Role/scope/permission configuration is a system_admin job now — essential_admin
+  // creates its own programme's accounts (the button above) but does not edit an
+  // existing one's role or scope; that stays with the administrator who owns the
+  // whole ACL model, not one confined to a single module.
+  const canConfigure = meta.identity.kind !== 'essential_admin'
 
   async function removeUser(user) {
     if (!window.confirm(`Delete ${user.email}? This permanently removes the account and its ACL configuration.`)) return
@@ -147,8 +152,9 @@ export function UserAccess() {
                       </td>
                       <td className="py-2.5 text-right">
                         <div className="flex justify-end gap-2">
-                          <Button size="sm" onClick={() => setSelected(u.id)}>Configure</Button>
+                          {canConfigure && <Button size="sm" onClick={() => setSelected(u.id)}>Configure</Button>}
                           {canDelete && <Button size="sm" variant="danger" onClick={() => removeUser(u)}>Delete</Button>}
+                          {!canConfigure && !canDelete && <span className="text-xs text-gray-600">—</span>}
                         </div>
                       </td>
                     </tr>
