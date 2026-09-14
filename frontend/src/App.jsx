@@ -139,9 +139,33 @@ const NAV = [
 
 const PAGES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([n, p]) => [n, p])));
 
+// Permission-key prefixes that mark a permission as warehouse OPERATIONAL work, as opposed
+// to system/security administration (users.*, roles.*, permissions.*, rolePermissions.*,
+// instance.*) or the cross-cutting monitoring/sync permissions every admin-ish role happens
+// to hold one of. Deliberately its own list rather than "everything not in Administration":
+// System Administrator holds monitoring.view, and one shared oversight permission should not
+// by itself make the whole operational nav reappear for a role the design calls "NOT an
+// unrestricted warehouse operator".
+const OPERATIONAL_PREFIXES = [
+  'requests', 'dispatchOrders', 'batches', 'commodities', 'facilities', 'vendors', 'accounts',
+];
+
+// The tab a session lands on. 'Dispatch' for anyone with operational access (the normal
+// case); 'Users' for a non-operational account (System Administrator today) — landing them
+// on a page they have no permission-relevant reason to see would be a strange first screen,
+// and a wrong nav highlight besides.
+function defaultTabFor(user) {
+  if (!user) return 'Dispatch';
+  const permissions = user.permissions || [];
+  const hasOperationalAccess = permissions.some(
+    (p) => OPERATIONAL_PREFIXES.some((prefix) => p.startsWith(`${prefix}.`))
+  );
+  return hasOperationalAccess ? 'Dispatch' : 'Users';
+}
+
 export default function App() {
   const [user, setUser] = useState(() => (getToken() ? getStoredUser() : null));
-  const [tab, setTab] = useState('Dispatch');
+  const [tab, setTab] = useState(() => defaultTabFor(getToken() ? getStoredUser() : null));
   const [navOpen, setNavOpen] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
   const [theme, setTheme] = useState(getStoredTheme);
@@ -185,12 +209,28 @@ export default function App() {
     storeTheme(next);
   }
 
-  if (!user) return <LoginPage onSignedIn={setUser} />;
+  if (!user) {
+    return (
+      <LoginPage
+        onSignedIn={(signedInUser) => {
+          setTab(defaultTabFor(signedInUser));
+          setUser(signedInUser);
+        }}
+      />
+    );
+  }
 
   const Page = PAGES[tab];
   const isAdmin = user.role === 'admin';
   const permissions = user.permissions || [];
   const can = (perm) => permissions.includes(perm);
+  // System Administrator holds none of these — its nav collapses to Administration only,
+  // matching "system/security administration only, NOT an unrestricted warehouse operator".
+  // Every operational role (Warehouse Admin, Picker/Dispatcher, Receiving Clerk) holds at
+  // least one, so this changes nothing for them.
+  const hasOperationalAccess = permissions.some(
+    (p) => OPERATIONAL_PREFIXES.some((prefix) => p.startsWith(`${prefix}.`))
+  );
 
   function pick(name) {
     setTab(name);
@@ -227,6 +267,11 @@ export default function App() {
 
         <nav>
           {NAV.map(([group, items]) => {
+            // Operations/Catalogue/Reports are warehouse work — hidden altogether from a
+            // role with no operational permission at all (System Administrator today).
+            // Administration is exempt: it's gated per-item instead (Users needs
+            // users.create specifically, not any operational permission).
+            if (group !== 'Administration' && !hasOperationalAccess) return null;
             const visible = items.filter(([, , , perm]) => !perm || can(perm));
             if (!visible.length) return null;
             return (
