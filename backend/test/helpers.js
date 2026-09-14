@@ -145,6 +145,7 @@ export async function cleanup({ batchIds = [], commodityIds = [], facilityIds = 
     // block their own deletion otherwise.
     ['authz audit rows', 'DELETE FROM authz_audit_log WHERE actor_user_id = ANY($1) OR target_user_id = ANY($1)', [userIds]],
     ['role grants (as grantor)', 'UPDATE user_roles SET granted_by = NULL WHERE granted_by = ANY($1)', [userIds]],
+    ['permission overrides', 'DELETE FROM user_permission_overrides WHERE user_id = ANY($1) OR granted_by = ANY($1)', [userIds]],
     ['users', 'DELETE FROM users WHERE id = ANY($1)', [userIds]],
   ];
   for (const [label, sql, params] of steps) {

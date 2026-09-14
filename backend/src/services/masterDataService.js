@@ -31,13 +31,15 @@ export const MASTER_DATA_WARN_HOURS = Number(process.env.MASTER_DATA_WARN_HOURS 
 // the operator is TOLD about and can judge, not something that takes decisions away.
 
 const TABLES = ['commodities', 'facilities', 'facility_commodities',
-                'schemes', 'vendors', 'users', 'user_roles'];
+                'schemes', 'vendors', 'users', 'user_roles', 'user_permission_overrides'];
 
-// user_roles is Cloud-authoritative — see the Phase 1 authorization design and migration
-// 040. roles/permissions/role_permissions are NOT synced: they are static catalogue data,
-// seeded identically by migration 040 on both instances, so there is nothing to replicate.
-// users.is_locally_disabled is likewise never part of this payload in either direction —
-// it is this instance's own emergency-lockout state, and must survive a sync untouched.
+// user_roles and user_permission_overrides are both Cloud-authoritative — see the Phase 1
+// authorization design, migration 040, and the individual-permission-overrides design
+// report. roles/permissions/role_permissions are NOT synced: they are static catalogue
+// data, seeded identically by migration on both instances, so there is nothing to
+// replicate. users.is_locally_disabled is likewise never part of this payload in either
+// direction — it is this instance's own emergency-lockout state, and must survive a sync
+// untouched.
 //
 // commodity_prices is deliberately ABSENT, as of migration 042. It used to be pulled down
 // here like any other master-data table, but CMS is the price authority (see
@@ -84,7 +86,7 @@ export class MasterDataService {
       const e = new Error('only the Cloud instance serves master data'); e.status = 403; throw e;
     }
 
-    const [commodities, facilities, facilityCommodities, schemes, vendors, users, userRoles] =
+    const [commodities, facilities, facilityCommodities, schemes, vendors, users, userRoles, permissionOverrides] =
       await Promise.all([
         query(`SELECT id, envo_commodity_id, name, category, unit, is_active,
                       reorder_level, max_level
@@ -102,6 +104,11 @@ export class MasterDataService {
         // never authors this table, only mirrors it, exactly like every other master-data row.
         query(`SELECT id, user_id, role_id, facility_scope_id, granted_by, granted_at
                  FROM user_roles ORDER BY id`),
+        // Same reasoning as user_roles just above: Cloud is the sole writer (permissions.manage
+        // is exclusive to System Administrator, and this design deliberately did not give
+        // Warehouse Admin a path into it — see routes/adminUsers.js), so CMS only ever mirrors.
+        query(`SELECT id, user_id, permission_key, effect, granted_by, granted_at
+                 FROM user_permission_overrides ORDER BY id`),
       ]);
 
     const payload = {
@@ -112,6 +119,7 @@ export class MasterDataService {
       vendors: vendors.rows,
       users: users.rows,
       user_roles: userRoles.rows,
+      user_permission_overrides: permissionOverrides.rows,
     };
 
     return {
@@ -209,6 +217,21 @@ export class MasterDataService {
            facility_scope_id=EXCLUDED.facility_scope_id, granted_by=EXCLUDED.granted_by,
            granted_at=EXCLUDED.granted_at`,
         d.user_roles, (r) => [r.id, r.user_id, r.role_id, r.facility_scope_id, r.granted_by, r.granted_at]);
+
+      // Same wholesale-replace treatment as user_roles, and for the identical reason: a
+      // revoked override is a live access-control fact, not a piece of master data that's
+      // merely stale until the next pull — it must actually disappear locally, not linger.
+      const incomingOverrideIds = (d.user_permission_overrides || []).map((r) => r.id);
+      await client.query(
+        'DELETE FROM user_permission_overrides WHERE id != ALL($1::int[])',
+        [incomingOverrideIds.length ? incomingOverrideIds : [0]]
+      );
+      await upsert(
+        `INSERT INTO user_permission_overrides (id, user_id, permission_key, effect, granted_by, granted_at)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (id) DO UPDATE SET user_id=EXCLUDED.user_id, permission_key=EXCLUDED.permission_key,
+           effect=EXCLUDED.effect, granted_by=EXCLUDED.granted_by, granted_at=EXCLUDED.granted_at`,
+        d.user_permission_overrides, (r) => [r.id, r.user_id, r.permission_key, r.effect, r.granted_by, r.granted_at]);
 
       await client.query(
         `INSERT INTO sync_state (stream, cursor, last_success_at, last_attempt_at, last_error, detail, updated_at)

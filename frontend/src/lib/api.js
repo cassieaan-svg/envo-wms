@@ -196,5 +196,12 @@ export const api = {
     enableUser: (id) => request(`/api/admin/users/${id}/enable`, { method: 'PUT' }),
     assignRole: (id, role) => request(`/api/admin/users/${id}/roles`, { method: 'POST', body: { role } }),
     removeRole: (id, role) => request(`/api/admin/users/${id}/roles/${role}`, { method: 'DELETE' }),
+
+    // Individual permission overrides — permissions.manage only (System Administrator).
+    userPermissions: (id) => request(`/api/admin/users/${id}/permissions`),
+    setPermissionOverride: (id, key, effect) =>
+      request(`/api/admin/users/${id}/permissions/${encodeURIComponent(key)}`, { method: 'PUT', body: { effect } }),
+    removePermissionOverride: (id, key) =>
+      request(`/api/admin/users/${id}/permissions/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   },
 };

@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { query } from '../db.js';
+import { query, withTransaction } from '../db.js';
 import { AuthzService } from './authzService.js';
 
 // User/role administration — the piece the Phase 1 audit found entirely missing (accounts
@@ -149,5 +149,118 @@ export class AdminUsersService {
       actorUserId, action: 'role.revoke', targetUserId: userId, detail: { role: roleKey },
     });
     return rows[0] || null;
+  }
+
+  // Permissions that are otherwise exclusive to a privileged role (system_administrator) in
+  // the seeded matrix, plus two with real financial/stock blast radius — granting any of
+  // these to someone individually is functionally close to a promotion, or moves money/stock
+  // outside the usual flow. Used only to flag `detail.sensitive` on the audit row; the UI
+  // uses the same list to show its confirmation warning. Not an access control — access is
+  // already fully decided by requiring permissions.manage in the first place (see
+  // routes/adminUsers.js); this is a "make it hard to miss," not a "make it impossible".
+  static SENSITIVE_PERMISSIONS = new Set([
+    'permissions.manage',
+    'roles.manage',
+    'rolePermissions.manage',
+    'roles.assignAny',
+    'instance.configure',
+    'batches.adjust',
+    'accounts.recordPayment',
+  ]);
+
+  /** The full per-permission breakdown for the "Manage permissions" screen. */
+  static async getUserPermissions(userId) {
+    return AuthzService.effectivePermissionDetails(userId);
+  }
+
+  /**
+   * Grant or deny a permission directly to a user, independent of their roles. Self-targeting
+   * is refused unconditionally, exactly like grantRole/revokeRole — the caller is expected to
+   * have already checked permissions.manage (the route does this; see AdminUsersService's own
+   * role-grant methods for the same division of labour).
+   *
+   * The override write and its audit row commit in one transaction — either both happen or
+   * neither does. `previousEffect` is read under the same transaction so a concurrent write
+   * to the same (user, permission) can't be reported inaccurately: whichever call commits
+   * second sees the first call's result as `previousEffect`, not a stale pre-transaction read.
+   */
+  static async setPermissionOverride(userId, permissionKey, effect, { actorUserId }) {
+    if (Number(userId) === Number(actorUserId)) {
+      const e = new Error('you cannot change your own permissions'); e.status = 403; throw e;
+    }
+    if (effect !== 'grant' && effect !== 'deny') {
+      const e = new Error("effect must be 'grant' or 'deny'"); e.status = 400; throw e;
+    }
+
+    return withTransaction(async (client) => {
+      const { rows: permRows } = await client.query('SELECT 1 FROM permissions WHERE key = $1', [permissionKey]);
+      if (!permRows[0]) { const e = new Error('unknown permission'); e.status = 400; throw e; }
+
+      // Row-locked so a concurrent grant/deny on the same (user, permission) serialises
+      // rather than racing to two conflicting upserts — the UNIQUE constraint would stop a
+      // duplicate row either way, but the lock is what makes `previousEffect` trustworthy.
+      const { rows: existing } = await client.query(
+        `SELECT effect FROM user_permission_overrides
+          WHERE user_id = $1 AND permission_key = $2 FOR UPDATE`,
+        [userId, permissionKey]
+      );
+      const previousEffect = existing[0]?.effect ?? null;
+
+      const { rows } = await client.query(
+        `INSERT INTO user_permission_overrides (user_id, permission_key, effect, granted_by)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, permission_key) DO UPDATE SET effect = EXCLUDED.effect,
+           granted_by = EXCLUDED.granted_by, granted_at = now()
+         RETURNING id, user_id, permission_key, effect, granted_at`,
+        [userId, permissionKey, effect, actorUserId]
+      );
+
+      await AuthzService.recordAudit({
+        actorUserId,
+        action: effect === 'grant' ? 'permission.override.grant' : 'permission.override.deny',
+        targetUserId: userId,
+        detail: {
+          permission: permissionKey,
+          previousEffect,
+          newEffect: effect,
+          sensitive: AdminUsersService.SENSITIVE_PERMISSIONS.has(permissionKey),
+        },
+        client,
+      });
+
+      return rows[0];
+    });
+  }
+
+  /**
+   * Remove a direct override, restoring whatever the user's roles alone would produce.
+   * Idempotent: removing an override that doesn't exist is a successful no-op — it writes
+   * NO audit row, because nothing actually changed and a row claiming otherwise would
+   * mislead anyone reading the trail later.
+   */
+  static async removePermissionOverride(userId, permissionKey, { actorUserId }) {
+    if (Number(userId) === Number(actorUserId)) {
+      const e = new Error('you cannot change your own permissions'); e.status = 403; throw e;
+    }
+
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `DELETE FROM user_permission_overrides
+          WHERE user_id = $1 AND permission_key = $2
+          RETURNING effect`,
+        [userId, permissionKey]
+      );
+      if (!rows[0]) return { removed: false };
+
+      await AuthzService.recordAudit({
+        actorUserId,
+        action: 'permission.override.remove',
+        targetUserId: userId,
+        detail: { permission: permissionKey, previousEffect: rows[0].effect, newEffect: null },
+        client,
+      });
+
+      return { removed: true };
+    });
   }
 }

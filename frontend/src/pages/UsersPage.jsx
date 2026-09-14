@@ -16,6 +16,25 @@ const ROLE_BADGE = {
 
 const BLANK = { username: '', fullName: '', password: '', role: '' };
 
+// Mirrors AdminUsersService.SENSITIVE_PERMISSIONS — not a security boundary (the server
+// enforces that), just which actions get an extra "are you sure" before firing.
+const SENSITIVE_PERMISSIONS = new Set([
+  'permissions.manage',
+  'roles.manage',
+  'rolePermissions.manage',
+  'roles.assignAny',
+  'instance.configure',
+  'batches.adjust',
+  'accounts.recordPayment',
+]);
+
+const SOURCE_LABEL = {
+  role: (p) => `Granted — Inherited from role: ${p.roleLabel}`,
+  'override-grant': () => 'Granted — Direct grant',
+  'override-deny': () => 'Denied — Direct deny',
+  none: () => 'Not granted',
+};
+
 // The backend's own error text is already specific ("that username is already taken", "you
 // cannot change your own roles") — this only smooths the one message that reads as an
 // internal permission key rather than a sentence.
@@ -43,10 +62,17 @@ export default function UsersPage({ currentUser }) {
   const [creating, setCreating] = useState(false);
   const [rolesTarget, setRolesTarget] = useState(null); // the user row shown in the "manage roles" modal
   const [confirmDisable, setConfirmDisable] = useState(null); // the user row pending a disable confirmation
+  const [permsTarget, setPermsTarget] = useState(null); // the user row shown in the "manage permissions" modal
+  const [permsDetails, setPermsDetails] = useState(null); // that user's effective-permission breakdown
+  const [permsLoading, setPermsLoading] = useState(false);
+  const [confirmSensitive, setConfirmSensitive] = useState(null); // { user, permission, effect } pending an "are you sure"
 
   const myPermissions = currentUser?.permissions || [];
   const canAssignAny = myPermissions.includes('roles.assignAny');
   const canAssignOperational = myPermissions.includes('roles.assignOperational');
+  // permissions.manage is exclusive to System Administrator in the seeded matrix — Warehouse
+  // Admin never sees this button at all, not even to look. Same reasoning as the route gate.
+  const canManagePermissions = myPermissions.includes('permissions.manage');
 
   // Which roles THIS admin may hand out. System Administrator holds both assign
   // permissions and can grant any of the four; Warehouse Admin holds only
@@ -164,6 +190,68 @@ export default function UsersPage({ currentUser }) {
   function roleLabel(key) {
     return roles.find((r) => r.key === key)?.label || key;
   }
+
+  async function openPermissions(user) {
+    setPermsTarget(user);
+    setPermsDetails(null);
+    setPermsLoading(true);
+    setError(null);
+    try {
+      setPermsDetails(await api.admin.userPermissions(user.id));
+    } catch (err) {
+      setError(friendlyError(err));
+      setPermsTarget(null);
+    } finally {
+      setPermsLoading(false);
+    }
+  }
+
+  // Sensitive keys get a confirm step first; everything else applies immediately.
+  function requestSetOverride(user, permission, effect) {
+    if (SENSITIVE_PERMISSIONS.has(permission)) {
+      setConfirmSensitive({ user, permission, effect });
+      return;
+    }
+    applySetOverride(user, permission, effect);
+  }
+
+  async function applySetOverride(user, permission, effect) {
+    setConfirmSensitive(null);
+    setError(null);
+    try {
+      await api.admin.setPermissionOverride(user.id, permission, effect);
+      setNotice(`${effect === 'grant' ? 'Granted' : 'Denied'} ${permission} for ${user.username}.`);
+      setPermsDetails(await api.admin.userPermissions(user.id));
+      await load();
+    } catch (err) {
+      setError(friendlyError(err));
+    }
+  }
+
+  async function removeOverride(user, permission) {
+    setError(null);
+    try {
+      await api.admin.removePermissionOverride(user.id, permission);
+      setNotice(`Removed the direct override for ${permission} on ${user.username} — back to role-based access.`);
+      setPermsDetails(await api.admin.userPermissions(user.id));
+      await load();
+    } catch (err) {
+      setError(friendlyError(err));
+    }
+  }
+
+  // Grouped by the dot-prefix every permission key already carries (batches.*, requests.*,
+  // …) — no separate categorisation metadata needed.
+  const permsByGroup = useMemo(() => {
+    if (!permsDetails) return [];
+    const groups = new Map();
+    for (const p of permsDetails) {
+      const group = p.key.split('.')[0];
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(p);
+    }
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [permsDetails]);
 
   const canCreate = form.username.trim() && form.password.length >= 8;
 
@@ -286,6 +374,11 @@ export default function UsersPage({ currentUser }) {
                           <button className="btn small" onClick={() => setRolesTarget(u)}>
                             manage roles
                           </button>
+                          {canManagePermissions && (
+                            <button className="btn small" onClick={() => openPermissions(u)}>
+                              manage permissions
+                            </button>
+                          )}
                           {u.is_active ? (
                             <button className="btn small danger" onClick={() => askDisable(u)}>
                               disable
@@ -387,6 +480,99 @@ export default function UsersPage({ currentUser }) {
               )}
             </>
           )}
+        </Modal>
+      )}
+
+      {permsTarget && (
+        <Modal
+          title={`Permissions — ${permsTarget.username}`}
+          subtitle="Direct overrides are exceptions to role-based access — use sparingly"
+          onClose={() => { setPermsTarget(null); setPermsDetails(null); }}
+        >
+          {currentUser && permsTarget.id === currentUser.id ? (
+            <p className="muted">
+              You cannot change your own permissions — this is a deliberate rule, not a bug.
+              Ask another System Administrator.
+            </p>
+          ) : permsLoading || !permsDetails ? (
+            <Empty>loading…</Empty>
+          ) : (
+            permsByGroup.map(([group, items]) => (
+              <div key={group} style={{ marginBottom: 18 }}>
+                <h3 style={{ marginBottom: 8, textTransform: 'capitalize' }}>{group}</h3>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th className="wrap">Permission</th>
+                        <th className="wrap">Status</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((p) => (
+                        <tr key={p.key}>
+                          <td className="wrap">
+                            <code>{p.key}</code>
+                            <div className="muted" style={{ fontSize: 12 }}>{p.description}</div>
+                          </td>
+                          <td className="wrap">
+                            <span className={`badge ${p.effective ? 'ok' : 'inactive'}`}>
+                              {SOURCE_LABEL[p.source](p)}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="row-actions" style={{ flexWrap: 'wrap' }}>
+                              {p.source !== 'override-grant' && (
+                                <button className="btn small" onClick={() => requestSetOverride(permsTarget, p.key, 'grant')}>
+                                  grant
+                                </button>
+                              )}
+                              {p.source !== 'override-deny' && (
+                                <button className="btn small danger" onClick={() => requestSetOverride(permsTarget, p.key, 'deny')}>
+                                  deny
+                                </button>
+                              )}
+                              {p.overrideEffect && (
+                                <button className="btn small" onClick={() => removeOverride(permsTarget, p.key)}>
+                                  remove override
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))
+          )}
+        </Modal>
+      )}
+
+      {confirmSensitive && (
+        <Modal
+          title="Sensitive permission"
+          onClose={() => setConfirmSensitive(null)}
+        >
+          <p>
+            <code>{confirmSensitive.permission}</code> is a sensitive permission. Granting or
+            denying it individually may provide significant administrative access, or bypass
+            the normal role model, for <strong>{confirmSensitive.user.username}</strong>. Are
+            you sure?
+          </p>
+          <div className="row-actions">
+            <button
+              className={`btn ${confirmSensitive.effect === 'deny' ? 'danger' : 'primary'}`}
+              onClick={() => applySetOverride(confirmSensitive.user, confirmSensitive.permission, confirmSensitive.effect)}
+            >
+              Yes, {confirmSensitive.effect} it
+            </button>
+            <button className="btn" onClick={() => setConfirmSensitive(null)}>
+              Cancel
+            </button>
+          </div>
         </Modal>
       )}
     </>

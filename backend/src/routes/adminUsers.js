@@ -117,4 +117,57 @@ router.delete('/users/:id/roles/:roleKey', async (req, res, next) => {
   }
 });
 
+// ── Individual permission overrides ─────────────────────────────────────────────────────
+// The exception layer above role-derived access (see docs/AUTHORIZATION.md and the
+// individual-permission-overrides design report). Gated by permissions.manage throughout —
+// deliberately the SAME single permission for view and write here, unlike role assignment's
+// two-tier split: permissions.manage is exclusive to System Administrator in the seeded
+// matrix, so Warehouse Admin has no path into this surface at all, not even a read-only one.
+// That is intentional — an override is a security-architecture decision, not an operational
+// one, and giving Warehouse Admin visibility into it would blur exactly the line the whole
+// feature exists to keep sharp (see the design report's §F).
+
+/** GET /api/admin/users/:id/permissions — the full effective-permission breakdown. */
+router.get('/users/:id/permissions', requirePermission('permissions.manage'), async (req, res, next) => {
+  try {
+    return res.json(await AdminUsersService.getUserPermissions(Number(req.params.id)));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
+ * PUT /api/admin/users/:id/permissions/:key — body { effect: 'grant' | 'deny' }.
+ * Upsert: safe to call repeatedly with the same effect (idempotent), and safe to call again
+ * with the other effect to flip an existing override.
+ */
+router.put('/users/:id/permissions/:key', requirePermission('permissions.manage'), async (req, res, next) => {
+  try {
+    const result = await AdminUsersService.setPermissionOverride(
+      Number(req.params.id), req.params.key, req.body?.effect, { actorUserId: req.user.id }
+    );
+    return res.status(200).json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+});
+
+/**
+ * DELETE /api/admin/users/:id/permissions/:key — remove a direct override.
+ * Idempotent: no override present is a successful no-op ({removed:false}, still 200 — not
+ * a 404, and never phrased as an error), not a failure a retry needs to worry about.
+ */
+router.delete('/users/:id/permissions/:key', requirePermission('permissions.manage'), async (req, res, next) => {
+  try {
+    const result = await AdminUsersService.removePermissionOverride(
+      Number(req.params.id), req.params.key, { actorUserId: req.user.id }
+    );
+    return res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    return next(err);
+  }
+});
+
 export default router;
