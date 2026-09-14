@@ -64,8 +64,14 @@ export const auth = {
   async login(username, password) {
     const result = await request('/api/auth/login', { method: 'POST', body: { username, password } });
     localStorage.setItem(TOKEN_KEY, result.token);
-    localStorage.setItem(USER_KEY, JSON.stringify(result.user));
-    return result.user;
+    // /login's own response carries only {id, username, fullName, role} — the legacy
+    // display field. roles/permissions (what the Phase 1 authorization model actually
+    // decides access by) come from /me, fetched immediately so the stored session — and
+    // anything gating the UI on it, like the Users nav entry — reflects real permissions
+    // from the first render rather than the stale legacy role column.
+    const full = await request('/api/auth/me');
+    localStorage.setItem(USER_KEY, JSON.stringify(full));
+    return full;
   },
   logout: clearSession,
   me: () => request('/api/auth/me'),
@@ -178,5 +184,17 @@ export const api = {
   alerts: {
     expiry: (params) => request(`/api/alerts/expiry${qs(params)}`),
     stock: () => request('/api/alerts/stock'),
+  },
+
+  // User/role administration — see docs/AUTHORIZATION.md. Held by System Administrator and
+  // Warehouse Admin; which role a caller may grant/revoke is enforced server-side by tier.
+  admin: {
+    listUsers: () => request('/api/admin/users'),
+    listRoles: () => request('/api/admin/roles'),
+    createUser: (body) => request('/api/admin/users', { method: 'POST', body }),
+    disableUser: (id) => request(`/api/admin/users/${id}/disable`, { method: 'PUT' }),
+    enableUser: (id) => request(`/api/admin/users/${id}/enable`, { method: 'PUT' }),
+    assignRole: (id, role) => request(`/api/admin/users/${id}/roles`, { method: 'POST', body: { role } }),
+    removeRole: (id, role) => request(`/api/admin/users/${id}/roles/${role}`, { method: 'DELETE' }),
   },
 };

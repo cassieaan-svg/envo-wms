@@ -16,6 +16,7 @@ import MonitoringPage from './pages/MonitoringPage.jsx';
 import ActivityLogPage from './pages/ActivityLogPage.jsx';
 import AdjustmentsPage from './pages/AdjustmentsPage.jsx';
 import AccountsPage from './pages/AccountsPage.jsx';
+import UsersPage from './pages/UsersPage.jsx';
 
 // 16x16 stroked outlines, matching the icon set EnVo uses in its own nav.
 const icon = (paths) => (
@@ -84,6 +85,13 @@ const ICONS = {
       <path d="M1 6h4M11 10h4" />
     </>
   ),
+  users: icon(
+    <>
+      <circle cx="6" cy="5" r="2.5" />
+      <path d="M1 14c0-2.8 2.2-5 5-5s5 2.2 5 5" />
+      <path d="M11 3.5a2.5 2.5 0 010 5M14.5 14c0-2.3-1.7-4.2-4-4.8" />
+    </>
+  ),
 };
 
 // Grouped side-rail navigation rather than a router — the page count is small and every
@@ -114,6 +122,17 @@ const NAV = [
       ['Monitoring', MonitoringPage, ICONS.monitoring],
       ['Activity log', ActivityLogPage, ICONS.activity],
       ['Alerts', AlertsPage, ICONS.alerts],
+    ],
+  ],
+  [
+    'Administration',
+    [
+      // A 4th element names the permission required to see this tab at all — System
+      // Administrator and Warehouse Admin both hold users.create (see the Phase 1 matrix);
+      // Picker/Dispatcher and Receiving Clerk do not, and never see this entry. This is UX
+      // only: the real enforcement is server-side (requirePermission on every /api/admin
+      // route), so a hidden tab is a courtesy, not the security boundary.
+      ['Users', UsersPage, ICONS.users, 'users.create'],
     ],
   ],
 ];
@@ -170,6 +189,8 @@ export default function App() {
 
   const Page = PAGES[tab];
   const isAdmin = user.role === 'admin';
+  const permissions = user.permissions || [];
+  const can = (perm) => permissions.includes(perm);
 
   function pick(name) {
     setTab(name);
@@ -205,23 +226,27 @@ export default function App() {
         </div>
 
         <nav>
-          {NAV.map(([group, items]) => (
-            <div className="nav-group" key={group}>
-              <div className="nav-group-label">{group}</div>
-              <div className="tabs">
-                {items.map(([name, , glyph]) => (
-                  <button
-                    key={name}
-                    className={`tab ${tab === name ? 'active' : ''}`}
-                    onClick={() => pick(name)}
-                  >
-                    {glyph}
-                    <span>{name}</span>
-                  </button>
-                ))}
+          {NAV.map(([group, items]) => {
+            const visible = items.filter(([, , , perm]) => !perm || can(perm));
+            if (!visible.length) return null;
+            return (
+              <div className="nav-group" key={group}>
+                <div className="nav-group-label">{group}</div>
+                <div className="tabs">
+                  {visible.map(([name, , glyph]) => (
+                    <button
+                      key={name}
+                      className={`tab ${tab === name ? 'active' : ''}`}
+                      onClick={() => pick(name)}
+                    >
+                      {glyph}
+                      <span>{name}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </nav>
 
         <div className="sidebar-foot">
@@ -244,7 +269,7 @@ export default function App() {
 
       <main>
         <ConnectionBar />
-        <Page isAdmin={isAdmin} />
+        <Page isAdmin={isAdmin} currentUser={user} />
       </main>
 
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
