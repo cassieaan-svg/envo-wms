@@ -115,40 +115,58 @@ export class AdminUsersService {
    * Administrator for a privileged role, either for an operational one) has to act instead.
    * The caller is expected to have already checked the tier-appropriate permission.
    */
+  /**
+   * The role-table write and its audit row commit in one transaction — either both happen or
+   * neither does, exactly like setPermissionOverride below. Previously these were two
+   * separate statements; a crash between them could leave a granted role with no audit
+   * record. All other behaviour — the self-targeting refusal, the tier-permission check the
+   * caller has already made, the duplicate-grant no-op — is unchanged.
+   */
   static async grantRole(userId, roleKey, { actorUserId }) {
     if (Number(userId) === Number(actorUserId)) {
       const e = new Error('you cannot change your own roles'); e.status = 403; throw e;
     }
-    const { rows: roleRows } = await query('SELECT id FROM roles WHERE key = $1', [roleKey]);
-    if (!roleRows[0]) { const e = new Error('unknown role'); e.status = 400; throw e; }
 
-    const { rows } = await query(
-      `INSERT INTO user_roles (user_id, role_id, granted_by)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, role_id) WHERE facility_scope_id IS NULL DO NOTHING
-       RETURNING id, user_id, role_id`,
-      [userId, roleRows[0].id, actorUserId]
-    );
-    await AuthzService.recordAudit({
-      actorUserId, action: 'role.grant', targetUserId: userId, detail: { role: roleKey },
+    return withTransaction(async (client) => {
+      const { rows: roleRows } = await client.query('SELECT id FROM roles WHERE key = $1', [roleKey]);
+      if (!roleRows[0]) { const e = new Error('unknown role'); e.status = 400; throw e; }
+
+      const { rows } = await client.query(
+        `INSERT INTO user_roles (user_id, role_id, granted_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, role_id) WHERE facility_scope_id IS NULL DO NOTHING
+         RETURNING id, user_id, role_id`,
+        [userId, roleRows[0].id, actorUserId]
+      );
+
+      await AuthzService.recordAudit({
+        actorUserId, action: 'role.grant', targetUserId: userId, detail: { role: roleKey }, client,
+      });
+
+      return rows[0] || null;
     });
-    return rows[0] || null;
   }
 
+  /** Same transactional treatment as grantRole, for the identical reason. */
   static async revokeRole(userId, roleKey, { actorUserId }) {
     if (Number(userId) === Number(actorUserId)) {
       const e = new Error('you cannot change your own roles'); e.status = 403; throw e;
     }
-    const { rows } = await query(
-      `DELETE FROM user_roles ur USING roles r
-        WHERE ur.role_id = r.id AND r.key = $2 AND ur.user_id = $1
-        RETURNING ur.id`,
-      [userId, roleKey]
-    );
-    await AuthzService.recordAudit({
-      actorUserId, action: 'role.revoke', targetUserId: userId, detail: { role: roleKey },
+
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `DELETE FROM user_roles ur USING roles r
+          WHERE ur.role_id = r.id AND r.key = $2 AND ur.user_id = $1
+          RETURNING ur.id`,
+        [userId, roleKey]
+      );
+
+      await AuthzService.recordAudit({
+        actorUserId, action: 'role.revoke', targetUserId: userId, detail: { role: roleKey }, client,
+      });
+
+      return rows[0] || null;
     });
-    return rows[0] || null;
   }
 
   // Permissions that are otherwise exclusive to a privileged role (system_administrator) in
