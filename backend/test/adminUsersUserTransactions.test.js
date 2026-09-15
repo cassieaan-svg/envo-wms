@@ -183,3 +183,69 @@ test('enableUser on an unknown id is still a 404, unchanged', async () => {
     await cleanup({ userIds: [admin.id] });
   }
 });
+
+// ── setLocalDisabled ─────────────────────────────────────────────────────────────────────
+test('a successful setLocalDisabled sets the flag and creates its audit record', async () => {
+  const admin = await makeUser({ roles: ['system_administrator'] });
+  const target = await makeUser({ roles: [] });
+  try {
+    const result = await AdminUsersService.setLocalDisabled(target.id, true, { actorUserId: admin.id });
+    assert.equal(result.is_locally_disabled, true);
+
+    const row = await userRow(target.id);
+    assert.equal(row.is_locally_disabled, true);
+
+    const auditRows = await auditRowsFor(target.id, 'user.localDisable');
+    assert.equal(auditRows.length, 1);
+  } finally {
+    await AdminUsersService.setLocalDisabled(target.id, false, { actorUserId: admin.id }).catch(() => {});
+    await cleanup({ userIds: [admin.id, target.id] });
+  }
+});
+
+test('re-enabling locally uses the localEnable action, unchanged', async () => {
+  const admin = await makeUser({ roles: ['system_administrator'] });
+  const target = await makeUser({ roles: [] });
+  try {
+    await AdminUsersService.setLocalDisabled(target.id, true, { actorUserId: admin.id });
+    const result = await AdminUsersService.setLocalDisabled(target.id, false, { actorUserId: admin.id });
+    assert.equal(result.is_locally_disabled, false);
+
+    const auditRows = await auditRowsFor(target.id, 'user.localEnable');
+    assert.equal(auditRows.length, 1);
+  } finally {
+    await cleanup({ userIds: [admin.id, target.id] });
+  }
+});
+
+test('if the audit write fails, setLocalDisabled does not leave the flag changed', async () => {
+  const admin = await makeUser({ roles: ['system_administrator'] });
+  const target = await makeUser({ roles: [] });
+  const original = AuthzService.recordAudit;
+  try {
+    AuthzService.recordAudit = async () => { throw new Error('simulated audit failure'); };
+
+    await assert.rejects(
+      AdminUsersService.setLocalDisabled(target.id, true, { actorUserId: admin.id }),
+      /simulated audit failure/
+    );
+
+    const row = await userRow(target.id);
+    assert.equal(row.is_locally_disabled, false, 'the flag change was rolled back along with the failed audit write');
+  } finally {
+    AuthzService.recordAudit = original;
+    await cleanup({ userIds: [admin.id, target.id] });
+  }
+});
+
+test('setLocalDisabled on an unknown id is still a 404, unchanged', async () => {
+  const admin = await makeUser({ roles: ['system_administrator'] });
+  try {
+    await assert.rejects(
+      AdminUsersService.setLocalDisabled(2_147_483_000, true, { actorUserId: admin.id }),
+      (err) => { assert.equal(err.status, 404); return true; }
+    );
+  } finally {
+    await cleanup({ userIds: [admin.id] });
+  }
+});

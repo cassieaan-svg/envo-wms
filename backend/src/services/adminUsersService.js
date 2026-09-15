@@ -119,16 +119,21 @@ export class AdminUsersService {
    * request ahead of any permission resolution (see middleware/auth.js) — so it can lock
    * someone out immediately even when this instance cannot reach Cloud.
    */
+  /** Same transactional treatment as createUser/disableUser/enableUser, for the identical reason. */
   static async setLocalDisabled(id, disabled, { actorUserId }) {
-    const { rows } = await query(
-      'UPDATE users SET is_locally_disabled = $2 WHERE id = $1 RETURNING id, username, is_locally_disabled',
-      [id, Boolean(disabled)]
-    );
-    if (!rows[0]) { const e = new Error('user not found'); e.status = 404; throw e; }
-    await AuthzService.recordAudit({
-      actorUserId, action: disabled ? 'user.localDisable' : 'user.localEnable', targetUserId: id,
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        'UPDATE users SET is_locally_disabled = $2 WHERE id = $1 RETURNING id, username, is_locally_disabled',
+        [id, Boolean(disabled)]
+      );
+      if (!rows[0]) { const e = new Error('user not found'); e.status = 404; throw e; }
+
+      await AuthzService.recordAudit({
+        actorUserId, action: disabled ? 'user.localDisable' : 'user.localEnable', targetUserId: id, client,
+      });
+
+      return rows[0];
     });
-    return rows[0];
   }
 
   /**
