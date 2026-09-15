@@ -46,49 +46,71 @@ export class AdminUsersService {
     return rows;
   }
 
+  /**
+   * The user-table write and its audit row commit in one transaction — same treatment as
+   * grantRole/revokeRole and setPermissionOverride, for the identical reason: a crash
+   * between the two previously could leave a created account with no audit record. All
+   * other behaviour — the validation, the duplicate-username 409, the legacy 'standard'
+   * role column, the return shape — is unchanged.
+   */
   static async createUser({ username, password, fullName, actorUserId }) {
     if (!username?.trim()) { const e = new Error('username is required'); e.status = 400; throw e; }
     if (!password || password.length < 8) {
       const e = new Error('password must be at least 8 characters'); e.status = 400; throw e;
     }
     const hash = await bcrypt.hash(password, 10);
-    let rows;
-    try {
-      ({ rows } = await query(
-        // Kept 'standard' on the legacy role column for compatibility; the new user has no
-        // permissions at all until a role is granted below or in a follow-up call.
-        `INSERT INTO users (username, password_hash, full_name, role)
-         VALUES ($1, $2, $3, 'standard')
-         RETURNING id, username, full_name, is_active`,
-        [username.trim(), hash, fullName?.trim() || null]
-      ));
-    } catch (err) {
-      if (err.code === '23505') { const e = new Error('that username is already taken'); e.status = 409; throw e; }
-      throw err;
-    }
-    const user = rows[0];
-    await AuthzService.recordAudit({
-      actorUserId, action: 'user.create', targetUserId: user.id, detail: { username: user.username },
+
+    return withTransaction(async (client) => {
+      let rows;
+      try {
+        ({ rows } = await client.query(
+          // Kept 'standard' on the legacy role column for compatibility; the new user has no
+          // permissions at all until a role is granted below or in a follow-up call.
+          `INSERT INTO users (username, password_hash, full_name, role)
+           VALUES ($1, $2, $3, 'standard')
+           RETURNING id, username, full_name, is_active`,
+          [username.trim(), hash, fullName?.trim() || null]
+        ));
+      } catch (err) {
+        if (err.code === '23505') { const e = new Error('that username is already taken'); e.status = 409; throw e; }
+        throw err;
+      }
+      const user = rows[0];
+
+      await AuthzService.recordAudit({
+        actorUserId, action: 'user.create', targetUserId: user.id, detail: { username: user.username }, client,
+      });
+
+      return user;
     });
-    return user;
   }
 
+  /** Same transactional treatment as createUser, for the identical reason. */
   static async disableUser(id, { actorUserId }) {
-    const { rows } = await query(
-      'UPDATE users SET is_active = false WHERE id = $1 RETURNING id, username, is_active', [id]
-    );
-    if (!rows[0]) { const e = new Error('user not found'); e.status = 404; throw e; }
-    await AuthzService.recordAudit({ actorUserId, action: 'user.disable', targetUserId: id });
-    return rows[0];
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        'UPDATE users SET is_active = false WHERE id = $1 RETURNING id, username, is_active', [id]
+      );
+      if (!rows[0]) { const e = new Error('user not found'); e.status = 404; throw e; }
+
+      await AuthzService.recordAudit({ actorUserId, action: 'user.disable', targetUserId: id, client });
+
+      return rows[0];
+    });
   }
 
+  /** Same transactional treatment as createUser, for the identical reason. */
   static async enableUser(id, { actorUserId }) {
-    const { rows } = await query(
-      'UPDATE users SET is_active = true WHERE id = $1 RETURNING id, username, is_active', [id]
-    );
-    if (!rows[0]) { const e = new Error('user not found'); e.status = 404; throw e; }
-    await AuthzService.recordAudit({ actorUserId, action: 'user.enable', targetUserId: id });
-    return rows[0];
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        'UPDATE users SET is_active = true WHERE id = $1 RETURNING id, username, is_active', [id]
+      );
+      if (!rows[0]) { const e = new Error('user not found'); e.status = 404; throw e; }
+
+      await AuthzService.recordAudit({ actorUserId, action: 'user.enable', targetUserId: id, client });
+
+      return rows[0];
+    });
   }
 
   /**
