@@ -4,6 +4,7 @@ import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enfo
 import { narrowGrantsToCategories } from '../constants/sections.js'
 import { LogService, DISPENSE_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
+import { IdempotencyService } from '../services/idempotencyService.js'
 
 const router = express.Router()
 
@@ -13,7 +14,15 @@ const router = express.Router()
 /**
  * POST /api/dispense - Record dispense operation
  * Body: { facility_id, commodity_id, quantity, dispensed_by, dispensed_at (optional),
- *         notes (optional), dsd_site_name or sdp_name (optional), section }
+ *         notes (optional), dsd_site_name or sdp_name (optional), section,
+ *         client_txn_id (optional today) }
+ *
+ * client_txn_id is optional for now — the current online-only frontend doesn't send
+ * one, and this endpoint keeps working exactly as before when it's absent. The
+ * offline-capable client queues this write locally and MUST supply one (a retried
+ * queued entry with no id would double-dispense on the first flaky reconnect); that
+ * requirement belongs to the offline client's own contract, not a breaking change to
+ * every existing caller of this route today.
  */
 router.post('/', async (req, res) => {
   try {
@@ -29,7 +38,8 @@ router.post('/', async (req, res) => {
       section,
       location_type,
       batch_number,
-      expiry_date
+      expiry_date,
+      client_txn_id
     } = req.body
 
     // Validate required fields
@@ -39,6 +49,17 @@ router.post('/', async (req, res) => {
         error: 'Missing required fields: facility_id, commodity_id, quantity, dispensed_by',
         code: 'MISSING_FIELDS'
       })
+    }
+
+    // Shape-check only when supplied — see the route comment above for why this isn't
+    // require()d yet. Validated up front, outside the generic catch below, so a
+    // malformed id reads as the same clear 400 every other field violation does here
+    // rather than a generic 500.
+    let validatedTxnId
+    try {
+      validatedTxnId = IdempotencyService.validate(client_txn_id)
+    } catch (idErr) {
+      return sendValidationError(res, idErr.message, 'client_txn_id')
     }
 
     // Enforce facility scoping (dispense_log write policy)
@@ -89,7 +110,9 @@ router.post('/', async (req, res) => {
       section,
       location_type,
       batch_number,
-      expiry_date
+      expiry_date,
+      client_txn_id: validatedTxnId,
+      actor_user_id: req.user?.sub ?? null
     })
 
     res.status(201).json({

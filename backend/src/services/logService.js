@@ -2,6 +2,7 @@ import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
 import { LotService, ymd } from './lotService.js'
 import { sectionFilterSql } from '../constants/sections.js'
+import { IdempotencyService } from './idempotencyService.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -847,7 +848,7 @@ export class LogService {
     const {
       facility_id, commodity_id, quantity, dispensed_by, dispensed_at,
       notes, dsd_site_name, sdp_name, section, location_type,
-      batch_number, expiry_date
+      batch_number, expiry_date, client_txn_id, actor_user_id
     } = dispenseData
 
     // quantity may be 0 (a "nothing consumed today" record), so guard on null/undefined
@@ -860,6 +861,21 @@ export class LogService {
 
     // Log insert + stock decrement commit (or roll back) together.
     return await withTransaction(async exec => {
+      // Claimed before anything else is written, so a retried offline-queued dispense
+      // (the device never saw the first response) is answered with the original result
+      // instead of debiting stock a second time. Optional here, not required: this
+      // method is also called from admin/edit paths that don't carry an id yet — see
+      // IdempotencyService.require() at the route layer for where it becomes mandatory
+      // for the offline-facing entry point.
+      let claimId = null
+      if (client_txn_id) {
+        const claim = await IdempotencyService.claim(exec, {
+          clientTxnId: client_txn_id, operation: 'dispense', actorUserId: actor_user_id ?? null, facilityId: facility_id,
+        })
+        if (!claim.claimed) return claim.result
+        claimId = claim.id
+      }
+
       const resolvedSection = await resolveSection(section, commodity_id, exec)
       const { rows } = await exec(
         `insert into dispense_log
@@ -925,6 +941,8 @@ export class LogService {
       // lot named, draw FEFO". `x || null` collapses the first into the second, which
       // silently debits a batched lot when the operator picked "(no batch)".
       await LotService.debit(exec, bin, qty, { batch: batch_number == null ? null : batch_number, enforce: true })
+
+      if (claimId) await IdempotencyService.complete(exec, claimId, dispenseLog)
 
       return dispenseLog
     })
