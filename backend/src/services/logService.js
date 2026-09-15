@@ -1167,7 +1167,7 @@ export class LogService {
     const {
       facility_id, commodity_id, quantity, supplier_source, batch_number,
       expiry_date, delivery_note_ref, condition_on_arrival, received_by,
-      received_at, notes, section
+      received_at, notes, section, client_txn_id, actor_user_id
     } = intakeData
 
     if (!facility_id || !commodity_id || !quantity || !received_by) {
@@ -1178,6 +1178,15 @@ export class LogService {
 
     // Log insert + stock increment commit (or roll back) together.
     return await withTransaction(async exec => {
+      let claimId = null
+      if (client_txn_id) {
+        const claim = await IdempotencyService.claim(exec, {
+          clientTxnId: client_txn_id, operation: 'intake', actorUserId: actor_user_id ?? null, facilityId: facility_id,
+        })
+        if (!claim.claimed) return claim.result
+        claimId = claim.id
+      }
+
       const resolvedSection = await resolveSection(section, commodity_id, exec)
       const { rows } = await exec(
         `insert into intake_log
@@ -1201,6 +1210,7 @@ export class LogService {
       await LotService.credit(exec, { facility_id, commodity_id, location_type: 'store', site_name: null },
         { batch: batch_number || null, expiry: expiry_date || null, qty, section: resolvedSection })
 
+      if (claimId) await IdempotencyService.complete(exec, claimId, intakeLog)
       return intakeLog
     })
   }

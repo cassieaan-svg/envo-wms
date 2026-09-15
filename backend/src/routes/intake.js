@@ -4,6 +4,7 @@ import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enfo
 import { narrowGrantsToCategories } from '../constants/sections.js'
 import { LogService, INTAKE_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
+import { IdempotencyService } from '../services/idempotencyService.js'
 
 const router = express.Router()
 
@@ -14,7 +15,13 @@ const router = express.Router()
  * POST /api/intake - Record intake operation
  * Body: { facility_id, commodity_id, quantity, supplier_source, batch_number (optional),
  *         expiry_date (optional), delivery_note_ref (optional), condition_on_arrival (optional),
- *         received_by, received_at (optional), notes (optional), section }
+ *         received_by, received_at (optional), notes (optional), section,
+ *         client_txn_id (optional today) }
+ *
+ * client_txn_id follows the same contract as POST /api/dispense — optional for the
+ * current online-only frontend, required by the offline-capable client's own queue
+ * contract (see docs/ESSENTIAL_COMMODITIES_OFFLINE_DESIGN.md in the envo-wms sibling
+ * project).
  */
 router.post('/', async (req, res) => {
   try {
@@ -30,7 +37,8 @@ router.post('/', async (req, res) => {
       received_by,
       received_at,
       notes,
-      section
+      section,
+      client_txn_id
     } = req.body
 
     // Validate required fields. batch_number and expiry_date are required here
@@ -42,6 +50,13 @@ router.post('/', async (req, res) => {
         error: 'Missing required fields: facility_id, commodity_id, quantity, received_by, batch_number, expiry_date',
         code: 'MISSING_FIELDS'
       })
+    }
+
+    let validatedTxnId
+    try {
+      validatedTxnId = IdempotencyService.validate(client_txn_id)
+    } catch (idErr) {
+      return sendValidationError(res, idErr.message, 'client_txn_id')
     }
 
     // Enforce facility scoping (intake_log write policy)
@@ -109,7 +124,9 @@ router.post('/', async (req, res) => {
       received_by,
       received_at,
       notes,
-      section
+      section,
+      client_txn_id: validatedTxnId,
+      actor_user_id: req.user?.sub ?? null
     })
 
     res.status(201).json({
@@ -118,11 +135,12 @@ router.post('/', async (req, res) => {
       timestamp: new Date().toISOString()
     })
   } catch (err) {
-    console.error('Error recording intake:', err)
-    res.status(500).json({
+    const status = err.status === 409 ? 409 : 500
+    if (status === 500) console.error('Error recording intake:', err)
+    res.status(status).json({
       success: false,
       error: err.message,
-      code: 'INTAKE_ERROR'
+      code: status === 409 ? 'INTAKE_CONFLICT' : 'INTAKE_ERROR'
     })
   }
 })
