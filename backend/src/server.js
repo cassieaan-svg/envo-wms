@@ -29,6 +29,7 @@ import binCardRoutes from './routes/bincard.js'
 import moduleRoutes from './routes/modules.js'
 import schemeRoutes from './routes/schemes.js'
 import warehouseRequestRoutes from './routes/warehouseRequests.js'
+import facilitySnapshotRoutes from './routes/facilitySnapshot.js'
 import warehouseRequestHooks from './routes/warehouseRequestHooks.js'
 import facilityStockHooks from './routes/facilityStockHooks.js'
 import commodityPriceHooks from './routes/commodityPriceHooks.js'
@@ -125,6 +126,7 @@ app.use('/api/commodities', commodityRoutes)
 app.use('/api/modules', moduleRoutes)
 app.use('/api/schemes', schemeRoutes)
 app.use('/api/warehouse-requests', warehouseRequestRoutes)
+app.use('/api/facility-snapshot', facilitySnapshotRoutes)
 app.use('/api/amc-settings', amcSettingsRoutes)
 app.use('/api/edit-history', editHistoryRoutes)
 app.use('/api/bincard', binCardRoutes)
