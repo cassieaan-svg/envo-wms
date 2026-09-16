@@ -4,6 +4,7 @@ import { enforceTransferAccess, enforceTransferWrite, mayWriteTransfer, mayWrite
 import { narrowGrantsToCategories } from '../constants/sections.js'
 import { TransferService, TRANSFER_IN_GROUP_BY_KEYS } from '../services/transferService.js'
 import { FacilityService } from '../services/facilityService.js'
+import { IdempotencyService } from '../services/idempotencyService.js'
 
 const router = express.Router()
 
@@ -276,12 +277,28 @@ router.post('/', async (req, res) => {
 })
 
 /** PATCH /api/transfers/:id/dispatch - approve+dispatch external (decrements sender store) */
+/**
+ * PATCH /api/transfers/:id/dispatch
+ * Body accepts client_txn_id (optional today) so a queued offline dispatch can be
+ * safely retried — see the comment on TransferService.dispatch.
+ */
 router.patch('/:id/dispatch', async (req, res) => {
   try {
-    await runTransition(req, res, () => TransferService.dispatch(req.params.id, req.body || {}))
+    let validatedTxnId
+    try {
+      validatedTxnId = IdempotencyService.validate(req.body?.client_txn_id)
+    } catch (idErr) {
+      return sendValidationError(res, idErr.message, 'client_txn_id')
+    }
+    await runTransition(req, res, () => TransferService.dispatch(req.params.id, {
+      ...req.body,
+      client_txn_id: validatedTxnId,
+      actor_user_id: req.user?.sub ?? null,
+    }))
   } catch (err) {
-    console.error('Error dispatching transfer:', err)
-    res.status(500).json({ success: false, error: err.message, code: 'DISPATCH_ERROR' })
+    const status = err.status === 409 ? 409 : 500
+    if (status === 500) console.error('Error dispatching transfer:', err)
+    res.status(status).json({ success: false, error: err.message, code: status === 409 ? 'DISPATCH_CONFLICT' : 'DISPATCH_ERROR' })
   }
 })
 
@@ -398,13 +415,28 @@ router.patch('/:id/assign', async (req, res) => {
   }
 })
 
-/** PATCH /api/transfers/:id/accept - receiver accepts (credits receiver store; no intake_log — the transfer already records the receipt) */
+/**
+ * PATCH /api/transfers/:id/accept - receiver accepts (credits receiver store; no
+ * intake_log — the transfer already records the receipt).
+ * Body accepts client_txn_id (optional today) — the receiver's side of the same
+ * offline-retry contract as dispatch; see the comment on TransferService.accept.
+ */
 router.patch('/:id/accept', async (req, res) => {
   try {
     if (!req.body?.received_by) {
       return res.status(400).json({ success: false, error: 'received_by is required', code: 'MISSING_FIELDS' })
     }
-    await runTransition(req, res, () => TransferService.accept(req.params.id, req.body))
+    let validatedTxnId
+    try {
+      validatedTxnId = IdempotencyService.validate(req.body?.client_txn_id)
+    } catch (idErr) {
+      return sendValidationError(res, idErr.message, 'client_txn_id')
+    }
+    await runTransition(req, res, () => TransferService.accept(req.params.id, {
+      ...req.body,
+      client_txn_id: validatedTxnId,
+      actor_user_id: req.user?.sub ?? null,
+    }))
   } catch (err) {
     console.error('Error accepting transfer:', err)
     res.status(500).json({ success: false, error: err.message, code: 'ACCEPT_ERROR' })

@@ -2,6 +2,7 @@ import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
 import { LotService, splitLots, ymd } from './lotService.js'
 import { sectionFilterSql } from '../constants/sections.js'
+import { IdempotencyService } from './idempotencyService.js'
 
 // Nested commodity object matching the frontend's `commodities(id,name,category,unit)`
 // embedded select, rebuilt with json_build_object (PostgREST replacement).
@@ -439,10 +440,45 @@ export class TransferService {
       return rows[0] || null
   }
 
+  /**
+   * Dispatch ONE transfer — the sender's side of the two-independent-ledger-events
+   * split (see docs/ESSENTIAL_COMMODITIES_OFFLINE_DESIGN.md in the envo-wms sibling
+   * project): dispatch debits the sender, accept (below) separately credits the
+   * receiver, and each is its own idempotent, individually-retryable event rather
+   * than one shared record two facilities edit.
+   *
+   * Locks the row and re-checks status = 'pending' INSIDE the transaction, the same
+   * guard dispatchBatch already uses per item — without it, a retried call (offline
+   * queue resubmit, a double-tap) re-enters _dispatchOne and decrements the sender's
+   * stock and lots a second time for the same physical dispatch. `client_txn_id` is
+   * layered on top for the same reason accept's own retry-guard exists: a genuine
+   * queued retry should get back the original result, not a 409.
+   */
   static async dispatch(transferId, data) {
-    const transfer = await this.getTransferById(transferId)
-    if (!transfer) return null
-    return withTransaction(async exec => this._dispatchOne(exec, transfer, data))
+    const { client_txn_id, actor_user_id } = data
+    return withTransaction(async exec => {
+      let claimId = null
+      if (client_txn_id) {
+        const claim = await IdempotencyService.claim(exec, {
+          clientTxnId: client_txn_id, operation: 'transfer_dispatch', actorUserId: actor_user_id ?? null,
+        })
+        if (!claim.claimed) return claim.result
+        claimId = claim.id
+      }
+
+      const { rows } = await exec('select * from stock_transfer_log where id = $1 for update', [transferId])
+      const transfer = rows[0]
+      if (!transfer) return null
+      if (transfer.status !== 'pending') {
+        const e = new Error('Transfer is no longer pending — it may already have been dispatched')
+        e.status = 409
+        throw e
+      }
+
+      const result = await this._dispatchOne(exec, transfer, data)
+      if (claimId) await IdempotencyService.complete(exec, claimId, result)
+      return result
+    })
   }
 
   /**
@@ -586,12 +622,25 @@ export class TransferService {
    * the transfer itself (CRRF counts external transfers as Adj+).
    */
   static async accept(transferId, data) {
-    const { received_by } = data
+    const { received_by, client_txn_id, actor_user_id } = data
     const transfer = await this.getTransferById(transferId)
     if (!transfer) return null
     if (!transfer.receiving_facility_id) throw new Error('Transfer has no receiving facility')
 
     return withTransaction(async exec => {
+      // client_txn_id is layered on top of the status guard below (not a replacement
+      // for it — see the comment there): it's what lets a genuinely retried offline
+      // submission get back the original result instead of relying on the guard's
+      // generic "already accepted, credit nothing" fallback.
+      let claimId = null
+      if (client_txn_id) {
+        const claim = await IdempotencyService.claim(exec, {
+          clientTxnId: client_txn_id, operation: 'transfer_accept', actorUserId: actor_user_id ?? null, facilityId: transfer.receiving_facility_id,
+        })
+        if (!claim.claimed) return claim.result
+        claimId = claim.id
+      }
+
       // Claim the transfer FIRST, and only credit if this call is the one that moved
       // it off its previous status. Crediting first and setting the status after made
       // accept non-idempotent: a second call — a retried request, an impatient second
@@ -608,7 +657,11 @@ export class TransferService {
          where id = $1 and status <> 'accepted' returning *`,
         [transferId, received_by]
       )
-      if (!rows[0]) return transfer      // already accepted — credit nothing, report the existing row
+      if (!rows[0]) {
+        // already accepted — credit nothing, report the existing row
+        if (claimId) await IdempotencyService.complete(exec, claimId, transfer)
+        return transfer
+      }
 
       await this._creditStock(exec, transfer.receiving_facility_id, transfer.commodity_id, transfer.quantity, 'store', transfer.section)
       // Credit the receiver's store lots with exactly the batch/expiry lots the
@@ -618,6 +671,7 @@ export class TransferService {
         { facility_id: transfer.receiving_facility_id, commodity_id: transfer.commodity_id, location_type: 'store', site_name: null },
         transfer.quantity)
 
+      if (claimId) await IdempotencyService.complete(exec, claimId, rows[0])
       return rows[0]
     })
   }
