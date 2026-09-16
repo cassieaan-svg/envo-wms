@@ -1283,7 +1283,7 @@ export class LogService {
     const {
       facility_id, commodity_id, quantity, adjustment_type, reason, adjusted_by,
       reference_number, notes, adjusted_at, expiry_date, batch_number, section,
-      location_type = 'store', site_name = null
+      location_type = 'store', site_name = null, client_txn_id, actor_user_id
     } = adjustmentData
 
     if (!facility_id || !commodity_id || !quantity || !adjustment_type || !reason || !adjusted_by) {
@@ -1324,6 +1324,15 @@ export class LogService {
 
     // Log insert + stock adjustment commit (or roll back) together.
     return await withTransaction(async exec => {
+      let claimId = null
+      if (client_txn_id) {
+        const claim = await IdempotencyService.claim(exec, {
+          clientTxnId: client_txn_id, operation: 'adjustment', actorUserId: actor_user_id ?? null, facilityId: facility_id,
+        })
+        if (!claim.claimed) return claim.result
+        claimId = claim.id
+      }
+
       const resolvedSection = await resolveSection(section, commodity_id, exec)
       const { rows } = await exec(
         `insert into stock_adjustment_log
@@ -1366,6 +1375,7 @@ export class LogService {
         await LotService.debit(exec, bin, qty, { batch: batch_number == null ? null : batch_number })
       }
 
+      if (claimId) await IdempotencyService.complete(exec, claimId, adjustmentLog)
       return adjustmentLog
     })
   }

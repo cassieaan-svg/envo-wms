@@ -4,6 +4,7 @@ import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enfo
 import { narrowGrantsToCategories } from '../constants/sections.js'
 import { LogService, ADJUSTMENT_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
+import { IdempotencyService } from '../services/idempotencyService.js'
 
 const router = express.Router()
 
@@ -14,7 +15,11 @@ const router = express.Router()
  * POST /api/adjustments - Record stock adjustment
  * Body: { facility_id, commodity_id, quantity, adjustment_type (Increase|Decrease),
  *         reason, adjusted_by, reference_number (optional), notes (optional),
- *         adjusted_at (optional), expiry_date (optional), batch_number (optional), section }
+ *         adjusted_at (optional), expiry_date (optional), batch_number (optional), section,
+ *         client_txn_id (optional today) }
+ *
+ * client_txn_id follows the same contract as POST /api/dispense and POST /api/intake
+ * (see docs/ESSENTIAL_COMMODITIES_OFFLINE_DESIGN.md in the envo-wms sibling project).
  */
 router.post('/', async (req, res) => {
   try {
@@ -32,7 +37,8 @@ router.post('/', async (req, res) => {
       batch_number,
       section,
       location_type,
-      site_name
+      site_name,
+      client_txn_id
     } = req.body
 
     // Validate required fields
@@ -42,6 +48,13 @@ router.post('/', async (req, res) => {
         error: 'Missing required fields: facility_id, commodity_id, quantity, adjustment_type, reason, adjusted_by',
         code: 'MISSING_FIELDS'
       })
+    }
+
+    let validatedTxnId
+    try {
+      validatedTxnId = IdempotencyService.validate(client_txn_id)
+    } catch (idErr) {
+      return sendValidationError(res, idErr.message, 'client_txn_id')
     }
 
     // Validate quantity is positive
@@ -102,7 +115,9 @@ router.post('/', async (req, res) => {
       batch_number,
       section,
       location_type,
-      site_name
+      site_name,
+      client_txn_id: validatedTxnId,
+      actor_user_id: req.user?.sub ?? null
     })
 
     res.status(201).json({
@@ -112,8 +127,9 @@ router.post('/', async (req, res) => {
     })
   } catch (err) {
     // 400 = a required field (e.g. compulsory notes); 409 = the bin cannot cover the
-    // decrease. Both are expected refusals, not server faults, so pass the real
-    // message through instead of flattening everything to 500.
+    // decrease, or a client_txn_id was reused for a different operation. Both are
+    // expected refusals, not server faults, so pass the real message through instead
+    // of flattening everything to 500.
     const status = [400, 409].includes(err.status) ? err.status : 500
     if (status === 500) console.error('Error recording adjustment:', err)
     res.status(status).json({
