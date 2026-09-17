@@ -7,6 +7,7 @@ import { AuthScreen } from './components/AuthScreen'
 import { ModulePicker } from './components/ModulePicker'
 import { Sidebar } from './components/Sidebar'
 import { Toast } from './components/ui/Toast'
+import { UpdateToast } from './components/UpdateToast'
 
 // Pharmacy pages
 import { Dashboard as PharmDashboard } from './pages/pharmacy/Dashboard'
@@ -320,6 +321,7 @@ export default function App() {
       <>
         <AuthScreen onSuccess={() => {}} />
         <Toast />
+        <UpdateToast />
       </>
     )
   }
@@ -330,6 +332,7 @@ export default function App() {
       <>
         <ModulePicker />
         <Toast />
+        <UpdateToast />
       </>
     )
   }
@@ -341,6 +344,7 @@ export default function App() {
     <>
       <AppContent />
       <Toast />
+      <UpdateToast />
     </>
   )
 }
