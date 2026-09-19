@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../lib/api'
+import { offlineAdjustment } from '../../lib/offlineWrite'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -324,8 +325,16 @@ export function Adjustment() {
     if (binStock == null) { setMsg({type:'error',text:`No stock record for ${binStockLabel}.`}); setSaving(false); return }
 
     // Records the adjustment AND applies it to the store stock (transactional, server-side).
+    // offlineAdjustment is a no-op passthrough outside the Essential module — HIV's
+    // behaviour here is unchanged (see lib/offlineWrite.js). Only this single-write
+    // path is wired: the "Returned from..." flows above make a SECOND, separate live
+    // call right after (debiting the site/dispensary) that isn't safe to queue
+    // independently — a device that drops offline between the two calls would credit
+    // the store without ever debiting the source. Left online-only until that gets
+    // its own atomic treatment.
+    let result
     try {
-      await api.adjustments.record({
+      result = await offlineAdjustment({
         facility_id:fid, commodity_id:commId, quantity:parseInt(qty),
         adjustment_type:adjType, reason, adjusted_by:adjBy||null,
         reference_number:adjRef||null, notes:adjNotes||null, adjusted_at:new Date().toISOString(),
@@ -336,8 +345,13 @@ export function Adjustment() {
     } catch (error) { setMsg({type:'error',text:'Error: '+error.message}); setSaving(false); return }
 
     const newQty = adjType==='Increase' ? binStock + parseInt(qty) : Math.max(0, binStock - parseInt(qty))
-    toast('Adjustment saved','green')
-    setMsg({type:'success',text:`Adjustment saved. ${binStockLabel} now holds ${fmtStockQty(newQty, selectedComm)}.`})
+    if (result?.queued) {
+      toast('Adjustment recorded, waiting to sync','amber')
+      setMsg({type:'success',text:`Saved on this device. No connection right now; it will sync automatically.`})
+    } else {
+      toast('Adjustment saved','green')
+      setMsg({type:'success',text:`Adjustment saved. ${binStockLabel} now holds ${fmtStockQty(newQty, selectedComm)}.`})
+    }
     setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setSelectedLot(null)
     await loadStock()
     loadRecent()
