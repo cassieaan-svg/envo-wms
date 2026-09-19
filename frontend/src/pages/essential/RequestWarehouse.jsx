@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
+import { offlineWarehouseRequest } from '../../lib/offlineWrite'
 import { useAppStore } from '../../store/appStore'
 import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { isValidNgPhone as validNgPhone } from '../../lib/phone'
@@ -110,7 +111,11 @@ export function RequestWarehouse() {
     if (!lines.length) return
     setBusy(true); setMsg(null)
     try {
-      const created = await api.warehouseRequests.create({
+      // offlineWarehouseRequest is a no-op passthrough outside the Essential module
+      // (see lib/offlineWrite.js). Queuing only covers the device-to-EnVo leg —
+      // reaching the actual warehouse still depends on EnVo's own already-durable
+      // outbox to WMS, unchanged.
+      const created = await offlineWarehouseRequest({
         items: lines.map(l => ({ commodity_id: l.commodity_id, quantity: l.quantity, unit_price: l.unit_price })),
         requestedBy: name.trim(),
         requesterPhone: phone.trim(),
@@ -120,9 +125,13 @@ export function RequestWarehouse() {
       localStorage.setItem('envo_requester_name', name.trim())
       localStorage.setItem('envo_requester_phone', phone.trim())
       setLines([]); setNotes('')
-      setMsg({ type: 'ok', text: created?.status === 'submitted'
-        ? `Request sent to the warehouse (${naira(created.total_amount)}).`
-        : `Request saved (${naira(created?.total_amount)}). Awaiting the warehouse — you can resubmit if it stays pending.` })
+      if (created?.queued) {
+        setMsg({ type: 'ok', text: 'Saved on this device. No connection right now — it will be sent to the warehouse as soon as you\'re back online.' })
+      } else {
+        setMsg({ type: 'ok', text: created?.status === 'submitted'
+          ? `Request sent to the warehouse (${naira(created.total_amount)}).`
+          : `Request saved (${naira(created?.total_amount)}). Awaiting the warehouse — you can resubmit if it stays pending.` })
+      }
       loadRequests()
     } catch (e) {
       setMsg({ type: 'err', text: e.message || 'Could not submit the request.' })

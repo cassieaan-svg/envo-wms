@@ -28,6 +28,11 @@ const REPLAY = {
   adjustment:      (body) => api.adjustments.record(body),
   transferDispatch: ({ id, ...body }) => api.transfers.dispatch(id, body),
   transferAccept:   ({ id, ...body }) => api.transfers.accept(id, body),
+  // Only the device-to-EnVo leg is queued here. Reaching the actual warehouse still
+  // depends on EnVo's own server-to-WMS outbox, unchanged and already durable — this
+  // just gets the request OFF the device and onto EnVo reliably (see the design doc's
+  // "one hard rule" section).
+  warehouseRequest: (body) => api.warehouseRequests.create(body),
 }
 
 function makeClientTxnId() {

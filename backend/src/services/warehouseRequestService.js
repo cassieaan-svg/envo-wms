@@ -2,6 +2,7 @@ import { query, withTransaction } from '../db.js'
 import { StockService } from './stockService.js'
 import { OutboxService } from './outboxService.js'
 import { normalizeNgPhone } from '../lib/phone.js'
+import { IdempotencyService } from './idempotencyService.js'
 
 const WMS_API_URL = process.env.WMS_API_URL || 'http://localhost:5100'
 const SERVICE_TOKEN = process.env.SERVICE_TOKEN
@@ -19,7 +20,7 @@ export class WarehouseRequestService {
   // recomputes the authoritative total when it accepts. Unpriced commodities are rejected
   // — they can't carry a line total. Writes the request 'pending', then tries to submit
   // to the WMS; a submit failure leaves it 'pending' (resubmittable), it is not lost.
-  static async create({ facilityId, items, requestedBy, requesterPhone, notes, requestedScheme }) {
+  static async create({ facilityId, items, requestedBy, requesterPhone, notes, requestedScheme, clientTxnId, actorUserId }) {
     if (!Array.isArray(items) || items.length === 0) {
       const e = new Error('At least one line item is required'); e.status = 400; throw e
     }
@@ -78,7 +79,23 @@ export class WarehouseRequestService {
     }
     const total = round2(lines.reduce((s, l) => s + l.lineTotal, 0))
 
+    let wasReplay = false
     const request = await withTransaction(async exec => {
+      // Claimed FIRST, same rule as every other offline-queueable write in this app
+      // (see idempotencyService.js): a device that queued this request locally and
+      // retries it on reconnect — because the first attempt's response never made it
+      // back — must get the ORIGINAL request back, not a second one charged against
+      // the same fund. This is the device-to-EnVo leg; the EnVo-to-WMS leg below
+      // (the outbox) was already durable and is unchanged.
+      let claimId = null
+      if (clientTxnId) {
+        const claim = await IdempotencyService.claim(exec, {
+          clientTxnId, operation: 'warehouse_request', actorUserId: actorUserId ?? null, facilityId,
+        })
+        if (!claim.claimed) { wasReplay = true; return claim.result }
+        claimId = claim.id
+      }
+
       const { rows } = await exec(
         `insert into warehouse_requests
            (facility_id, status, total_amount, requested_by, requester_phone, notes, scheme)
@@ -98,13 +115,21 @@ export class WarehouseRequestService {
       // transaction — so a request raised while the warehouse is down is delivered the
       // moment it returns, not lost. The WMS acknowledges by calling back 'submitted'.
       await OutboxService.enqueue('wms_submit', { envoRequestId: req.id }, exec)
-      return req
+
+      // Full, enriched shape (items + facility) so a replay of this claim returns
+      // exactly what the fresh path returns below — no separate getById needed on
+      // either path.
+      const full = await this.getById(req.id, exec)
+      if (claimId) await IdempotencyService.complete(exec, claimId, full)
+      return full
     })
 
-    // Kick a drain so it reaches the WMS immediately when it's up; the worker retries otherwise.
-    OutboxService.drainOnce().catch(() => {})
+    // A retry answered from the idempotency claim already delivered its outbox entry
+    // (or further) on the first attempt — nothing left to (re-)enqueue or drain, and
+    // `request` is already the full enriched shape either way.
+    if (!wasReplay) OutboxService.drainOnce().catch(() => {})
 
-    return this.getById(request.id)
+    return request
   }
 
   // Nudge a still-'pending' request's delivery (the WMS was down when it was raised).

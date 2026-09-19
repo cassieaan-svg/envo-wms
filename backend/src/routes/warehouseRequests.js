@@ -2,6 +2,7 @@ import express from 'express'
 import { WarehouseRequestService } from '../services/warehouseRequestService.js'
 import { FacilityDebtService } from '../services/facilityDebtService.js'
 import { validators, sendValidationError } from '../middleware/validation.js'
+import { IdempotencyService } from '../services/idempotencyService.js'
 import { enforceModuleAccess, ownFacilityId, resolveListFacilityIds, enforceFacilityRead } from '../middleware/scope.js'
 
 const router = express.Router()
@@ -156,13 +157,30 @@ router.get('/:id', async (req, res) => {
   }
 })
 
-/** POST /api/warehouse-requests — { items:[{ commodity_id, quantity }], notes } */
+/**
+ * POST /api/warehouse-requests — { items:[{ commodity_id, quantity }], notes,
+ * client_txn_id (optional today) }
+ *
+ * client_txn_id follows the same contract as dispense/intake/adjustments/transfers:
+ * optional for the current online-only frontend, required by the offline-capable
+ * client's own queue contract. This only covers the device-to-EnVo leg — reaching
+ * the actual warehouse still depends on connectivity to WMS, unchanged, via the
+ * outbox this always had (see docs/ESSENTIAL_COMMODITIES_OFFLINE_DESIGN.md in the
+ * envo-wms sibling project).
+ */
 router.post('/', async (req, res) => {
   try {
     // Module + grant already enforced by the router-level gate above.
     if (!isFacilityStoreManager(req)) return fail(res, 403, 'Only a facility store manager can raise a request', 'FORBIDDEN')
     const facilityId = ownFacilityId(req)
     if (!facilityId) return fail(res, 403, 'No facility in scope', 'FORBIDDEN')
+
+    let validatedTxnId
+    try {
+      validatedTxnId = IdempotencyService.validate(req.body?.client_txn_id)
+    } catch (idErr) {
+      return sendValidationError(res, idErr.message, 'client_txn_id')
+    }
 
     const { items, notes, requestedBy, requesterPhone, scheme } = req.body || {}
     const norm = (items || []).map(i => ({ commodityId: i.commodity_id ?? i.commodityId, quantity: i.quantity, unitPrice: i.unit_price ?? i.unitPrice }))
@@ -177,6 +195,8 @@ router.post('/', async (req, res) => {
       requesterPhone: requesterPhone || null,
       requestedScheme: scheme ?? null,
       notes,
+      clientTxnId: validatedTxnId,
+      actorUserId: req.user?.sub ?? null,
     })
     ok(res, created)
   } catch (err) {

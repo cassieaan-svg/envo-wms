@@ -61,3 +61,15 @@ export function offlineTransferDispatch(id, body) {
 export function offlineTransferAccept(id, body) {
   return offlineAware('transferAccept', null, { id, ...body }, () => api.transfers.accept(id, body))
 }
+
+// Raising a request is the one write that never reaches the actual warehouse while
+// offline — that leg depends on EnVo's own server having a live path to WMS, and
+// stays exactly as durable (and exactly as slow-to-arrive, if WMS itself is down)
+// as it always was. What THIS queues is only the device-to-EnVo leg: the facility
+// can compose and submit a request with zero connection, it's held safely on the
+// device, and it reaches EnVo (and from there, WMS's own already-durable outbox)
+// the moment the device reconnects. See docs/ESSENTIAL_COMMODITIES_OFFLINE_DESIGN.md
+// in the envo-wms sibling project.
+export function offlineWarehouseRequest(body) {
+  return offlineAware('warehouseRequest', null, body, () => api.warehouseRequests.create(body))
+}
