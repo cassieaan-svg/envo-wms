@@ -282,9 +282,13 @@ export function Adjustment() {
     }
 
     // ── Returned from the Dispensary ──────────────────────────────────────
-    // Internal move: credits the store and debits the dispensary. Both are the
-    // facility's own on-hand, so total SOH is unchanged (and this reason is
-    // excluded from CRRF adjustments). Validate the dispensary holds enough first.
+    // Internal move: credits the store and debits the dispensary, atomically in one
+    // server-side transaction (LogService.recordAdjustment's return_from_location_type
+    // path) — both bins read and written against the CURRENT authoritative quantity,
+    // not a client-computed absolute figure. offlineAdjustment is a no-op passthrough
+    // outside the Essential module (see lib/offlineWrite.js). The dispensary-holds-
+    // enough check here is just a fast local pre-check for a nicer error message; the
+    // server re-checks for real against its own authoritative figure.
     if (isDispReturn) {
       const dispRow = store.stockData.find(r => r.commodity_id === commId && r.location_type === 'dispensary' && r.facility_id === fid)
       const dispQty = dispRow?.quantity || 0
@@ -293,23 +297,26 @@ export function Adjustment() {
       }
       setSaving(true)
       const returnNote = `Returned from Dispensary${adjNotes ? ' — ' + adjNotes : ''}`
-      // Records the adjustment AND credits the store stock (transactional, server-side).
+      let result
       try {
-        await api.adjustments.record({
+        result = await offlineAdjustment({
           facility_id:fid, commodity_id:commId, quantity:qtyN,
           adjustment_type:'Increase', reason, adjusted_by:adjBy||null,
           reference_number:adjRef||null, notes:returnNote, adjusted_at:new Date().toISOString(),
           expiry_date:adjExpiry||null, batch_number:lotBatchParam(),
           section:commoditySection,
+          location_type:'store', return_from_location_type:'dispensary',
         })
       } catch (logErr) { setMsg({type:'error',text:'Error: '+logErr.message}); setSaving(false); return }
 
-      // Debit the dispensary (the server already credited the store).
-      await api.stock.update(dispRow.id, Math.max(0, dispQty - qtyN))
-
       const prevStore = store.stockData.find(r => r.commodity_id === commId && r.facility_id === fid && r.location_type === 'store')?.quantity || 0
-      toast('Return recorded','green')
-      setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from dispensary to store. Store stock: ${fmtStockQty(prevStore + qtyN, selectedComm)}`})
+      if (result?.queued) {
+        toast('Return recorded, waiting to sync', 'amber')
+        setMsg({type:'success',text:'Saved on this device. No connection right now; it will sync automatically.'})
+      } else {
+        toast('Return recorded','green')
+        setMsg({type:'success',text:`Returned ${fmtStockQty(qtyN, selectedComm)} from dispensary to store. Store stock: ${fmtStockQty(prevStore + qtyN, selectedComm)}`})
+      }
       setCommId(''); setQty(1); setReason(''); setAdjType(''); setAdjBy(''); setAdjRef(''); setAdjNotes(''); setAdjExpiry(''); setAdjBatch(''); setSelectedLot(null)
       await loadStock(); loadRecent(); setSaving(false)
       return

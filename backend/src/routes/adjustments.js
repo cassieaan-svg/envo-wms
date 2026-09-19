@@ -16,7 +16,9 @@ const router = express.Router()
  * Body: { facility_id, commodity_id, quantity, adjustment_type (Increase|Decrease),
  *         reason, adjusted_by, reference_number (optional), notes (optional),
  *         adjusted_at (optional), expiry_date (optional), batch_number (optional), section,
- *         client_txn_id (optional today) }
+ *         client_txn_id (optional today), return_from_location_type + return_from_site_name
+ *         (optional — makes this a RETURN: atomically credits location_type and debits
+ *         the named source bin in one transaction; see LogService.recordAdjustment) }
  *
  * client_txn_id follows the same contract as POST /api/dispense and POST /api/intake
  * (see docs/ESSENTIAL_COMMODITIES_OFFLINE_DESIGN.md in the envo-wms sibling project).
@@ -38,6 +40,8 @@ router.post('/', async (req, res) => {
       section,
       location_type,
       site_name,
+      return_from_location_type,
+      return_from_site_name,
       client_txn_id
     } = req.body
 
@@ -116,6 +120,8 @@ router.post('/', async (req, res) => {
       section,
       location_type,
       site_name,
+      return_from_location_type,
+      return_from_site_name,
       client_txn_id: validatedTxnId,
       actor_user_id: req.user?.sub ?? null
     })

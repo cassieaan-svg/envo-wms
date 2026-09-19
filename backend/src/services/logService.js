@@ -1278,12 +1278,25 @@ export class LogService {
 
   /**
    * Record a stock adjustment and apply it to the facility store stock.
+   *
+   * `return_from_location_type` (+ `return_from_site_name`) makes this a RETURN: one
+   * atomic transaction that credits `location_type` (normally the store) AND debits
+   * the named source bin (normally the dispensary), both read and written
+   * server-side against the CURRENT authoritative quantity. This replaced a
+   * client-orchestrated two-call version (POST here, then a separate PATCH setting
+   * the dispensary to an absolute client-computed figure) that could never be made
+   * offline-safe: an absolute-quantity overwrite computed from a possibly-stale
+   * client snapshot is exactly the trap the ledger-entry rule in
+   * docs/ESSENTIAL_COMMODITIES_OFFLINE_DESIGN.md (envo-wms sibling project) warns
+   * against, and queuing the two calls independently could apply one without the
+   * other if the device dropped offline mid-flow.
    */
   static async recordAdjustment(adjustmentData) {
     const {
       facility_id, commodity_id, quantity, adjustment_type, reason, adjusted_by,
       reference_number, notes, adjusted_at, expiry_date, batch_number, section,
-      location_type = 'store', site_name = null, client_txn_id, actor_user_id
+      location_type = 'store', site_name = null, client_txn_id, actor_user_id,
+      return_from_location_type = null, return_from_site_name = null,
     } = adjustmentData
 
     if (!facility_id || !commodity_id || !quantity || !adjustment_type || !reason || !adjusted_by) {
@@ -1297,6 +1310,20 @@ export class LogService {
     }
     if ((location_type === 'dsd' || location_type === 'sdp') && !site_name) {
       throw new Error('site_name is required when adjusting a DSD/SDP bin')
+    }
+    if (return_from_location_type) {
+      if (!['store', 'dispensary', 'dsd', 'sdp'].includes(return_from_location_type)) {
+        throw new Error("return_from_location_type must be 'store', 'dispensary', 'dsd' or 'sdp'")
+      }
+      if ((return_from_location_type === 'dsd' || return_from_location_type === 'sdp') && !return_from_site_name) {
+        throw new Error('return_from_site_name is required when returning from a DSD/SDP bin')
+      }
+      if (return_from_location_type === location_type && return_from_site_name === site_name) {
+        throw new Error('return_from bin must be different from the bin being credited')
+      }
+      if (adjustment_type !== 'Increase') {
+        throw new Error('A return always credits the destination bin — adjustment_type must be "Increase"')
+      }
     }
     // Compulsory for reasons that are otherwise unexplainable after the fact.
     // Enforced here, not just in the form, so the API cannot bypass it.
@@ -1373,6 +1400,17 @@ export class LogService {
         // would flatten that into "no preference" and draw FEFO across every lot —
         // retiring a batched lot when the operator explicitly picked "(no batch)".
         await LotService.debit(exec, bin, qty, { batch: batch_number == null ? null : batch_number })
+      }
+
+      // A return: debit the source bin by the SAME amount, read and written here —
+      // server-side, against the current authoritative quantity — never a client-
+      // computed absolute figure. FEFO-drawn, matching a normal Decrease.
+      if (return_from_location_type) {
+        const sourceBin = { facility_id, commodity_id, location_type: return_from_location_type, site_name: return_from_site_name || null }
+        const sourceCurrent = await binSoh(exec, sourceBin)
+        const sourceCovers = await assertBinCoversAdj(exec, sourceCurrent, qty, commodity_id, binLabel(sourceBin))
+        await setBinSoh(exec, sourceBin, sourceCovers ? sourceCurrent - qty : Math.max(0, sourceCurrent - qty))
+        await LotService.debit(exec, sourceBin, qty, {})
       }
 
       if (claimId) await IdempotencyService.complete(exec, claimId, adjustmentLog)
