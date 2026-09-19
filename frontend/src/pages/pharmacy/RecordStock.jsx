@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../../lib/api'
+import { offlineDispense } from '../../lib/offlineWrite'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -212,9 +213,12 @@ export function RecordStock() {
 
     setSaving(true)
     // One call per commodity — each becomes its own dispense record for the day.
+    // offlineDispense is a no-op passthrough outside the Essential module (see
+    // lib/offlineWrite.js) — HIV's behaviour here is unchanged.
+    let anyQueued = false
     for (const item of batch) {
       try {
-        await api.dispense.record({
+        const result = await offlineDispense({
           facility_id:   fid,
           commodity_id:  item.commodityId,
           quantity:      item.quantity,
@@ -231,11 +235,17 @@ export function RecordStock() {
                 expiry_date:  item.batch?.expiry_date  || undefined }),
           section:       commoditySection,
         })
+        if (result?.queued) anyQueued = true
       } catch (error) { setMsg({ type:'error', text:'Error: '+error.message }); setSaving(false); return }
     }
 
-    toast(`Stock recorded — ${batch.length} item(s)`, 'green')
-    setMsg({ type:'success', text:`Stock saved successfully — ${batch.length} record(s).` })
+    if (anyQueued) {
+      toast(`Recorded — ${batch.length} item(s), waiting to sync`, 'amber')
+      setMsg({ type:'success', text:`Saved on this device — ${batch.length} record(s). No connection right now; it will sync automatically.` })
+    } else {
+      toast(`Stock recorded — ${batch.length} item(s)`, 'green')
+      setMsg({ type:'success', text:`Stock saved successfully — ${batch.length} record(s).` })
+    }
     setItems([]); setCommId(''); setPickerBatch(null); setPendingBatches([]); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
     setDate(todayLagos())
     if (!isDSD) await loadStock()

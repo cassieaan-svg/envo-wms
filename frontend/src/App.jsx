@@ -8,6 +8,7 @@ import { ModulePicker } from './components/ModulePicker'
 import { Sidebar } from './components/Sidebar'
 import { Toast } from './components/ui/Toast'
 import { UpdateToast } from './components/UpdateToast'
+import { OfflineSync } from './components/OfflineSync'
 
 // Pharmacy pages
 import { Dashboard as PharmDashboard } from './pages/pharmacy/Dashboard'
@@ -258,6 +259,7 @@ function AppContent() {
       <Sidebar />
       <main className="lg:ml-56 p-6 pt-20 lg:pt-6 min-h-screen">
         <div className="max-w-6xl mx-auto">
+          <OfflineSync />
           <PageRouter />
         </div>
       </main>

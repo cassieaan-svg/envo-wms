@@ -94,6 +94,14 @@ const patch = (path, body)   => request(`/api${path}`, { method: 'PATCH',  auth:
 const del   = (path)         => request(`/api${path}`, { method: 'DELETE', auth: true }).then(r => r?.data)
 
 export const api = {
+  // The offline device's one-pull cache: catalogue, this facility's stock, the
+  // facility record. Facility-tier + Essential-module only — see
+  // routes/facilitySnapshot.js. Whole envelope (getRaw), not just `.data` — the
+  // caller wants `version`/`generatedAt`/`counts` alongside `data`.
+  facilitySnapshot: {
+    get: () => getRaw('/facility-snapshot'),
+  },
+
   stock: {
     // facility_id optional: omit it to get the caller's whole scoped set (admin
     // / aggregate views). Other params: commodity_id, commodity_ids, location_type,

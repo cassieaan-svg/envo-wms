@@ -16,6 +16,7 @@ export function Toast() {
   const colors = {
     green: 'border-green-500/40 text-green-400',
     red:   'border-red-500/40 text-red-400',
+    amber: 'border-amber-500/40 text-amber-400',
     '':    'border-white/15 text-gray-200',
   }
 

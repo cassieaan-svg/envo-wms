@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../lib/api'
+import { offlineIntake } from '../../lib/offlineWrite'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
 import { toast } from '../../components/ui/Toast'
@@ -109,8 +110,11 @@ export function Intake() {
 
     setSaving(true)
     // One call records the intake AND credits the store stock (transactional, server-side).
+    // offlineIntake is a no-op passthrough outside the Essential module — HIV's
+    // behaviour here is unchanged (see lib/offlineWrite.js).
+    let result
     try {
-      await api.intake.record({
+      result = await offlineIntake({
         facility_id: fid, commodity_id: commId, quantity: qty,
         supplier_source: supplierSource || null,
         batch_number: batch || null, expiry_date: expiry || null,
@@ -123,8 +127,13 @@ export function Intake() {
       })
     } catch (e1) { setMsg({type:'error',text:'Error: '+e1.message}); setSaving(false); return }
 
-    toast(`Intake of ${qty} ${selectedComm?.unit || dispUnit} recorded`, 'green')
-    setMsg({type:'success',text:'Intake saved. Stock updated.'})
+    if (result?.queued) {
+      toast(`Intake of ${qty} ${selectedComm?.unit || dispUnit} recorded, waiting to sync`, 'amber')
+      setMsg({type:'success',text:'Saved on this device. No connection right now; it will sync automatically.'})
+    } else {
+      toast(`Intake of ${qty} ${selectedComm?.unit || dispUnit} recorded`, 'green')
+      setMsg({type:'success',text:'Intake saved. Stock updated.'})
+    }
     setCommId(''); setQty(1); setSupplier(''); setSupplierOther(''); setBatch('')
     setExpiry(''); setRef(''); setCondition('Good'); setRecBy(defaultReceivedBy); setNotes('')
     setRecDate(todayLagos())
