@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../../lib/api'
+import { offlineTransferDispatch, offlineTransferAccept } from '../../lib/offlineWrite'
 import { subscribeRealtime } from '../../lib/realtime'
 import { useAppStore } from '../../store/appStore'
 import { useStock } from '../../hooks/useStock'
@@ -337,8 +338,10 @@ export function Transfers() {
     const parsedQty = parseInt(dispatchQty)
     if (!parsedQty || parsedQty < 1) { toast('Qty issued must be at least 1', 'red'); return }
     setDispatchLoading(true)
-    // Server marks in_transit, sets qty, appends the dispatch note, and decrements sender store.
-    let updatedRow
+    // Server marks in_transit, sets qty, appends the dispatch note, and decrements
+    // sender store. offlineTransferDispatch is a no-op passthrough outside the
+    // Essential module — HIV's behaviour here is unchanged (see lib/offlineWrite.js).
+    let updatedRow, dispatchResult
     try {
       if (pickedLots.length) {
         const totalPicked = pickedLots.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)
@@ -365,7 +368,7 @@ export function Transfers() {
         const expiryOf = l => ymdLagos(l.selected.expiry_date) || ymdLagos(String(l.fixExpiry || '').trim())
         const batchLabel = [...new Set(pickedLots.map(batchOf).filter(Boolean))].join(', ')
         const earliestExpiry = pickedLots.map(expiryOf).filter(Boolean).sort()[0] || null
-        updatedRow = await api.transfers.dispatch(t.id, {
+        dispatchResult = await offlineTransferDispatch(t.id, {
           approved_by: dispatchApprovedBy.trim(),
           carrier: dispatchCarrier.trim(),
           expiry: earliestExpiry,
@@ -376,15 +379,20 @@ export function Transfers() {
       } else {
         // Nothing typed on the FEFO path: the server derives batch and expiry from the
         // lots it draws, and refuses if any of them is undated.
-        updatedRow = await api.transfers.dispatch(t.id, {
+        dispatchResult = await offlineTransferDispatch(t.id, {
           approved_by: dispatchApprovedBy.trim(),
           carrier: dispatchCarrier.trim(),
           quantity: parsedQty,
         })
       }
     } catch (error) { toast('Error confirming dispatch: ' + error.message, 'red'); setDispatchLoading(false); return }
+    updatedRow = dispatchResult?.queued ? null : dispatchResult
     await loadStock()
-    toast('Transfer dispatched — awaiting receiver acceptance', 'green')
+    if (dispatchResult?.queued) {
+      toast('Dispatch recorded, waiting to sync', 'amber')
+    } else {
+      toast('Transfer dispatched — awaiting receiver acceptance', 'green')
+    }
     setPending(prev => prev.map(p => p.id === t.id ? { ...p, status: 'in_transit', quantity: parsedQty, notes: updatedRow?.notes ?? p.notes } : p))
     setDispatchingId(null); setDispatchApprovedBy(''); setDispatchCarrier(''); setDispatchBatch(''); setDispatchQty(1); setDispatchLots([]); setDispatchLoading(false)
   }
@@ -414,12 +422,18 @@ export function Transfers() {
     if (!acceptReceiverName.trim()) { toast('Receiver name is required', 'red'); return }
     if (!t.sending_facility_id) { toast('Transfer has no sending facility — cannot accept', 'red'); return }
     setAcceptLoading(true)
-    // Server credits the receiver store, writes the intake_log entry, and marks accepted.
+    // Server credits the receiver store and marks accepted. offlineTransferAccept is
+    // a no-op passthrough outside the Essential module (see lib/offlineWrite.js).
+    let acceptResult
     try {
-      await api.transfers.accept(t.id, { received_by: acceptReceiverName.trim() })
+      acceptResult = await offlineTransferAccept(t.id, { received_by: acceptReceiverName.trim() })
     } catch (updateErr) { toast('Error updating transfer status: ' + updateErr.message, 'red'); setAcceptLoading(false); return }
     setAcceptingId(null); setAcceptReceiverName(''); setAcceptLoading(false)
-    toast('Transfer accepted — stock updated', 'green')
+    if (acceptResult?.queued) {
+      toast('Accept recorded, waiting to sync', 'amber')
+    } else {
+      toast('Transfer accepted — stock updated', 'green')
+    }
     await loadStock(); loadPending(); loadMyRequests()
   }
 

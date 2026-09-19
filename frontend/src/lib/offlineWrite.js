@@ -47,3 +47,17 @@ export function offlineIntake(body) {
 export function offlineAdjustment(body) {
   return offlineAware('adjustment', body.facility_id, body, () => api.adjustments.record(body))
 }
+
+// Transfers: dispatch debits the sender, accept credits the receiver — two
+// independent ledger events, each its own idempotent write server-side (see
+// TransferService.dispatch/accept in the backend and the design doc's "two
+// independent ledger events" section). `id` is the transfer's own id, not a
+// facility — the queued entry replays it via REPLAY.transferDispatch/
+// transferAccept in lib/offlineQueue.js, which unpacks it back out.
+export function offlineTransferDispatch(id, body) {
+  return offlineAware('transferDispatch', null, { id, ...body }, () => api.transfers.dispatch(id, body))
+}
+
+export function offlineTransferAccept(id, body) {
+  return offlineAware('transferAccept', null, { id, ...body }, () => api.transfers.accept(id, body))
+}
