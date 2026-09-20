@@ -149,12 +149,11 @@ export function Intake() {
     // allowedCategoriesFor, not a raw SECTION_CATEGORIES lookup: it folds in the
     // per-login Essential grant and the hub-store override, so this list matches
     // what the API will actually return.
-    const cats = allowedCategoriesFor(
-      store.commoditySection, store.currentFacility?.name,
-      store.user?.user_metadata?.essential === true) || []
-    const commodity_ids = cats.length ? store.allCommodities.map(c => c.id) : undefined
+    // No commodity_ids: the token/section already scopes this server-side
+    // (sectionFilter), and enumerating the whole catalogue here was what
+    // tripped the reverse proxy's header-size limit for a large catalogue.
     const data = await api.intake.history({
-      facility_id: fid, date: d, commodity_ids, section: commoditySection || undefined,
+      facility_id: fid, date: d, section: commoditySection || undefined,
     }).catch(() => [])
     setRecent(data || [])
     setLoadingR(false)

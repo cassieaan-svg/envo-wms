@@ -39,7 +39,6 @@ export function Log() {
   useEffect(() => { if (store.pendingReportsTab) store.setPendingReportsTab(false) }, [])
 
   const fid    = store.currentFacility?.id
-  const commIds = store.allCommodities.map(c => c.id)
   const isAdmin = store.isAdmin()
   // Admins see a cross-facility feed across their whole jurisdiction by default.
   // The FacilityPicker narrows it: a single facility pins the log to it; an
@@ -65,7 +64,9 @@ export function Log() {
     const res = await api.activity({
       facility_id: scopeFid || undefined,
       facility_ids: scopedFacIds || undefined,
-      commodity_ids: !isAdmin && commIds && commIds.length ? commIds : undefined,
+      // No commodity_ids: the token/section already scopes this server-side
+      // (sectionFilter), and enumerating the whole catalogue here was what
+      // tripped the reverse proxy's header-size limit for a large catalogue.
       section: commoditySection || undefined,
       from,
       types: typeFilter || undefined,

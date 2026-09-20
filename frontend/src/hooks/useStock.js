@@ -14,15 +14,18 @@ let inFlightKey = null
 export function useStock() {
   const loadStock = async () => {
     const state = useAppStore.getState()
-    const { allCommodities, commoditySection } = state
+    const { commoditySection } = state
     const { fid, scopeIds } = state.getAdminStockScope()
 
     // Facility view-filter: a single selected facility, an LGA/state subset, or
     // (overall admin, no filter) none — in which case the server returns the
     // caller's full token scope. The server intersects this with that scope.
     const facility_ids = fid ? [fid] : (scopeIds && scopeIds.length ? scopeIds : undefined)
-    // Commodity section: the ids are already the section-filtered catalogue.
-    const commodity_ids = commoditySection ? allCommodities.map(c => c.id) : undefined
+    // No commodity_ids: the token already restricts the response to the
+    // caller's section server-side (sectionFilter), and `allCommodities` IS that
+    // same section already — enumerating every id here just duplicated the
+    // scoping while adding enough URL length to trip the reverse proxy's 431
+    // limit once a section's catalogue got large (see Essential Commodities).
 
     const key = `${fid || (facility_ids ? facility_ids.join(',') : 'all')}|${commoditySection || ''}`
     // A caller with the same scope while a load is already running rides that one.
@@ -36,7 +39,7 @@ export function useStock() {
       const PAGE = 50000
       let all = []
       for (let offset = 0; ; offset += PAGE) {
-        const data = await api.stock.list({ facility_ids, commodity_ids, limit: PAGE, offset })
+        const data = await api.stock.list({ facility_ids, limit: PAGE, offset })
         if (!data || !data.length) break
         all = all.concat(data)
         if (data.length < PAGE) break

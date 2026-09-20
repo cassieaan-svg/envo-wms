@@ -327,8 +327,11 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     // truth, so a batch that is ALREADY expired but still on the shelf surfaces
     // here (the old intake-history estimate inferred those away). Expired lots are
     // always returned; `expiry_to` caps the future look-ahead.
+    // No commodity_ids: the token/section already scopes this server-side, and
+    // enumerating the whole catalogue here was what tripped the reverse proxy's
+    // header-size limit for a large (e.g. Essential Commodities) catalogue.
     const lots = await api.stock.lotsExpiry({
-      facility_id: fid, commodity_ids: commIds,
+      facility_id: fid,
       expiry_to: cutoff, section: commoditySection || undefined,
     }).catch(() => [])
     setExpiry(lots || [])

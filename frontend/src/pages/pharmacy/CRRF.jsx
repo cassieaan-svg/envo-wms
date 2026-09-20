@@ -103,7 +103,6 @@ export function CRRF() {
   const [allData, setAllData] = useState([])       // full per-commodity computed set (for template matching)
 
   const fid = store.getEffectiveFacilityId?.() || store.adminFilterFacility?.id || store.currentFacility?.id
-  const commIds = store.allCommodities.map(c => c.id)
   const categories = [...new Set(store.allCommodities.map(c => c.category).filter(Boolean))].sort()
   const facility = store.adminFilterFacility || store.currentFacility
 
@@ -146,15 +145,19 @@ export function CRRF() {
       return all
     }
 
+    // No commodity_ids on any of these: the token/section already scopes each
+    // one server-side (sectionFilter), and enumerating the whole catalogue here
+    // was what tripped the reverse proxy's header-size limit for a large
+    // catalogue.
     const [intakeRes, dispRes, adjRes, stockRes, dsdRes, sdpRes, transferRes] = await Promise.all([
-      fetchAllPaged(api.intake.history,      { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
-      fetchAllPaged(api.dispense.history,     { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
-      fetchAllPaged(api.adjustments.history,  { facility_id: fid, commodity_ids: commIds, ...wide, section: sec2 }),
+      fetchAllPaged(api.intake.history,      { facility_id: fid, ...wide, section: sec2 }),
+      fetchAllPaged(api.dispense.history,     { facility_id: fid, ...wide, section: sec2 }),
+      fetchAllPaged(api.adjustments.history,  { facility_id: fid, ...wide, section: sec2 }),
       // TOTAL SOH as it stands right now: store + dispensary (/api/stock) plus the
       // facility's DSD and SDP site stock, so internal store↔site moves net out.
       // One row per commodity per bin — bounded by the catalogue, not by activity —
       // so this stays under the limit and needs no paging.
-      api.stock.list({ facility_ids: [fid], commodity_ids: commIds }).catch(() => []),
+      api.stock.list({ facility_ids: [fid] }).catch(() => []),
       api.stock.dsd.list({ facility_id: fid }).catch(() => []),
       api.stock.sdp.list({ facility_id: fid }).catch(() => []),
       // section already scopes transfers; date_field/resolved_at uses plain dates.

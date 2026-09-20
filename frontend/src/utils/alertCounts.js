@@ -47,8 +47,10 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
   // so this matches the Alerts page (no intake-history estimate to cap).
   const today  = new Date()
   const cutoff = new Date(today.getTime() + expiryDays * 86400000).toISOString().split('T')[0]
+  // No commodity_ids here either, for the same reason as the stock.summary call
+  // above — the token/section already scopes this server-side.
   const exp = await api.stock.lotsExpiry({
-    facility_id: fid, commodity_ids: commIds,
+    facility_id: fid,
     expiry_to: cutoff, section: commoditySection || undefined,
   }).catch(() => [])
   const expiry = (exp || []).length

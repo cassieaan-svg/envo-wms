@@ -176,7 +176,7 @@ const normalizeTransfer = (row, fid) => {
 // it already applies the right date field, facility scoping (server-side) and the
 // nested commodity/facility objects the normalizers read. `fid` pins one facility;
 // `scopeIds` is an admin's multi-facility view-filter (intersected server-side).
-const queryLog = async ({ listFn, from, to, fid, scopeIds, commIds, section }) => {
+const queryLog = async ({ listFn, from, to, fid, scopeIds, section }) => {
   const { start, end } = toRange(from, to)
   const PAGE = 1000
   let all = []
@@ -186,7 +186,6 @@ const queryLog = async ({ listFn, from, to, fid, scopeIds, commIds, section }) =
       data = await listFn({
         facility_id: fid || undefined,
         facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-        commodity_ids: (commIds && commIds.length) ? commIds : undefined,
         from: start, to: end,
         section: section || undefined,
         limit: PAGE, offset,
@@ -240,13 +239,12 @@ export function normalizeFeedRow(row, fid) {
 // One page of the merged feed. Returns { rows, total } so the caller can page
 // without a second count query.
 export async function fetchActivityPage({
-  from, to, fid, scopeIds, commIds, section, types, category, externalOnly, limit = 50, offset = 0,
+  from, to, fid, scopeIds, section, types, category, externalOnly, limit = 50, offset = 0,
 }) {
   const { start, end } = toRange(from, to)
   const res = await api.activity({
     facility_id: fid || undefined,
     facility_ids: (!fid && scopeIds && scopeIds.length) ? scopeIds : undefined,
-    commodity_ids: (commIds && commIds.length) ? commIds : undefined,
     from: start, to: end,
     section: section || undefined,
     types: (types && types.length) ? types.join(',') : undefined,
