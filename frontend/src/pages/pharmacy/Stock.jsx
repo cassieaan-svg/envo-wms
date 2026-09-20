@@ -84,8 +84,11 @@ export function Stock() {
       const lab     = isLabCategory(comm?.category)
       const dsdQty  = g.dsd_qty || 0
       const sdpQty  = g.sdp_qty || 0
-      // Lab total = store + SDP; pharmacy total = store + dispensary + DSD
-      const quantity = lab ? (storeQty + sdpQty) : (storeQty + dispensaryQty + dsdQty)
+      // Lab total = store + SDP; Essential has no dispensary or DSD, total = store
+      // only; pharmacy (HIV) total = store + dispensary + DSD.
+      const quantity = lab ? (storeQty + sdpQty)
+        : store.module === 'essential' ? storeQty
+        : (storeQty + dispensaryQty + dsdQty)
       return {
         id: c.id, commodity_id: c.id, commodities: comm,
         storeQty, dispensaryQty, dsdQty, sdpQty, _isLab: lab,
@@ -222,14 +225,14 @@ export function Stock() {
                 <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
+                <StockLevelsTable items={byCategory[cat]} essential={store.module === 'essential'} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
               </div>
             </Card>
           ))
         ) : (
           <Card className="stick-cols">
             <div className="table-wrap">
-              <StockLevelsTable items={filtered} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
+              <StockLevelsTable items={filtered} essential={store.module === 'essential'} onDrill={(row, kind) => setDrill({ row, kind })} onBatchDrill={(row, bin = null) => setBatchDrill({ row, bin })} />
             </div>
           </Card>
         )

@@ -23,6 +23,10 @@ export function RecordStock() {
   const accessLevel  = useAppStore(s => s.accessLevel)
   const dsdSiteName  = useAppStore(s => s.dsdSiteName)
   const isDSD = accessLevel === 'facility' && facilityRole === 'dsd'
+  // Essential Commodities has no dispensary bin — consumption debits store
+  // directly (see logService.recordDispense, which enforces this server-side too).
+  const isEssential = store.module === 'essential'
+  const consumeBin = isEssential ? 'store' : 'dispensary'
 
   const [commId, setCommId]     = useState('')
   // The batch the user chose for the commodity currently in the picker. Facility
@@ -82,7 +86,7 @@ export function RecordStock() {
   const selectedComm = store.allCommodities.find(c => c.id === commId)
   const packSize     = getCommodityPackSize(selectedComm)
   const dispUnit     = getCommodityDispenseUnit(selectedComm)
-  const stockRow     = isDSD ? dsdStockRow : store.stockData.find(r => r.commodity_id === commId && (!fid || r.facility_id === fid) && r.location_type === 'dispensary')
+  const stockRow     = isDSD ? dsdStockRow : store.stockData.find(r => r.commodity_id === commId && (!fid || r.facility_id === fid) && r.location_type === consumeBin)
 
   // Resolve current stock-on-hand for a commodity in this mode. Returns a number, or null if no record.
   async function resolveStock(commodityId) {
@@ -90,7 +94,7 @@ export function RecordStock() {
       const rows = await api.stock.dsd.list({ facility_id: fid, dsd_site_name: dsdSiteName, commodity_id: commodityId }).catch(() => [])
       return rows && rows[0] ? rows[0].quantity : null
     }
-    const row = store.stockData.find(s => s.commodity_id === commodityId && s.facility_id === fid && s.location_type === 'dispensary')
+    const row = store.stockData.find(s => s.commodity_id === commodityId && s.facility_id === fid && s.location_type === consumeBin)
     return row ? row.quantity : null
   }
 
@@ -264,7 +268,7 @@ export function RecordStock() {
           dispensed_at:  entryTimestamp(date),
           ...(isDSD
             ? { notes: `[DSD: ${dsdSiteName}]${notes ? ' ' + notes : ''}`, dsd_site_name: dsdSiteName }
-            : { notes: notes || null, location_type: 'dispensary',
+            : { notes: notes || null, location_type: consumeBin,
                 // A picked lot sends its batch, using '' for the "(no batch)" lot so the
                 // server debits THAT lot. `|| undefined` dropped the field entirely, so the
                 // server fell back to FEFO and could retire a different batch than the one
@@ -385,7 +389,7 @@ export function RecordStock() {
               <div>
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Batch to consume</label>
                 <div ref={batchBoxRef}>
-                  <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType="dispensary"
+                  <BatchSelect key={commId} facilityId={fid} commodityId={commId} locationType={consumeBin}
                     value={pickerBatch?.key} onSelect={handleSelectBatch}
                     onLotsLoaded={setBinLots} refreshToken={lotsRefresh} />
                 </div>
@@ -413,7 +417,10 @@ export function RecordStock() {
                 )}
                 {pickerBatch?.expired && (
                   <div className="mt-2 rounded-lg px-3 py-2 text-xs bg-red-500/10 border border-red-500/20 text-red-300">
-                    ⚠ This batch expired{pickerBatch.expiry_date ? ` on ${fmtDate(pickerBatch.expiry_date)}` : ''}. Move it back to store (adjustment: “Returned from Dispensary”) and adjust it out before deducting — expired stock can’t be dispensed.
+                    ⚠ This batch expired{pickerBatch.expiry_date ? ` on ${fmtDate(pickerBatch.expiry_date)}` : ''}.
+                    {isEssential
+                      ? ' Adjust it out (reason: “Expired”) before deducting — expired stock can’t be dispensed.'
+                      : ' Move it back to store (adjustment: “Returned from Dispensary”) and adjust it out before deducting — expired stock can’t be dispensed.'}
                   </div>
                 )}
                 {/* Batches built up inline for this commodity — like the transfers
@@ -562,7 +569,7 @@ export function RecordStock() {
       )}
       {showLotEditor && commId && (
         <LotEditor facilityId={fid} commodityId={commId} commodityName={selectedComm?.name}
-          locationType="dispensary" canEdit={canManage}
+          locationType={consumeBin} canEdit={canManage}
           onClose={()=>setShowLotEditor(false)} onSaved={()=>setLotsRefresh(n=>n+1)} />
       )}
       {historyRecord && (

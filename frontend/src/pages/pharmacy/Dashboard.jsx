@@ -125,7 +125,10 @@ export function Dashboard() {
     const lab           = isLabCategory(comm?.category)
     const dsdQty        = g.dsd_qty || 0
     const sdpQty        = g.sdp_qty || 0
-    const quantity      = lab ? (storeQty + sdpQty) : (storeQty + dispensaryQty + dsdQty)
+    // Essential has no dispensary or DSD, total = store only.
+    const quantity      = lab ? (storeQty + sdpQty)
+      : store.module === 'essential' ? storeQty
+      : (storeQty + dispensaryQty + dsdQty)
     const amc           = getAMC({ commodity_id: c.id, baseline_amc: g.baseline_amc || 0 })
     return {
       id: c.id, commodity_id: c.id, commodities: comm,
@@ -294,7 +297,7 @@ export function Dashboard() {
                 <span className="text-xs text-gray-500">{outInUse.length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={outInUse} onDrill={(row, kind) => setDrill({ row, kind })} />
+                <StockLevelsTable items={outInUse} essential={store.module === 'essential'} onDrill={(row, kind) => setDrill({ row, kind })} />
               </div>
             </Card>
           )}
@@ -305,7 +308,7 @@ export function Dashboard() {
                 <span className="text-xs text-gray-500">{outNotInUse.length} commodities</span>
               </CardHeader>
               <div className="table-wrap">
-                <StockLevelsTable items={outNotInUse} onDrill={(row, kind) => setDrill({ row, kind })} />
+                <StockLevelsTable items={outNotInUse} essential={store.module === 'essential'} onDrill={(row, kind) => setDrill({ row, kind })} />
               </div>
             </Card>
           )}
@@ -318,7 +321,7 @@ export function Dashboard() {
               <span className="text-xs text-gray-500">{byCategory[cat].length} commodities</span>
             </CardHeader>
             <div className="table-wrap">
-              <StockLevelsTable items={byCategory[cat]} onDrill={(row, kind) => setDrill({ row, kind })} />
+              <StockLevelsTable items={byCategory[cat]} essential={store.module === 'essential'} onDrill={(row, kind) => setDrill({ row, kind })} />
             </div>
           </Card>
         ))

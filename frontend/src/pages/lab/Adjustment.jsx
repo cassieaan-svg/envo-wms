@@ -345,7 +345,12 @@ export function Adjustment() {
                 <select value={reason} onChange={e=>onReasonChange(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                   <option value="">Select reason…</option>
-                  {Object.keys(RULES).filter(r=>!RETIRED_REASONS.includes(r)).map(r=><option key={r}>{r}</option>)}
+                  {Object.keys(RULES)
+                    .filter(r => !RETIRED_REASONS.includes(r))
+                    // Essential Commodities has no SDP site or state-office hub-store
+                    // concept — neither reason applies. Plain "Returned to store" stays.
+                    .filter(r => !(store.module === 'essential' && [RETURN_REASON, 'State Office'].includes(r)))
+                    .map(r=><option key={r}>{r}</option>)}
                 </select>
               </div>
               <div>
@@ -429,7 +434,8 @@ export function Adjustment() {
                   <select value={adjBin} onChange={e=>{setAdjBin(e.target.value); setAdjBinSite('')}}
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                     <option value="store">Main Store</option>
-                    <option value="sdp">SDP site</option>
+                    {/* Essential Commodities has no SDP site — store is the only bin. */}
+                    {store.module !== 'essential' && <option value="sdp">SDP site</option>}
                   </select>
                 </div>
                 {adjBin === 'sdp' && (

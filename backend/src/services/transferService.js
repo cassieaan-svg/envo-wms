@@ -871,6 +871,16 @@ export class TransferService {
     const qty = parseInt(quantity ?? transfer.quantity)
 
     return withTransaction(async exec => {
+      // Essential Commodities has no dispensary bin — internal redistribution
+      // (store → dispensary) does not apply to it, regardless of which module the
+      // caller claims to be working in. The commodity's own module is the
+      // authoritative check, not a client-supplied header.
+      const { rows: commRows } = await exec('select module from commodities where id = $1', [transfer.commodity_id])
+      if (commRows[0]?.module === 'essential') {
+        const e = new Error('Essential Commodities has no dispensary bin — internal redistribution is not available')
+        e.status = 400
+        throw e
+      }
       const storeStk = await StockService.getStockByFacilityAndCommodity(fid, transfer.commodity_id, 'store', exec)
       if (!storeStk || storeStk.quantity < qty) {
         { const e = new Error(`Insufficient store stock. Available: ${storeStk?.quantity || 0}`); e.status = 409; throw e }

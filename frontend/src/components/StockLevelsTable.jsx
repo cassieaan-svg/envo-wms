@@ -12,9 +12,11 @@ const statusBadge = { out:'out', low:'low', ok:'ok', over:'over', unknown:'unkno
 const statusLabel = { out:'Out of stock', low:'Low stock', ok:'Optimal', over:'Overstock', unknown:'No AMC' }
 const mosColor    = { out:'text-red-400', low:'text-red-400', ok:'text-green-400', over:'text-blue-400', unknown:'text-gray-500' }
 
-function buildCols(items) {
+function buildCols(items, essential) {
   const hasLab   = items.some(r => r._isLab)
-  const hasPharm = items.some(r => !r._isLab)
+  // Essential Commodities has no dispensary or DSD bin — store is the only one,
+  // so those two columns never apply regardless of what categories are in view.
+  const hasPharm = !essential && items.some(r => !r._isLab)
   const cols = [
     { key:'name',  label:'Commodity' },
     { key:'unit',  label:'Unit' },
@@ -98,8 +100,8 @@ function renderCell(r, key, onDrill, onBatchDrill) {
 
 // onDrill(row, kind) — optional. When supplied, DSD/SDP SOH cells with stock
 // become clickable to reveal the per-site breakdown.
-export function StockLevelsTable({ items, onDrill, onBatchDrill }) {
-  const cols = buildCols(items)
+export function StockLevelsTable({ items, onDrill, onBatchDrill, essential }) {
+  const cols = buildCols(items, essential)
   return (
     <table className="w-full text-sm">
       <thead>

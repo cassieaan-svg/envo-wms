@@ -121,11 +121,14 @@ async function binHasUnbatchedLot(exec, bin) {
   return rows.length > 0
 }
 
-// The bin an edited log row accounts for. dispense_log has no bin column — the
-// site is carried in the notes tag, exactly as the bin card reads it, and an
-// untagged dispense belongs to the dispensary. Adjustments carry the bin explicitly
-// (rows written before that column existed default to the store, which is what they
-// were). Intakes are always the store.
+// The bin an edited log row accounts for. DSD/SDP sites are carried in the notes
+// tag, exactly as the bin card reads it — that takes priority when present.
+// Otherwise dispense_log's own location_type column says the bin directly (added
+// so Essential's store-only dispenses and HIV's dispensary dispenses can be told
+// apart after the fact); rows written before that column existed have it null and
+// default to the dispensary, which is what they were. Adjustments carry the bin
+// explicitly (rows written before THAT column existed default to the store, which
+// is what they were). Intakes are always the store.
 function editBin(type, row) {
   const base = { facility_id: row.facility_id, commodity_id: row.commodity_id }
   if (type === 'intake') return { ...base, location_type: 'store', site_name: null }
@@ -135,7 +138,7 @@ function editBin(type, row) {
   const sdp = /\[SDP:\s*([^\]]+)\]/i.exec(notes)?.[1]?.trim()
   if (dsd) return { ...base, location_type: 'dsd', site_name: dsd }
   if (sdp) return { ...base, location_type: 'sdp', site_name: sdp }
-  return { ...base, location_type: 'dispensary', site_name: null }
+  return { ...base, location_type: row.location_type || 'dispensary', site_name: null }
 }
 
 // Human label for a bin, for error messages.
@@ -899,19 +902,29 @@ export class LogService {
       // time — so a later catalogue price change can't rewrite what a past sale is
       // reported as having been worth. Null for the (mostly HIV) commodities with no
       // catalogue price: no manufactured revenue figure.
-      const { rows: commRows } = await exec('select unit_price from commodities where id = $1', [commodity_id])
+      // `module` decides the bin below: Essential Commodities has no dispensary, so
+      // an essential commodity ALWAYS debits store regardless of what the client
+      // sent — a server-side close of the dispensary, not just a frontend one.
+      const { rows: commRows } = await exec('select unit_price, module from commodities where id = $1', [commodity_id])
       const unitPrice = commRows[0]?.unit_price ?? null
       const lineTotal = unitPrice != null ? Math.round(unitPrice * qty * 100) / 100 : null
+      const isEssential = commRows[0]?.module === 'essential'
+
+      // Facility consumption deducts the given location (the frontend dispenses
+      // from the dispensary); defaults to store when unspecified. Essential
+      // Commodities never has a dispensary — it always debits store.
+      const loc = isEssential ? 'store' : (location_type || 'store')
 
       const { rows } = await exec(
         `insert into dispense_log
            (facility_id, commodity_id, quantity, dispensed_by, dispensed_at, notes, section, batch_number, expiry_date,
-            unit_price, line_total)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            unit_price, line_total, location_type)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          returning *`,
         [facility_id, commodity_id, qty, dispensed_by,
          dispensed_at || new Date().toISOString(), notes || '', resolvedSection,
-         batch_number || null, expiry_date || null, unitPrice, lineTotal]
+         batch_number || null, expiry_date || null, unitPrice, lineTotal,
+         (dsd_site_name || sdp_name) ? null : loc]
       )
       const dispenseLog = rows[0] || null
 
@@ -943,9 +956,6 @@ export class LogService {
         }
         bin = { facility_id, commodity_id, location_type: 'sdp', site_name: sdp_name }
       } else {
-        // Facility consumption deducts the given location (the frontend dispenses
-        // from the dispensary); defaults to store when unspecified.
-        const loc = location_type || 'store'
         const label = loc === 'store' ? 'the main store' : 'the dispensary'
         const stock = await StockService.getStockByFacilityAndCommodity(facility_id, commodity_id, loc, exec)
         const covers = await assertBinCovers(exec, stock?.quantity ?? 0, qty, commodity_id, label)

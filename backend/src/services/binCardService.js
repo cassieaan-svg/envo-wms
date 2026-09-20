@@ -343,6 +343,15 @@ export class BinCardService {
       })
     }
 
+    // 2b) Dispensing straight from the store (Essential Commodities, which has no
+    // dispensary — see logService.recordDispense). Untagged dispenses default to
+    // the dispensary (see _dispensaryRows below); this only picks up the ones
+    // explicitly marked 'store'.
+    for (const r of await BinCardService._dispenses(facilityId, commodityId)) {
+      if (isSiteTagged(r.notes) || r.location_type !== 'store') continue
+      rows.push(BinCardService._dispenseRow(r))
+    }
+
     // 3) Transfers that moved stock and touch this facility
     for (const r of (await query(
       `select id, sending_facility_id, sending_facility_name, receiving_facility_id, receiving_facility_name,
@@ -389,9 +398,9 @@ export class BinCardService {
         batch: rx(r.notes, 'Batch') || '', expiry: rx(r.notes, 'Expiry') || '',
         received: r.quantity, issued: 0, adjustment: 0, by: r.resolved_by || '', remarks: freeNote(r.notes) })
     }
-    // Dispensing (untagged = from dispensary) → Issued
+    // Dispensing (untagged, location_type dispensary or unset = legacy dispensary) → Issued
     for (const r of await BinCardService._dispenses(facilityId, commodityId)) {
-      if (isSiteTagged(r.notes)) continue
+      if (isSiteTagged(r.notes) || r.location_type === 'store') continue
       rows.push(BinCardService._dispenseRow(r))
     }
     // "Returned from Dispensary" adjustments credit the store (an Increase adj), so
@@ -473,7 +482,7 @@ export class BinCardService {
 
   static async _dispenses(facilityId, commodityId) {
     return (await query(
-      `select id, dispensed_at "date", quantity, dispensed_to, dispensed_by, regimen_name, notes, batch_number, expiry_date
+      `select id, dispensed_at "date", quantity, dispensed_to, dispensed_by, regimen_name, notes, batch_number, expiry_date, location_type
        from dispense_log where facility_id = $1 and commodity_id = $2`, [facilityId, commodityId])).rows
   }
 

@@ -413,7 +413,13 @@ export function Adjustment() {
                 <select value={reason} onChange={e=>onReasonChange(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                   <option value="">Select reason…</option>
-                  {Object.keys(RULES).filter(r=>!RETIRED_REASONS.includes(r)).map(r=><option key={r}>{r}</option>)}
+                  {Object.keys(RULES)
+                    .filter(r => !RETIRED_REASONS.includes(r))
+                    // Essential Commodities has no dispensary, DSD site, or state-office
+                    // hub-store concept — none of those reasons apply. Plain
+                    // "Returned to store" (no bin) stays available.
+                    .filter(r => !(store.module === 'essential' && [DISP_RETURN_REASON, RETURN_REASON, 'State Office'].includes(r)))
+                    .map(r=><option key={r}>{r}</option>)}
                 </select>
               </div>
               <div>
@@ -497,8 +503,9 @@ export function Adjustment() {
                   <select value={adjBin} onChange={e=>{setAdjBin(e.target.value); setAdjBinSite('')}}
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                     <option value="store">Main Store</option>
-                    <option value="dispensary">Dispensary</option>
-                    <option value="dsd">DSD site</option>
+                    {/* Essential Commodities has no dispensary or DSD site — store is the only bin. */}
+                    {store.module !== 'essential' && <option value="dispensary">Dispensary</option>}
+                    {store.module !== 'essential' && <option value="dsd">DSD site</option>}
                   </select>
                 </div>
                 {adjBin === 'dsd' && (
