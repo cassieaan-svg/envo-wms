@@ -6,7 +6,7 @@ import { MetricGrid, Metric } from '../../components/ui/Metric'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
-import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, SECTION_CATEGORIES, essentialCommodities } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DispatchAlertBanner } from '../../components/DispatchAlertBanner'
 import { exportCsv, exportPdf } from '../../utils/download'
@@ -113,7 +113,7 @@ export function Dashboard() {
   // The HIV module keeps the full catalogue so zero-stock items / categories appear.
   // `has_stock` is the server's equivalent of the old "a stock row exists" test.
   const catalogue = store.module === 'essential'
-    ? store.allCommodities.filter(c => gMap[c.id]?.has_stock)
+    ? essentialCommodities(store.allCommodities, id => gMap[id]?.has_stock)
     : store.allCommodities
 
   // Lab total = store + SDP; pharmacy total = store + dispensary + DSD.

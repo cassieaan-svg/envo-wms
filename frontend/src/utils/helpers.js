@@ -317,6 +317,19 @@ export function allowedCategoriesFor(commoditySection, facilityName, essential =
   return essential ? [...new Set([...base, ...SECTION_CATEGORIES.essential])] : base
 }
 
+// The commodities an Essential Commodities MODULE view should offer — Essential's
+// own categories only, never a dual-role account's other section (e.g. Pharmacy
+// drugs, which allowedCategoriesFor deliberately unions in for the general
+// catalogue, since a dual-role account's token scope spans both programs). The
+// module picker is what actually says "I am working in Essential right now", so
+// pages gated on it must narrow back down instead of showing that union.
+// `hasStock`, when given, additionally restricts to commodities the facility has
+// a stock record for — Essential facilities only handle what they've taken in.
+export function essentialCommodities(allCommodities, hasStock) {
+  return (allCommodities || []).filter(c =>
+    SECTION_CATEGORIES.essential.includes(c.category) && (!hasStock || hasStock(c.id)))
+}
+
 // Per-facility grants of INDIVIDUAL commodities, on top of the category list above.
 // Mirror of FACILITY_EXTRA_COMMODITIES in backend/src/constants/sections.js — the
 // backend copy is the enforced one; this exists so the catalogue the UI builds

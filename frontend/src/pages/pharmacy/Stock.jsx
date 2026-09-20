@@ -6,7 +6,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { BatchBreakdownModal } from '../../components/BatchBreakdownModal'
-import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, fmtStockQty, isLabCategory, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, fmtStockQty, isLabCategory, SECTION_CATEGORIES, essentialCommodities } from '../../utils/helpers'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
@@ -72,7 +72,7 @@ export function Stock() {
     // Essential: a facility only handles what it has taken in, so show just the
     // commodities it has a stock record for.
     const catalogue = store.module === 'essential'
-      ? store.allCommodities.filter(c => gMap[c.id]?.has_stock)
+      ? essentialCommodities(store.allCommodities, id => gMap[id]?.has_stock)
       : store.allCommodities
     const enriched = catalogue.map(c => {
       const g             = gMap[c.id] || {}

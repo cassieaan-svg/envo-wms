@@ -11,7 +11,7 @@ import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { BatchSelect } from '../../components/ui/BatchSelect'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, fmtStockQty, todayLagos } from '../../utils/helpers'
+import { fmtDate, fmtStockQty, todayLagos, essentialCommodities } from '../../utils/helpers'
 
 // Returns stock from a DSD site back to the store: positive adjustment to the
 // store, negative adjustment to the selected site's stock.
@@ -165,7 +165,7 @@ export function Adjustment() {
   // commodities on the facility's stock levels. HIV keeps the full catalogue.
   const stockedIds = new Set(store.stockData.map(r => r.commodity_id))
   const commSource = store.module === 'essential'
-    ? store.allCommodities.filter(c => stockedIds.has(c.id))
+    ? essentialCommodities(store.allCommodities, id => stockedIds.has(id))
     : store.allCommodities
 
   const categories = {}

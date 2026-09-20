@@ -10,7 +10,7 @@ import { CommoditySelect } from '../../components/ui/CommoditySelect'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, allowedCategoriesFor, todayLagos, entryTimestamp, isPlausibleExpiry, expiryDateBounds } from '../../utils/helpers'
+import { fmtDate, getCommodityPackSize, getCommodityDispenseUnit, allowedCategoriesFor, todayLagos, entryTimestamp, isPlausibleExpiry, expiryDateBounds, SECTION_CATEGORIES } from '../../utils/helpers'
 
 export function Intake() {
   const store = useAppStore()
@@ -48,8 +48,8 @@ export function Intake() {
     if (!receivedBy) setRecBy(store.user?.user_metadata?.full_name || store.user?.user_metadata?.name || '')
   }, [store.user])
 
-  // Ensure commodities are filtered by section on load
-  useEffect(() => { refreshCommodities() }, [store.commoditySection])
+  // Ensure commodities are filtered by section (and module) on load
+  useEffect(() => { refreshCommodities() }, [store.commoditySection, store.module])
 
   const selectedComm = store.allCommodities.find(c => c.id === commId)
   const packSize     = getCommodityPackSize(selectedComm)
@@ -60,10 +60,6 @@ export function Intake() {
     if (!categories[c.category]) categories[c.category] = []
     categories[c.category].push(c)
   })
-
-  const sectionCats = allowedCategoriesFor(
-    store.commoditySection, store.currentFacility?.name,
-    store.user?.user_metadata?.essential === true) || []
 
   if (!canManage) return (
     <div>
@@ -77,12 +73,16 @@ export function Intake() {
   )
 
   async function refreshCommodities() {
-    // allowedCategoriesFor, not a raw SECTION_CATEGORIES lookup: it folds in the
-    // per-login Essential grant and the hub-store override, so this list matches
-    // what the API will actually return.
-    const cats = allowedCategoriesFor(
-      store.commoditySection, store.currentFacility?.name,
-      store.user?.user_metadata?.essential === true) || []
+    // Scoped to the ACTIVE module, not the raw per-login grant: a dual-role
+    // account's token unions both HIV and Essential categories, but this list is
+    // global store state every other page reads too, so it must reflect only
+    // what's relevant to whichever module the account is currently working in.
+    // Essential gets ONLY its own categories (never allowedCategoriesFor's
+    // pharmacy/lab-plus-essential union — that union is for the server-scope
+    // check, not for what a single module's picker should offer).
+    const cats = store.module === 'essential'
+      ? SECTION_CATEGORIES.essential
+      : (allowedCategoriesFor(store.commoditySection, store.currentFacility?.name, false) || [])
     const comms = await api.commodities.list().catch(() => null)
     if (!comms) return
     const filtered = cats.length

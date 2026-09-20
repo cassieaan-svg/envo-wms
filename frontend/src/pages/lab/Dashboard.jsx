@@ -8,7 +8,7 @@ import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { DispatchAlertBanner } from '../../components/DispatchAlertBanner'
-import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, SECTION_CATEGORIES } from '../../utils/helpers'
+import { resolveAmcWindow, loadConsumptionAmcMap, getMOS, getStockStatus, SECTION_CATEGORIES, essentialCommodities } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
 
 const STATUS_LABEL = { ok: 'Optimal', low: 'Low stock', out: 'Out of stock', over: 'Overstock', unknown: 'No AMC' }
@@ -105,7 +105,7 @@ export function Dashboard() {
   // HIV: base on every tracked commodity so zero-stock / out-of-stock items appear.
   // Lab total = store + SDP (no dispensary/DSD).
   const catalogue = store.module === 'essential'
-    ? store.allCommodities.filter(c => gMap[c.id]?.has_stock)
+    ? essentialCommodities(store.allCommodities, id => gMap[id]?.has_stock)
     : store.allCommodities
   const groupedAll = catalogue.map(c => {
     const g        = gMap[c.id] || {}

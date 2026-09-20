@@ -11,7 +11,7 @@ import { LotEditor } from '../../components/LotEditor'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, pluralizeUnit, todayLagos, entryTimestamp, naira } from '../../utils/helpers'
+import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, pluralizeUnit, todayLagos, entryTimestamp, naira, essentialCommodities } from '../../utils/helpers'
 
 export function RecordStock() {
   const store = useAppStore()
@@ -320,8 +320,16 @@ export function RecordStock() {
     setLoadingRecent(false)
   }
 
+  // Essential Commodities: you can only consume what you hold, from Essential's own
+  // categories only — never a dual-role account's HIV catalogue. HIV keeps the
+  // full catalogue.
+  const stockedIds = new Set(store.stockData.map(r => r.commodity_id))
+  const commSource = store.module === 'essential'
+    ? essentialCommodities(store.allCommodities, id => stockedIds.has(id))
+    : store.allCommodities
+
   const categories = {}
-  store.allCommodities.forEach(c => {
+  commSource.forEach(c => {
     if (!categories[c.category]) categories[c.category] = []
     categories[c.category].push(c)
   })

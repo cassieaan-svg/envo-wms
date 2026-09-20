@@ -7,7 +7,7 @@ import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { StockLevelsTable } from '../../components/StockLevelsTable'
 import { SiteBreakdownModal } from '../../components/SiteBreakdownModal'
 import { BatchBreakdownModal } from '../../components/BatchBreakdownModal'
-import { getMOS, getStockStatus, fmtStockQty, SECTION_CATEGORIES, allowedCategoriesFor, resolveAmcWindow, loadConsumptionAmcMap } from '../../utils/helpers'
+import { getMOS, getStockStatus, fmtStockQty, SECTION_CATEGORIES, allowedCategoriesFor, resolveAmcWindow, loadConsumptionAmcMap, essentialCommodities } from '../../utils/helpers'
 import { AmcWindowEditor } from '../../components/AmcWindowEditor'
 
 export function Stock() {
@@ -76,7 +76,7 @@ export function Stock() {
     // HIV: base the list on every tracked commodity (not just those with stock), so
     // zero-stock / out-of-stock items still appear — mirrors the admin view.
     const catalogue = store.module === 'essential'
-      ? store.allCommodities.filter(c => gMap[c.id]?.has_stock)
+      ? essentialCommodities(store.allCommodities, id => gMap[id]?.has_stock)
       : store.allCommodities
     const enriched = catalogue.map(c => {
       const g        = gMap[c.id] || {}

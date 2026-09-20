@@ -12,7 +12,7 @@ import { LotEditor } from '../../components/LotEditor'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, pluralizeUnit, todayLagos, entryTimestamp, naira } from '../../utils/helpers'
+import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, pluralizeUnit, todayLagos, entryTimestamp, naira, essentialCommodities } from '../../utils/helpers'
 
 export function RecordStock() {
   const store = useAppStore()
@@ -110,14 +110,18 @@ export function RecordStock() {
     const take = Math.min(qty, opt.remaining)
     setPendingBatches(prev => [...prev, { key: opt.key, batch: opt, quantity: take }])
     setPickerBatch(null)
-    if (qtyRef.current) qtyRef.current.value = String(qty - take)   // leftover to allocate
+    const leftover = qty - take
+    if (qtyRef.current) qtyRef.current.value = String(leftover)   // leftover to allocate
+    setLiveQty(leftover)
   }
 
   function removePendingBatch(key) {
     // Give the removed batch's quantity back to the box, so it can be re-allocated.
     const removed = pendingBatches.find(b => b.key === key)
     if (removed && qtyRef.current) {
-      qtyRef.current.value = String((parseInt(qtyRef.current.value || 0) || 0) + removed.quantity)
+      const restored = (parseInt(qtyRef.current.value || 0) || 0) + removed.quantity
+      qtyRef.current.value = String(restored)
+      setLiveQty(restored)
     }
     setPendingBatches(prev => prev.filter(b => b.key !== key))
   }
@@ -301,7 +305,7 @@ export function RecordStock() {
   // commodities on the facility's stock levels. HIV keeps the full catalogue.
   const stockedIds = new Set(store.stockData.map(r => r.commodity_id))
   const commSource = store.module === 'essential'
-    ? store.allCommodities.filter(c => stockedIds.has(c.id))
+    ? essentialCommodities(store.allCommodities, id => stockedIds.has(id))
     : store.allCommodities
 
   const categories = {}
@@ -355,7 +359,9 @@ export function RecordStock() {
                   {selectedComm.unit ? ` / ${selectedComm.unit}` : ''}
                 </span>
                 <span className="text-gray-400">
-                  Total <span className="text-gray-100 font-semibold">{naira(selectedComm.unit_price * (liveQty || 0))}</span>
+                  Total <span className="text-gray-100 font-semibold">
+                    {naira(selectedComm.unit_price * ((liveQty || 0) + pendingBatches.reduce((s, b) => s + b.quantity, 0)))}
+                  </span>
                 </span>
               </div>
             )}
