@@ -2,7 +2,7 @@ import express from 'express'
 import { validators, sendValidationError } from '../middleware/validation.js'
 import { enforceFacilityRead, enforceFacilityWrite, resolveListFacilityIds, enforceCommoditySection, sectionFilter } from '../middleware/scope.js'
 import { narrowGrantsToCategories } from '../constants/sections.js'
-import { LogService, DISPENSE_GROUP_BY_KEYS } from '../services/logService.js'
+import { LogService, DISPENSE_GROUP_BY_KEYS, SALES_GROUP_BY_KEYS } from '../services/logService.js'
 import { StockService } from '../services/stockService.js'
 import { IdempotencyService } from '../services/idempotencyService.js'
 
@@ -249,6 +249,48 @@ router.get('/summary', async (req, res) => {
     res.json({ success: true, data: rows, count: rows.length, timestamp: new Date().toISOString() })
   } catch (err) {
     console.error('Error fetching dispense summary:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
+  }
+})
+
+/**
+ * GET /api/dispense/sales-summary — revenue (what has been SOLD), the counterpart
+ * to GET /api/warehouse-requests/spend ("what has been bought"). Only dispenses of
+ * a priced commodity count; unpriced ones (mostly HIV) are excluded, not zeroed.
+ *
+ * `group_by` is 'commodity' (default), 'facility', or 'month' — see
+ * SALES_GROUP_BY_KEYS in logService.js. Every row carries quantity, revenue and txn.
+ *
+ * MUST stay above '/:id' (declared further down), which would otherwise capture
+ * 'sales-summary' as an id.
+ */
+router.get('/sales-summary', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, from, to, commodity_ids, section, group_by } = req.query
+    const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+
+    const groupBy = group_by ? String(group_by) : 'commodity'
+    if (!SALES_GROUP_BY_KEYS.includes(groupBy)) {
+      return sendValidationError(res,
+        `Unsupported group_by. Must be one of: ${SALES_GROUP_BY_KEYS.join(' | ')}`, 'group_by')
+    }
+
+    const base = {
+      from, to, commodityIds, categories: req.scope.sectionCategories, commodityNames: req.scope.sectionCommodityNames,
+      section, groupBy,
+    }
+    let rows
+    if (facility_id) {
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
+      rows = await LogService.getSalesSummary(facility_id, base)
+    } else {
+      const facilityIds = await resolveListFacilityIds(req, 'dispense_log', facility_ids)
+      rows = await LogService.getSalesSummary(null, { ...base, facilityIds: facilityIds === null ? undefined : facilityIds })
+    }
+    res.json({ success: true, data: rows, count: rows.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching sales summary:', err)
     res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
   }
 })

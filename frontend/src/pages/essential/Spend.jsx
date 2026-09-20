@@ -4,6 +4,8 @@ import { useAppStore } from '../../store/appStore'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { Pagination, pageSlice } from '../../components/ui/Pagination'
 import { exportCsv, exportPdf } from '../../utils/download'
+import { naira } from '../../utils/helpers'
+import { SalesPanel } from './SalesPanel'
 
 // What facilities have bought through the central warehouse, in naira.
 //
@@ -20,7 +22,6 @@ import { exportCsv, exportPdf } from '../../utils/download'
 //   Paid        — settled against it
 //   Outstanding — still owed (debt-bearing schemes only; BHCPF/insurance are never owed)
 
-const naira = (n) => '₦' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const num = (n) => Number(n || 0).toLocaleString()
 
 // The WMS catalogue stores "1" as the unit for items that have no meaningful one, which
@@ -263,6 +264,11 @@ function BalanceRow({ b, open, onToggle, orders, error }) {
 }
 
 export function Spend() {
+  // Bought (this page's original content — WMS dispatch orders) vs Sold (revenue
+  // from consumption — dispense_log, local to EnVo). Same page because they're the
+  // two sides of the same question: this is what came in, this is what went out.
+  const [view, setView] = useState('bought')
+
   const isAdmin        = useAppStore(s => s.isAdmin())
   const filterState    = useAppStore(s => s.adminFilterState)
   const filterLGA      = useAppStore(s => s.adminFilterLGA)
@@ -378,6 +384,22 @@ export function Spend() {
   return (
     <div className="p-6">
       <div className="mb-1 text-xl text-gray-100 font-medium">Spend</div>
+
+      <div className="flex gap-2 mb-5">
+        <button type="button" onClick={() => setView('bought')}
+          className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            view === 'bought' ? 'bg-white/10 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
+          Bought
+        </button>
+        <button type="button" onClick={() => setView('sold')}
+          className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            view === 'sold' ? 'bg-white/10 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
+          Sold
+        </button>
+      </div>
+
+      {view === 'sold' ? <SalesPanel /> : <>
+
       <p className="text-sm text-gray-500 mb-5">
         What has been bought from the central warehouse. Cancelled requests are excluded.
       </p>
@@ -499,6 +521,8 @@ export function Spend() {
         </div>
         <Pagination pager={pager} onPage={setPage} unit="rows" />
       </div>
+
+      </>}
     </div>
   )
 }

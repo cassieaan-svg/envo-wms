@@ -260,6 +260,12 @@ const LIFETIME_FLOOR = '2024-01-01'
 
 export const DISPENSE_GROUP_BY_KEYS = Object.keys(DISPENSE_GROUP_BY)
 
+// Sales (revenue) allowlist — deliberately separate from DISPENSE_GROUP_BY_KEYS
+// above (see the comment on getSalesSummary): quantity-shaped Monitoring groupings
+// and money-shaped Sales groupings are different questions and don't need to share
+// a list just because they both read dispense_log.
+export const SALES_GROUP_BY_KEYS = ['commodity', 'facility', 'month']
+
 // Intake serves the same groupings MINUS the AMC-only ones. 'commodity,month' and
 // 'commodity,lifetime' exist to feed average-monthly-consumption; an AMC computed
 // from receipts would be meaningless, so they are not offered rather than being
@@ -448,7 +454,18 @@ export class LogService {
 
     return await withTransaction(async exec => {
       const { rows } = await exec(`update ${table} set ${sets.join(', ')} where id = $1 returning *`, params)
-      const updated = rows[0] || null
+      let updated = rows[0] || null
+
+      // A quantity edit on a priced dispense must move line_total with it — the
+      // record IS the sale, so correcting how much was sold corrects what it was
+      // worth. unit_price is never touched: it's the price AT THE TIME, and an edit
+      // isn't a new sale happening today.
+      if (type === 'dispense' && updated && fields.quantity !== undefined && updated.unit_price != null) {
+        const newTotal = Math.round(Number(updated.unit_price) * Number(updated.quantity) * 100) / 100
+        const { rows: retotaled } = await exec(
+          'update dispense_log set line_total = $2 where id = $1 returning *', [id, newTotal])
+        updated = retotaled[0] || updated
+      }
 
       // Move the stock the edited record accounts for, in the SAME transaction.
       //
@@ -877,14 +894,24 @@ export class LogService {
       }
 
       const resolvedSection = await resolveSection(section, commodity_id, exec)
+
+      // Snapshot the price at the moment of dispensing — never read live at report
+      // time — so a later catalogue price change can't rewrite what a past sale is
+      // reported as having been worth. Null for the (mostly HIV) commodities with no
+      // catalogue price: no manufactured revenue figure.
+      const { rows: commRows } = await exec('select unit_price from commodities where id = $1', [commodity_id])
+      const unitPrice = commRows[0]?.unit_price ?? null
+      const lineTotal = unitPrice != null ? Math.round(unitPrice * qty * 100) / 100 : null
+
       const { rows } = await exec(
         `insert into dispense_log
-           (facility_id, commodity_id, quantity, dispensed_by, dispensed_at, notes, section, batch_number, expiry_date)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           (facility_id, commodity_id, quantity, dispensed_by, dispensed_at, notes, section, batch_number, expiry_date,
+            unit_price, line_total)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          returning *`,
         [facility_id, commodity_id, qty, dispensed_by,
          dispensed_at || new Date().toISOString(), notes || '', resolvedSection,
-         batch_number || null, expiry_date || null]
+         batch_number || null, expiry_date || null, unitPrice, lineTotal]
       )
       const dispenseLog = rows[0] || null
 
@@ -987,6 +1014,60 @@ export class LogService {
    */
   static async getDispenseSummary(facilityId, options = {}) {
     return logSummary({ table: 'dispense_log', dateField: 'dispensed_at' }, facilityId, options)
+  }
+
+  /**
+   * Revenue: what has been SOLD (consumed at its snapshotted unit_price), the
+   * counterpart to WarehouseRequestService's spend ("what has been bought"). Only
+   * priced dispenses count — line_total is null for the commodities with no
+   * catalogue price (most of HIV), so they're excluded rather than counted as ₦0.
+   *
+   * A dedicated aggregator rather than threading through logSummary(): that one
+   * powers Monitoring/AMC (quantity-shaped, no money anywhere in it) and is
+   * deliberately not touched here — sales is a money question, kept apart the same
+   * way Spend.jsx keeps "bought" apart from Monitoring's "consumed".
+   *
+   * group_by 'facility' is the whole admin story: an LGA/state admin already gets
+   * every facility in their scope back as its own row (via facilityIds), the same
+   * way Monitoring's facility breakdown derives LGA/state client-side rather than
+   * needing a server-side grouping for it.
+   */
+  static async getSalesSummary(facilityId, options = {}) {
+    const {
+      from, to, facilityIds, commodityIds, categories, commodityNames, section,
+      groupBy = 'commodity',
+    } = options
+    if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
+    if (!SALES_GROUP_BY_KEYS.includes(groupBy)) throw new Error(`Unsupported group_by: ${groupBy}`)
+
+    const params = []
+    const conds = ['l.line_total is not null']
+    // `to` is handled here, not by applyLogFilters: that helper compares against
+    // midnight (l.dispensed_at <= '2026-09-20'), which silently excludes every sale
+    // recorded LATER that same day — the exact case of checking "today's sales"
+    // right after recording one. Made exclusive of the day AFTER `to` instead.
+    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, commodityNames, from, section })
+    if (to) { params.push(to); conds.push(`l.dispensed_at < ($${params.length}::date + interval '1 day')`) }
+
+    let selectDim, groupCol
+    if (groupBy === 'facility')       { selectDim = 'l.facility_id as key, f.name as label'; groupCol = 'l.facility_id, f.name' }
+    else if (groupBy === 'commodity') { selectDim = 'l.commodity_id as key, c.name as label'; groupCol = 'l.commodity_id, c.name' }
+    else /* month */                  { const ym = `to_char(l.dispensed_at at time zone 'UTC', 'YYYY-MM')`; selectDim = `${ym} as key, ${ym} as label`; groupCol = ym }
+
+    const { rows } = await query(
+      `select ${selectDim},
+              sum(l.quantity)::int as quantity,
+              sum(l.line_total)::numeric as revenue,
+              count(*)::int as txn
+         from dispense_log l
+         left join commodities c on c.id = l.commodity_id
+         left join facilities f on f.id = l.facility_id
+        where ${conds.join(' and ')}
+        group by ${groupCol}
+        order by revenue desc`,
+      params
+    )
+    return rows
   }
 
   /**

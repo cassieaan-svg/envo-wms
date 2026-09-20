@@ -1,5 +1,10 @@
 import { api } from '../lib/api'
 
+// ── Money ──────────────────────────────────────────────────────────────────
+export function naira(n) {
+  return '₦' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 // ── Date formatting (Africa/Lagos timezone) ───────────────────────────────
 const LAGOS = 'Africa/Lagos'
 

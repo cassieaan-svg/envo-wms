@@ -12,7 +12,7 @@ import { LotEditor } from '../../components/LotEditor'
 import { LoadingState, EmptyState } from '../../components/ui/Loading'
 import { EditModal } from '../../components/EditModal'
 import { EditHistoryModal } from '../../components/EditHistoryModal'
-import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, pluralizeUnit, todayLagos, entryTimestamp } from '../../utils/helpers'
+import { fmtDate, fmtStockQty, fmtDispenseQty, getCommodityPackSize, getCommodityDispenseUnit, pluralizeUnit, todayLagos, entryTimestamp, naira } from '../../utils/helpers'
 
 export function RecordStock() {
   const store = useAppStore()
@@ -37,6 +37,11 @@ export function RecordStock() {
   const [lotsRefresh, setLotsRefresh] = useState(0)
   const [showLotEditor, setShowLotEditor] = useState(false)
   const qtyRef                  = useRef(1)
+  // Live preview only — the server independently snapshots the price at write time
+  // (LogService.recordDispense), so this is never trusted as the figure that gets
+  // recorded. It just lets the person recording the consumption see the total as
+  // they type, the way a till does.
+  const [liveQty, setLiveQty]   = useState(1)
   const batchBoxRef             = useRef(null)   // wraps the batch dropdown, for the "+ Add batch" cue
   const [items, setItems]       = useState([])   // staged commodities to record together
   const [by, setBy]             = useState('')
@@ -144,6 +149,7 @@ export function RecordStock() {
       }))])
       setCommId(''); setPickerBatch(null); setPendingBatches([])
       if (qtyRef.current) qtyRef.current.value = '1'
+      setLiveQty(1)
       return
     }
 
@@ -158,6 +164,7 @@ export function RecordStock() {
     setItems(prev => [...prev, { key: `${commId}|fefo`, commodityId: commId, quantity: qty, comm, avail, batch: null }])
     setCommId(''); setPickerBatch(null); setPendingBatches([])
     if (qtyRef.current) qtyRef.current.value = '1'
+    setLiveQty(1)
   }
 
   function removeItem(key) {
@@ -246,7 +253,7 @@ export function RecordStock() {
       toast(`Stock recorded — ${batch.length} item(s)`, 'green')
       setMsg({ type:'success', text:`Stock saved successfully — ${batch.length} record(s).` })
     }
-    setItems([]); setCommId(''); setPickerBatch(null); setPendingBatches([]); if (qtyRef.current) qtyRef.current.value = '1'; setBy(''); setNotes('')
+    setItems([]); setCommId(''); setPickerBatch(null); setPendingBatches([]); if (qtyRef.current) qtyRef.current.value = '1'; setLiveQty(1); setBy(''); setNotes('')
     setDate(todayLagos())
     if (!isDSD) await loadStock()
     loadRecent()
@@ -305,9 +312,26 @@ export function RecordStock() {
                   {qtyLabel}
                 </label>
                 <input type="number" min="0" defaultValue={1} ref={qtyRef}
+                  onChange={e => setLiveQty(parseInt(e.target.value) || 0)}
                   className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500" />
               </div>
             </div>
+
+            {/* Unit price × quantity = total sold, live as the quantity changes. Only
+                shows for a priced commodity — most of HIV carries no catalogue price,
+                and there's nothing to preview for those. Display only: the server
+                independently snapshots the price it actually charges at write time. */}
+            {commId && selectedComm?.unit_price != null && (
+              <div className="rounded-lg px-4 py-3 text-sm border border-white/10 bg-white/3 flex items-center justify-between gap-3">
+                <span className="text-gray-400">
+                  Unit price <span className="text-gray-200 font-medium">{naira(selectedComm.unit_price)}</span>
+                  {selectedComm.unit ? ` / ${selectedComm.unit}` : ''}
+                </span>
+                <span className="text-gray-400">
+                  Total <span className="text-gray-100 font-semibold">{naira(selectedComm.unit_price * (liveQty || 0))}</span>
+                </span>
+              </div>
+            )}
 
             {/* Stock preview */}
             {commId && (

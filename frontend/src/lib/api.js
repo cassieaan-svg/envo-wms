@@ -171,7 +171,7 @@ export const api = {
   // replaces the old insert-log + update-stock sequence.
   // `update` edits an existing log row's metadata (EditModal); stock is reconciled
   // separately by the caller via the stock methods.
-  dispense:    { record: (body) => post('/dispense', body),    history: (params) => get('/dispense', params),    summary: (params) => get('/dispense/summary', params),    update: (id, body) => patch(`/dispense/${id}`, body) },
+  dispense:    { record: (body) => post('/dispense', body),    history: (params) => get('/dispense', params),    summary: (params) => get('/dispense/summary', params),    salesSummary: (params) => get('/dispense/sales-summary', params),    update: (id, body) => patch(`/dispense/${id}`, body) },
   intake:      { record: (body) => post('/intake', body),      history: (params) => get('/intake', params), summary: (params) => get('/intake/summary', params),      update: (id, body) => patch(`/intake/${id}`, body) },
   adjustments: { record: (body) => post('/adjustments', body), history: (params) => get('/adjustments', params), summary: (params) => get('/adjustments/summary', params), update: (id, body) => patch(`/adjustments/${id}`, body) },
 
