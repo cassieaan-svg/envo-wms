@@ -70,8 +70,14 @@ export function RecordStock() {
   }, [commId, isDSD, fid, dsdSiteName])
 
   // A different commodity means the inline batches no longer apply — start fresh.
-  // (pickerBatch is left to BatchSelect, which remounts per commodity.)
-  useEffect(() => { setPendingBatches([]) }, [commId])
+  // (pickerBatch is left to BatchSelect, which remounts per commodity.) Editing a
+  // staged commodity sets commId AND pendingBatches together in the same render,
+  // so it flips this ref to skip the reset just that once.
+  const skipBatchResetRef = useRef(false)
+  useEffect(() => {
+    if (skipBatchResetRef.current) { skipBatchResetRef.current = false; return }
+    setPendingBatches([])
+  }, [commId])
 
   const selectedComm = store.allCommodities.find(c => c.id === commId)
   const packSize     = getCommodityPackSize(selectedComm)
@@ -173,6 +179,27 @@ export function RecordStock() {
 
   function removeCommodity(commodityId) {
     setItems(prev => prev.filter(i => i.commodityId !== commodityId))
+  }
+
+  // Pull a staged commodity back into the picker so its quantity/batches can be
+  // changed, instead of removing it and re-entering everything from scratch.
+  function editCommodity(commodityId) {
+    const lines = items.filter(i => i.commodityId === commodityId)
+    if (!lines.length) return
+    const batched = lines.some(l => l.batch)
+    skipBatchResetRef.current = true
+    setCommId(commodityId)
+    if (batched) {
+      setPendingBatches(lines.map(l => ({ key: l.batch.key, batch: l.batch, quantity: l.quantity })))
+      if (qtyRef.current) qtyRef.current.value = '0'
+      setLiveQty(0)
+    } else {
+      const qty = lines.reduce((s, l) => s + l.quantity, 0)
+      setPendingBatches([])
+      if (qtyRef.current) qtyRef.current.value = String(qty)
+      setLiveQty(qty)
+    }
+    removeCommodity(commodityId)
   }
 
   async function handleSubmit(e) {
@@ -423,10 +450,19 @@ export function RecordStock() {
                 if (!g) { g = { commodityId: it.commodityId, comm: it.comm, lines: [] }; groups.push(g) }
                 g.lines.push(it)
               })
+              const grandTotal = items.reduce((s, it) => s + (it.comm?.unit_price != null ? it.comm.unit_price * it.quantity : 0), 0)
+              const anyPriced = items.some(it => it.comm?.unit_price != null)
               return (
                 <div className="rounded-lg border border-white/10 divide-y divide-white/5">
-                  <div className="px-4 py-2 text-xs text-gray-500 uppercase tracking-widest">
-                    {groups.length} commodit{groups.length === 1 ? 'y' : 'ies'} to record
+                  <div className="px-4 py-2 flex items-center justify-between gap-3">
+                    <span className="text-xs text-gray-500 uppercase tracking-widest">
+                      {groups.length} commodit{groups.length === 1 ? 'y' : 'ies'} to record
+                    </span>
+                    {anyPriced && (
+                      <span className="text-xs text-gray-400">
+                        Total <span className="text-gray-100 font-semibold">{naira(grandTotal)}</span>
+                      </span>
+                    )}
                   </div>
                   {groups.map(g => {
                     const packSize = getCommodityPackSize(g.comm)
@@ -442,12 +478,19 @@ export function RecordStock() {
                               {total} {pluralizeUnit(total, g.comm?.unit || dispUnit)}
                               {packSize ? ` = ${(total * packSize).toLocaleString()} ${dispUnit}` : ''}
                               {batched ? ` · ${g.lines.length} batch${g.lines.length === 1 ? '' : 'es'}` : ''}
+                              {g.comm?.unit_price != null ? ` · ${naira(g.comm.unit_price * total)}` : ''}
                             </div>
                           </div>
-                          <button type="button" onClick={() => removeCommodity(g.commodityId)}
-                            className="text-xs text-gray-500 hover:text-red-400 border border-white/10 rounded px-2 py-1 transition-colors shrink-0">
-                            Remove
-                          </button>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button type="button" onClick={() => editCommodity(g.commodityId)}
+                              className="text-xs text-gray-500 hover:text-blue-400 border border-white/10 rounded px-2 py-1 transition-colors">
+                              Edit
+                            </button>
+                            <button type="button" onClick={() => removeCommodity(g.commodityId)}
+                              className="text-xs text-gray-500 hover:text-red-400 border border-white/10 rounded px-2 py-1 transition-colors">
+                              Remove
+                            </button>
+                          </div>
                         </div>
                         {batched && (
                           <div className="mt-1.5 pl-3 border-l border-white/10 space-y-1">
