@@ -48,7 +48,7 @@ const GROUPS = [
 const MEASURES = [
   { key: 'issued',      label: 'Issued',      hint: 'left the store' },
   { key: 'paid',        label: 'Paid',        hint: 'settled' },
-  { key: 'outstanding', label: 'Outstanding', hint: 'still owed' },
+  { key: 'outstanding', label: 'Outstanding', hint: 'unpaid, this period' },
   { key: 'orders',      label: 'Orders',      hint: 'dispatches', count: true },
 ]
 
@@ -528,12 +528,14 @@ export function Spend() {
           />
         ))}
         {/* Owed sits with the other money cards rather than only as a heading below —
-            it is the figure people come to this page for. */}
+            it is the figure people come to this page for. Distinct from the
+            "Outstanding" card: that one is unpaid orders WITHIN the date filter above;
+            this is the facility's total current debt, regardless of period. */}
         <Stat
-          label="Owed to the store"
+          label="Owed right now (all-time)"
           value={balances === undefined ? '…' : balances === null ? 'unavailable' : naira(owedTotal)}
           hint={balances && owingFacilities.length
-            ? `${owingFacilities.length} facilit${owingFacilities.length === 1 ? 'y' : 'ies'}`
+            ? `${owingFacilities.length} facilit${owingFacilities.length === 1 ? 'y' : 'ies'}, not date-filtered`
             : balances ? 'nothing outstanding' : 'warehouse unreachable'}
         />
       </div>
