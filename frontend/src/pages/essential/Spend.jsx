@@ -3,7 +3,6 @@ import { api } from '../../lib/api'
 import { useAppStore } from '../../store/appStore'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { Pagination, pageSlice } from '../../components/ui/Pagination'
-import { exportCsv, exportPdf } from '../../utils/download'
 import { naira } from '../../utils/helpers'
 import { SalesPanel } from './SalesPanel'
 
@@ -23,13 +22,6 @@ import { SalesPanel } from './SalesPanel'
 //   Outstanding — still owed (debt-bearing schemes only; BHCPF/insurance are never owed)
 
 const num = (n) => Number(n || 0).toLocaleString()
-
-// The WMS catalogue stores "1" as the unit for items that have no meaningful one, which
-// renders as "300 1 × ₦71". Treat that (and a blank) as no unit rather than printing it.
-const unitLabel = (u) => {
-  const t = String(u ?? '').trim()
-  return !t || t === '1' ? '' : t
-}
 
 // 'facility' and 'lga' group ACROSS facilities, so they are meaningless on a facility
 // login — it would be one row, itself. Those two are admin-only; the rest apply to
@@ -88,180 +80,6 @@ function Stat({ label, value, hint, onClick, active }) {
 const today = () => new Date().toISOString().slice(0, 10)
 const yearStart = () => `${new Date().getFullYear()}-01-01`
 
-// One facility's balance, expandable into the orders behind it. Most of those orders are
-// DIRECT dispatches — issued at the warehouse with no EnVo request — so this is the only
-// place in EnVo they can be seen. Read-only: payments are recorded at the warehouse.
-// One row per order LINE, with the order's totals repeated on each — a flat shape both
-// CSV and the PDF can render.
-//
-// Individual instalments are deliberately not exploded here: a payment belongs to the
-// order, not to a commodity line, so repeating it per line would make it look like the
-// facility paid that amount several times. The order's paid/outstanding totals carry
-// the money; the on-screen panel shows the instalments behind them.
-function orderRows(b, orders) {
-  const out = []
-  for (const o of orders) {
-    if (o.items?.length) {
-      for (const i of o.items) {
-        out.push([
-          `#${o.id}`, String(o.dispatched_at || '').slice(0, 10),
-          o.source === 'request' ? 'From request' : 'Direct dispatch', o.scheme,
-          i.commodity,
-          i.quantity, unitLabel(i.unit), i.unit_price, i.line_total,
-          o.total_amount, o.amount_paid, o.outstanding,
-        ])
-      }
-    } else {
-      out.push([`#${o.id}`, String(o.dispatched_at || '').slice(0, 10),
-        o.source === 'request' ? 'From request' : 'Direct dispatch', o.scheme,
-        '(no line detail)', '', '', '', '',
-        o.total_amount, o.amount_paid, o.outstanding])
-    }
-  }
-  return out
-}
-
-const ORDER_HEAD = ['Order', 'Dispatched', 'Source', 'Scheme', 'Commodity',
-                    'Qty', 'Unit', 'Unit price', 'Line total',
-                    'Order total', 'Paid', 'Outstanding']
-// Numeric columns, right-aligned in the PDF.
-const ORDER_RIGHT = new Set([5, 7, 8, 9, 10, 11])
-
-
-function BalanceRow({ b, open, onToggle, orders, error }) {
-  const stamp = new Date().toISOString().slice(0, 10)
-  const base = `${b.facility_name.replace(/[^\w]+/g, '-').toLowerCase()}-orders-${stamp}`
-  const subtitle = `${naira(b.outstanding)} outstanding across ${b.unpaid_orders} order(s) · as at ${stamp}`
-
-  return (
-    <>
-      <div className="flex items-center gap-3 py-2 border-b border-white/5">
-        <button type="button" onClick={() => onToggle(b.facility_id)}
-          className="text-sm text-gray-300 hover:text-gray-100 text-left flex-1">
-          <span className="text-gray-500 mr-2">{open ? '▾' : '▸'}</span>{b.facility_name}
-        </button>
-        <span className="text-xs text-gray-500">{b.unpaid_orders} unpaid</span>
-        <span className="text-sm text-amber-400 tabular-nums w-32 text-right">{naira(b.outstanding)}</span>
-        {/* Enabled only once the orders are loaded — there is nothing to export before
-            the facility has been opened. */}
-        <button type="button" disabled={!orders?.length}
-          onClick={() => exportCsv(`${base}.csv`, ORDER_HEAD, orderRows(b, orders))}
-          className="text-[11px] px-2 py-0.5 rounded border border-white/10 text-gray-400 hover:bg-white/5 disabled:opacity-30">
-          CSV
-        </button>
-        <button type="button" disabled={!orders?.length}
-          onClick={() => exportPdf(`${b.facility_name} — warehouse orders`, subtitle, ORDER_HEAD, orderRows(b, orders), ORDER_RIGHT)}
-          className="text-[11px] px-2 py-0.5 rounded border border-white/10 text-gray-400 hover:bg-white/5 disabled:opacity-30">
-          PDF
-        </button>
-      </div>
-      {open && (
-        <div className="pl-6 pb-3 border-b border-white/5">
-          {error ? (
-            <div className="text-xs text-red-400 py-2">{error}</div>
-          ) : !orders ? (
-            <div className="text-xs text-gray-500 py-2">Loading orders…</div>
-          ) : orders.length === 0 ? (
-            <div className="text-xs text-gray-500 py-2">No orders found at the central store.</div>
-          ) : (
-            <table className="w-full text-xs mt-2">
-              <thead>
-                <tr className="text-left text-gray-500">
-                  <th className="py-1 font-medium">Order</th>
-                  <th className="py-1 font-medium">Dispatched</th>
-                  <th className="py-1 font-medium">Source</th>
-                  <th className="py-1 font-medium">Scheme</th>
-                  <th className="py-1 font-medium text-right">Total</th>
-                  <th className="py-1 font-medium text-right">Paid</th>
-                  <th className="py-1 font-medium text-right">Outstanding</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map(o => (
-                  <>
-                    <tr key={o.id} className="border-t border-white/5">
-                      <td className="py-1 text-gray-300">#{o.id}</td>
-                      <td className="py-1 text-gray-500">{String(o.dispatched_at || '').slice(0, 10)}</td>
-                      <td className="py-1 text-gray-500">
-                        {/* A facility can't otherwise tell an order it raised from one the
-                            warehouse issued to it directly. */}
-                        {o.source === 'request' ? 'From your request' : 'Direct dispatch'}
-                      </td>
-                      <td className="py-1 text-gray-500">{o.scheme}</td>
-                      <td className="py-1 text-right text-gray-300">{naira(o.total_amount)}</td>
-                      <td className="py-1 text-right text-gray-300">{naira(o.amount_paid)}</td>
-                      <td className="py-1 text-right">
-                        {o.outstanding > 0
-                          ? <span className="text-amber-400">{naira(o.outstanding)}</span>
-                          : <span className="text-green-400">paid</span>}
-                      </td>
-                    </tr>
-                    {/* What was issued. The order total means little without the
-                        commodities behind it — this is the line a facility checks when
-                        it queries a bill. */}
-                    {o.items?.length > 0 && (
-                      <tr key={`it-${o.id}`}>
-                        <td colSpan={7} className="pl-4 pb-1">
-                          {/* Section titles carry the weight: they are what tells you
-                              which block you are reading once an order is expanded. */}
-                          <div className="text-sm text-gray-100 font-semibold mb-1">
-                            Commodities issued
-                          </div>
-                          {o.items.map((i, n) => (
-                            <div key={n} className="flex gap-3 items-baseline py-0.5">
-                              <span className="flex-1 text-sm text-gray-100 font-medium">{i.commodity}</span>
-                              <span className="tabular-nums text-gray-500">
-                                {i.quantity.toLocaleString()}
-                                {unitLabel(i.unit) ? ` ${unitLabel(i.unit)}` : ''} × {naira(i.unit_price)}
-                              </span>
-                              <span className="tabular-nums w-28 text-right text-sm text-gray-100 font-medium">
-                                {naira(i.line_total)}
-                              </span>
-                            </div>
-                          ))}
-                        </td>
-                      </tr>
-                    )}
-                    {o.payments.length > 0 && (
-                      <tr key={`p-${o.id}`}>
-                        <td colSpan={7} className="pl-4 pb-2 text-gray-500">
-                          <div className="text-sm text-gray-100 font-semibold mb-1">Payments</div>
-                          {/* The receipt number leads, because that is what the facility
-                              is holding in its hand when it queries a payment — the row
-                              exists so a receipt can be matched against the balance. */}
-                          <div className="flex gap-3 text-[10px] uppercase tracking-wide text-gray-600 pb-0.5">
-                            <span className="w-24">Receipt no.</span>
-                            <span className="w-20">Paid on</span>
-                            <span className="w-24 text-right">Amount</span>
-                            <span className="flex-1">Recorded by</span>
-                          </div>
-                          {o.payments.map(p => (
-                            <div key={p.id} className="flex gap-3 py-0.5">
-                              <span className="w-24 text-gray-100 font-medium">
-                                {/* Blank on payments taken before receipts were captured. */}
-                                {p.receipt_no || <span className="text-gray-600 font-normal">—</span>}
-                              </span>
-                              <span className="w-20">{String(p.paid_at).slice(0, 10)}</span>
-                              <span className="w-24 text-right tabular-nums text-gray-300">{naira(p.amount)}</span>
-                              <span className="flex-1">
-                                {p.recorded_by || '—'}
-                                {p.note && <span className="text-gray-600"> · {p.note}</span>}
-                              </span>
-                            </div>
-                          ))}
-                        </td>
-                      </tr>
-                    )}
-                  </>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-    </>
-  )
-}
 
 export function Spend() {
   // Bought (this page's original content — WMS dispatch orders) vs Sold (revenue
@@ -286,12 +104,6 @@ export function Spend() {
   const [from, setFrom]   = useState(yearStart)
   const [to, setTo]       = useState(today)
   const [pageState, setPageState] = useState({ key: '', page: 0 })
-  // Balances read from the WMS, which owns the money. undefined = loading,
-  // null = the warehouse was unreachable (shown as unknown, never as zero).
-  const [balances, setBalances] = useState(undefined)
-  const [openFacility, setOpenFacility] = useState(null)
-  const [orders, setOrders] = useState({})        // facilityId -> orders
-  const [orderErr, setOrderErr] = useState({})
   // The result is stored WITH the query that produced it, so `loading` is derived by
   // comparing keys rather than being flipped by a setState in the effect body (which
   // costs an extra render pass, and trips react-hooks). It also makes a stale response
@@ -326,26 +138,6 @@ export function Spend() {
   // built a fresh [] on every render, which would re-run the totals reduce each time.
   const rows = useMemo(() => (loading ? [] : data.rows), [loading, data.rows])
   const err = loading ? null : data.err
-
-  useEffect(() => {
-    let off = false
-    api.warehouseRequests.balances(scopeParams)
-      .then(r => { if (!off) setBalances(r || []) })
-      .catch(() => { if (!off) setBalances(null) })
-    return () => { off = true }
-  }, [scopeParams])
-
-  async function toggleFacility(id) {
-    if (openFacility === id) { setOpenFacility(null); return }
-    setOpenFacility(id)
-    if (orders[id] || orderErr[id]) return
-    try {
-      const rows = await api.warehouseRequests.balanceOrders(id)
-      setOrders(m => ({ ...m, [id]: rows }))
-    } catch (e) {
-      setOrderErr(m => ({ ...m, [id]: e?.message || 'Could not load orders' }))
-    }
-  }
 
   useEffect(() => {
     let cancelled = false
@@ -408,16 +200,6 @@ export function Spend() {
 
   const page = pageState.key === queryKey + measure ? pageState.page : 0
   const setPage = (p) => setPageState({ key: queryKey + measure, page: p })
-  // Derived once and shared by the card and the list below, so the two can never
-  // disagree about what is owed.
-  const owingFacilities = useMemo(
-    () => (Array.isArray(balances) ? balances : [])
-      .filter(b => Number(b.outstanding) > 0)
-      .sort((a, b) => b.outstanding - a.outstanding),
-    [balances])
-  const owedTotal = useMemo(
-    () => owingFacilities.reduce((s, b) => s + Number(b.outstanding), 0),
-    [owingFacilities])
 
   const pager = pageSlice(sorted, page)
 
@@ -516,66 +298,9 @@ export function Spend() {
 
       {err && <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400">{err}</div>}
 
-      <div className="flex gap-3 flex-wrap mb-5">
-        {MEASURES.map(m => (
-          <Stat
-            key={m.key}
-            label={m.label}
-            value={m.count ? num(totals[m.key]) : naira(totals[m.key])}
-            hint={m.hint}
-            active={measure === m.key}
-            onClick={() => setMeasure(m.key)}
-          />
-        ))}
-        {/* Owed sits with the other money cards rather than only as a heading below —
-            it is the figure people come to this page for. Distinct from the
-            "Outstanding" card: that one is unpaid orders WITHIN the date filter above;
-            this is the facility's total current debt, regardless of period. */}
-        <Stat
-          label="Owed right now (all-time)"
-          value={balances === undefined ? '…' : balances === null ? 'unavailable' : naira(owedTotal)}
-          hint={balances && owingFacilities.length
-            ? `${owingFacilities.length} facilit${owingFacilities.length === 1 ? 'y' : 'ies'}, not date-filtered`
-            : balances ? 'nothing outstanding' : 'warehouse unreachable'}
-        />
-      </div>
-
-      {/* Owed to the central store. Lives on Spend because it is a money question —
-          and because the orders behind it are mostly direct dispatches, which the
-          request pages cannot show at all. */}
-      {balances !== undefined && (
-        <div className="rounded-lg border border-white/10 bg-white/3 px-4 py-3 mb-5">
-          {balances === null ? (
-            <div className="text-sm text-gray-500">
-              Balances unavailable — the central store could not be reached.
-            </div>
-          ) : (
-              <>
-                <div className="text-xs text-gray-500 mb-2">
-                  {owingFacilities.length
-                    ? 'Owed to the central store — click a facility to see the orders'
-                    : 'Nothing outstanding with the central store.'}
-                </div>
-                {owingFacilities.map(b => (
-                  <BalanceRow
-                    key={b.facility_id}
-                    b={b}
-                    open={openFacility === b.facility_id}
-                    onToggle={toggleFacility}
-                    orders={orders[b.facility_id]}
-                    error={orderErr[b.facility_id]}
-                  />
-                ))}
-              </>
-          )}
-        </div>
-      )}
-
-      <div className="flex border-b border-white/10 mb-4 flex-wrap">
-        {groups.map(g => <Tab key={g.key} id={g.key} label={g.label} active={group === g.key} onSelect={setGroup} />)}
-      </div>
-
-      <div className="flex gap-2 flex-wrap items-center mb-4">
+      {/* Filters live above the cards they drive, so it's clear every number below
+          (including the Bought/Sold/Gap strip) is scoped to this window. */}
+      <div className="flex gap-2 flex-wrap items-center mb-5">
         {/* Narrows the query server-side via scopeParams; self-hides for facility users. */}
         <FacilityPicker />
         <label className="text-xs text-gray-500">From</label>
@@ -588,6 +313,23 @@ export function Spend() {
           className="ml-auto px-3 py-1.5 text-xs rounded-lg border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40">
           Download CSV
         </button>
+      </div>
+
+      <div className="flex gap-3 flex-wrap mb-5">
+        {MEASURES.map(m => (
+          <Stat
+            key={m.key}
+            label={m.label}
+            value={m.count ? num(totals[m.key]) : naira(totals[m.key])}
+            hint={m.hint}
+            active={measure === m.key}
+            onClick={() => setMeasure(m.key)}
+          />
+        ))}
+      </div>
+
+      <div className="flex border-b border-white/10 mb-4 flex-wrap">
+        {groups.map(g => <Tab key={g.key} id={g.key} label={g.label} active={group === g.key} onSelect={setGroup} />)}
       </div>
 
       <div className="rounded-lg border border-white/10">
