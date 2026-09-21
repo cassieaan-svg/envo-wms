@@ -223,23 +223,27 @@ export function Spend() {
     <div className="p-6">
       <div className="mb-1 text-xl text-gray-100 font-medium">Spend</div>
 
+      {/* The cards themselves are the tabs — click Bought or Sold to switch what's
+          shown below, instead of a separate row of tab buttons repeating the choice. */}
       <div className="flex gap-3 flex-wrap mb-2">
-        <button type="button" onClick={() => setShowBoughtSplit(s => !s)}
+        <button type="button" onClick={() => setView('bought')}
           className={`flex-1 min-w-[170px] text-left rounded-lg border px-4 py-3 transition-colors ${
-            showBoughtSplit ? 'border-green-500 bg-white/5' : 'border-white/10 bg-white/3 hover:border-white/25'}`}>
-          <div className="text-xs text-gray-500">Bought {showBoughtSplit ? '▾' : '▸'}</div>
+            view === 'bought' ? 'border-green-500 bg-white/5' : 'border-white/10 bg-white/3 hover:border-white/25'}`}>
+          <div className="text-xs text-gray-500">Bought</div>
           <div className="text-xl font-medium mt-0.5 text-gray-100">
             {boughtTotal === undefined ? '…' : naira(boughtTotal)}
           </div>
-          <div className="text-[11px] text-gray-500 mt-0.5">from the central warehouse — click for requested vs dispatched</div>
+          <div className="text-[11px] text-gray-500 mt-0.5">from the central warehouse</div>
         </button>
-        <div className="flex-1 min-w-[170px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
+        <button type="button" onClick={() => setView('sold')}
+          className={`flex-1 min-w-[170px] text-left rounded-lg border px-4 py-3 transition-colors ${
+            view === 'sold' ? 'border-green-500 bg-white/5' : 'border-white/10 bg-white/3 hover:border-white/25'}`}>
           <div className="text-xs text-gray-500">Sold</div>
           <div className="text-xl font-medium mt-0.5 text-gray-100">
             {soldTotal === undefined ? '…' : soldTotal === null ? 'unavailable' : naira(soldTotal)}
           </div>
           <div className="text-[11px] text-gray-500 mt-0.5">priced consumption</div>
-        </div>
+        </button>
         <div className="flex-1 min-w-[170px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
           <div className="text-xs text-gray-500">Gap</div>
           <div className={`text-xl font-medium mt-0.5 ${bsGap == null ? 'text-gray-100' : bsGap >= 0 ? 'text-blue-300' : 'text-amber-400'}`}>
@@ -248,11 +252,21 @@ export function Spend() {
         </div>
       </div>
 
+      {view === 'sold' ? <SalesPanel /> : <>
+
+      <p className="text-sm text-gray-500 mb-2">
+        What has been bought from the central warehouse. Cancelled requests are excluded.{' '}
+        <button type="button" onClick={() => setShowBoughtSplit(s => !s)}
+          className="text-blue-400 hover:text-blue-300 underline decoration-dotted underline-offset-2">
+          {showBoughtSplit ? 'Hide' : 'Show'} requested vs dispatched
+        </button>
+      </p>
+
       {showBoughtSplit && (
         <div className="rounded-lg border border-white/10 bg-white/3 px-4 py-3 mb-5">
           {!singleFacility?.id ? (
             <div className="text-sm text-gray-500">
-              Select a single facility (the picker above the table) to see the requested-vs-dispatched split —
+              Select a single facility (the picker below) to see the requested-vs-dispatched split —
               the warehouse doesn't report that split summed across many facilities at once.
             </div>
           ) : boughtSplit === undefined ? (
@@ -276,25 +290,6 @@ export function Spend() {
           )}
         </div>
       )}
-
-      <div className="flex gap-2 mb-5">
-        <button type="button" onClick={() => setView('bought')}
-          className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-            view === 'bought' ? 'bg-white/10 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
-          Bought
-        </button>
-        <button type="button" onClick={() => setView('sold')}
-          className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-            view === 'sold' ? 'bg-white/10 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
-          Sold
-        </button>
-      </div>
-
-      {view === 'sold' ? <SalesPanel /> : <>
-
-      <p className="text-sm text-gray-500 mb-5">
-        What has been bought from the central warehouse. Cancelled requests are excluded.
-      </p>
 
       {err && <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400">{err}</div>}
 
