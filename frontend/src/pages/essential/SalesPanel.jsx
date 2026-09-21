@@ -113,17 +113,9 @@ export function SalesPanel() {
 
       {err && <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400">{err}</div>}
 
-      <div className="flex gap-3 flex-wrap mb-5">
-        <Stat label="Total sold" value={naira(totals.revenue)} />
-        <Stat label="Quantity" value={num(totals.quantity)} />
-        <Stat label="Transactions" value={num(totals.txn)} />
-      </div>
-
-      <div className="flex border-b border-white/10 mb-4 flex-wrap">
-        {groups.map(g => <Tab key={g.key} id={g.key} label={g.label} active={group === g.key} onSelect={setGroup} />)}
-      </div>
-
-      <div className="flex gap-2 flex-wrap items-center mb-4">
+      {/* Filters live above the cards they drive, so it's clear the totals below are
+          scoped to this window — same layout as the Bought view. */}
+      <div className="flex gap-2 flex-wrap items-center mb-5">
         <FacilityPicker />
         <label className="text-xs text-gray-500">From</label>
         <input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)}
@@ -135,6 +127,16 @@ export function SalesPanel() {
           className="ml-auto px-3 py-1.5 text-xs rounded-lg border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-40">
           Download CSV
         </button>
+      </div>
+
+      <div className="flex gap-3 flex-wrap mb-5">
+        <Stat label="Total sold" value={naira(totals.revenue)} />
+        <Stat label="Quantity" value={num(totals.quantity)} />
+        <Stat label="Transactions" value={num(totals.txn)} />
+      </div>
+
+      <div className="flex border-b border-white/10 mb-4 flex-wrap">
+        {groups.map(g => <Tab key={g.key} id={g.key} label={g.label} active={group === g.key} onSelect={setGroup} />)}
       </div>
 
       <div className="rounded-lg border border-white/10">
