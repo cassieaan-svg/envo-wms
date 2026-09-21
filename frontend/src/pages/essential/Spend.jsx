@@ -494,10 +494,6 @@ export function Spend() {
           )}
         </div>
       )}
-      <p className="text-xs text-gray-600 mb-5 -mt-3">
-        Same {from} to {to} window as below — bought is what left the warehouse, sold is priced
-        consumption; a gap is normal (stock on the shelf, unpriced items, timing), not a discrepancy.
-      </p>
 
       <div className="flex gap-2 mb-5">
         <button type="button" onClick={() => setView('bought')}
