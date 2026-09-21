@@ -293,6 +293,10 @@ export function Spend() {
   // costs an extra render pass, and trips react-hooks). It also makes a stale response
   // impossible to display: data for an old key simply reads as "still loading".
   const [data, setData] = useState({ key: null, rows: [], err: null })
+  // Bought-vs-sold comparison strip, visible regardless of which tab is open — a
+  // lightweight totals-only fetch of the same sales data SalesPanel shows in
+  // detail, scoped to the same period/facility filter as the Bought view.
+  const [soldTotal, setSoldTotal] = useState(undefined)   // undefined = loading, null = failed
 
   // The admin picker narrows the query server-side. state/lga travel as params rather
   // than an id list — resolveListFacilityIds intersects them with the caller's own
@@ -341,6 +345,16 @@ export function Spend() {
     return () => { cancelled = true }
   }, [queryKey, group, from, to, scopeParams])
 
+  // Same from/to/scope as Bought, but grouping doesn't matter here — only the sum.
+  useEffect(() => {
+    let cancelled = false
+    setSoldTotal(undefined)
+    api.dispense.salesSummary({ group_by: 'month', from, to, ...scopeParams })
+      .then(rows => { if (!cancelled) setSoldTotal((rows || []).reduce((s, r) => s + Number(r.revenue || 0), 0)) })
+      .catch(() => { if (!cancelled) setSoldTotal(null) })
+    return () => { cancelled = true }
+  }, [from, to, scopeParams])
+
   const totals = useMemo(() => rows.reduce((a, r) => ({
     orders:      a.orders      + Number(r.orders || 0),
     issued:      a.issued      + Number(r.issued || 0),
@@ -381,9 +395,45 @@ export function Spend() {
     a.click(); URL.revokeObjectURL(a.href)
   }
 
+  // Bought = value issued from the warehouse (what came in); Sold = revenue from
+  // priced consumption (what went out). Same period/facility filter as whichever
+  // is currently selected, so the two numbers are always comparable at a glance.
+  const boughtTotal = loading ? undefined : totals.issued
+  const bsGap = (boughtTotal != null && soldTotal != null) ? boughtTotal - soldTotal : null
+
   return (
     <div className="p-6">
       <div className="mb-1 text-xl text-gray-100 font-medium">Spend</div>
+
+      <div className="flex gap-3 flex-wrap mb-5">
+        <div className="flex-1 min-w-[170px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
+          <div className="text-xs text-gray-500">Bought</div>
+          <div className="text-xl font-medium mt-0.5 text-gray-100">
+            {boughtTotal === undefined ? '…' : naira(boughtTotal)}
+          </div>
+          <div className="text-[11px] text-gray-500 mt-0.5">from the central warehouse</div>
+        </div>
+        <div className="flex-1 min-w-[170px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
+          <div className="text-xs text-gray-500">Sold</div>
+          <div className="text-xl font-medium mt-0.5 text-gray-100">
+            {soldTotal === undefined ? '…' : soldTotal === null ? 'unavailable' : naira(soldTotal)}
+          </div>
+          <div className="text-[11px] text-gray-500 mt-0.5">priced consumption</div>
+        </div>
+        <div className="flex-1 min-w-[170px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
+          <div className="text-xs text-gray-500">Gap</div>
+          <div className={`text-xl font-medium mt-0.5 ${bsGap == null ? 'text-gray-100' : bsGap >= 0 ? 'text-blue-300' : 'text-amber-400'}`}>
+            {bsGap == null ? '…' : naira(Math.abs(bsGap))}
+          </div>
+          <div className="text-[11px] text-gray-500 mt-0.5">
+            {bsGap == null ? 'bought vs sold' : bsGap >= 0 ? 'bought more than sold' : 'sold more than bought'}
+          </div>
+        </div>
+      </div>
+      <p className="text-xs text-gray-600 mb-5 -mt-3">
+        Same {from} to {to} window as below — bought is what left the warehouse, sold is priced
+        consumption; a gap is normal (stock on the shelf, unpriced items, timing), not a discrepancy.
+      </p>
 
       <div className="flex gap-2 mb-5">
         <button type="button" onClick={() => setView('bought')}
