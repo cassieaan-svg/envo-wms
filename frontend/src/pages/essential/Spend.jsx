@@ -273,6 +273,10 @@ export function Spend() {
   const filterState    = useAppStore(s => s.adminFilterState)
   const filterLGA      = useAppStore(s => s.adminFilterLGA)
   const filterFacility = useAppStore(s => s.adminFilterFacility)
+  const ownFacility     = useAppStore(s => s.currentFacility)
+  // The one facility this view is pinned to, if any — a facility login is always
+  // pinned to itself; an admin is pinned only once it has picked one.
+  const singleFacility = isAdmin ? filterFacility : ownFacility
 
   const groups = useMemo(() => GROUPS.filter(g => isAdmin || !g.adminOnly), [isAdmin])
   // A facility login has no 'facility'/'lga' grouping, so it must not start on one.
@@ -297,6 +301,12 @@ export function Spend() {
   // lightweight totals-only fetch of the same sales data SalesPanel shows in
   // detail, scoped to the same period/facility filter as the Bought view.
   const [soldTotal, setSoldTotal] = useState(undefined)   // undefined = loading, null = failed
+  // Bought splits into "from your request" vs "direct dispatch" only when the view
+  // is pinned to ONE facility — the WMS spend aggregate has no source dimension, so
+  // the split comes from that facility's own order list (already fetched for the
+  // balance drill-down) rather than a per-facility loop across a whole jurisdiction.
+  const [showBoughtSplit, setShowBoughtSplit] = useState(false)
+  const [boughtSplit, setBoughtSplit] = useState(undefined)  // undefined = loading, null = failed
 
   // The admin picker narrows the query server-side. state/lga travel as params rather
   // than an id list — resolveListFacilityIds intersects them with the caller's own
@@ -344,6 +354,32 @@ export function Spend() {
       .catch(e => { if (!cancelled) setData({ key: queryKey, rows: [], err: e?.message || 'Could not load spend' }) })
     return () => { cancelled = true }
   }, [queryKey, group, from, to, scopeParams])
+
+  // The Bought card's requested-vs-direct split, fetched only while the panel is
+  // open and only for a single pinned facility (see singleFacility above).
+  useEffect(() => {
+    if (!showBoughtSplit) return
+    if (!singleFacility?.id) { setBoughtSplit(null); return }
+    let cancelled = false
+    setBoughtSplit(undefined)
+    api.warehouseRequests.balanceOrders(singleFacility.id)
+      .then(orders => {
+        if (cancelled) return
+        const inRange = (orders || []).filter(o => {
+          const d = String(o.dispatched_at || '').slice(0, 10)
+          return d >= from && d <= to
+        })
+        const split = { request: { amount: 0, orders: 0 }, direct: { amount: 0, orders: 0 } }
+        inRange.forEach(o => {
+          const bucket = split[o.source] || split.direct
+          bucket.amount += Number(o.total_amount || 0)
+          bucket.orders += 1
+        })
+        setBoughtSplit(split)
+      })
+      .catch(() => { if (!cancelled) setBoughtSplit(null) })
+    return () => { cancelled = true }
+  }, [showBoughtSplit, singleFacility?.id, from, to])
 
   // Same from/to/scope as Bought, but grouping doesn't matter here — only the sum.
   useEffect(() => {
@@ -405,14 +441,16 @@ export function Spend() {
     <div className="p-6">
       <div className="mb-1 text-xl text-gray-100 font-medium">Spend</div>
 
-      <div className="flex gap-3 flex-wrap mb-5">
-        <div className="flex-1 min-w-[170px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
-          <div className="text-xs text-gray-500">Bought</div>
+      <div className="flex gap-3 flex-wrap mb-2">
+        <button type="button" onClick={() => setShowBoughtSplit(s => !s)}
+          className={`flex-1 min-w-[170px] text-left rounded-lg border px-4 py-3 transition-colors ${
+            showBoughtSplit ? 'border-green-500 bg-white/5' : 'border-white/10 bg-white/3 hover:border-white/25'}`}>
+          <div className="text-xs text-gray-500">Bought {showBoughtSplit ? '▾' : '▸'}</div>
           <div className="text-xl font-medium mt-0.5 text-gray-100">
             {boughtTotal === undefined ? '…' : naira(boughtTotal)}
           </div>
-          <div className="text-[11px] text-gray-500 mt-0.5">from the central warehouse</div>
-        </div>
+          <div className="text-[11px] text-gray-500 mt-0.5">from the central warehouse — click for requested vs dispatched</div>
+        </button>
         <div className="flex-1 min-w-[170px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
           <div className="text-xs text-gray-500">Sold</div>
           <div className="text-xl font-medium mt-0.5 text-gray-100">
@@ -425,11 +463,37 @@ export function Spend() {
           <div className={`text-xl font-medium mt-0.5 ${bsGap == null ? 'text-gray-100' : bsGap >= 0 ? 'text-blue-300' : 'text-amber-400'}`}>
             {bsGap == null ? '…' : naira(Math.abs(bsGap))}
           </div>
-          <div className="text-[11px] text-gray-500 mt-0.5">
-            {bsGap == null ? 'bought vs sold' : bsGap >= 0 ? 'bought more than sold' : 'sold more than bought'}
-          </div>
         </div>
       </div>
+
+      {showBoughtSplit && (
+        <div className="rounded-lg border border-white/10 bg-white/3 px-4 py-3 mb-5">
+          {!singleFacility?.id ? (
+            <div className="text-sm text-gray-500">
+              Select a single facility (the picker above the table) to see the requested-vs-dispatched split —
+              the warehouse doesn't report that split summed across many facilities at once.
+            </div>
+          ) : boughtSplit === undefined ? (
+            <div className="text-sm text-gray-500">Loading…</div>
+          ) : boughtSplit === null ? (
+            <div className="text-sm text-red-400">Could not load {singleFacility.name}'s orders from the warehouse.</div>
+          ) : (
+            <div className="flex gap-6 flex-wrap">
+              <div>
+                <div className="text-xs text-gray-500">From your requests</div>
+                <div className="text-lg font-medium text-gray-100">{naira(boughtSplit.request.amount)}</div>
+                <div className="text-[11px] text-gray-500">{boughtSplit.request.orders} order(s)</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Direct dispatch</div>
+                <div className="text-lg font-medium text-gray-100">{naira(boughtSplit.direct.amount)}</div>
+                <div className="text-[11px] text-gray-500">{boughtSplit.direct.orders} order(s)</div>
+              </div>
+              <div className="text-[11px] text-gray-600 self-end">for {singleFacility.name}, {from} to {to}</div>
+            </div>
+          )}
+        </div>
+      )}
       <p className="text-xs text-gray-600 mb-5 -mt-3">
         Same {from} to {to} window as below — bought is what left the warehouse, sold is priced
         consumption; a gap is normal (stock on the shelf, unpriced items, timing), not a discrepancy.
