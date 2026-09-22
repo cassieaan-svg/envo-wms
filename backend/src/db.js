@@ -13,6 +13,11 @@ dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '..', '.env'
 // Keep DATE (oid 1082) as the literal 'YYYY-MM-DD' string it already is.
 pg.types.setTypeParser(1082, (value) => value);
 
+// A hosted Postgres (Supabase, Render, etc.) requires TLS and presents a certificate this
+// process has no local CA bundle to verify — standard for these providers' pooled/direct
+// connections alike. `rejectUnauthorized: false` still encrypts the connection; it only
+// skips verifying the certificate chain. Local Postgres has no TLS listener at all, so this
+// must stay opt-in — PGSSLMODE=require is what every hosted provider's docs tell you to set.
 const pool = new pg.Pool({
   host: process.env.PGHOST,
   port: Number(process.env.PGPORT || 5432),
@@ -20,6 +25,7 @@ const pool = new pg.Pool({
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
   max: Number(process.env.PG_POOL_MAX || 10),
+  ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : undefined,
 });
 
 export function query(text, params) {
