@@ -136,6 +136,10 @@ router.post('/:id/dispatch-orders', requirePermission('dispatchOrders.edit'), as
       // are shared, so stamping the account name says nothing about who handed it over.
       dispatchedBy: (typeof req.body?.dispatchedBy === 'string' && req.body.dispatchedBy.trim())
         || req.user?.fullName || req.user?.username || null,
+      // Who approved the issue, as typed on the form. Unlike dispatchedBy there is no
+      // fallback to the login: a shared store account would be recorded as the authoriser,
+      // which is exactly the false record this field exists to prevent. Blank stays null.
+      authorizedBy: (typeof req.body?.authorizedBy === 'string' && req.body.authorizedBy.trim()) || null,
       scheme: req.body?.scheme,   // the fund this direct issue is made against
       // Optional: a retry carrying the same id returns the original order rather than
       // drawing the stock a second time.

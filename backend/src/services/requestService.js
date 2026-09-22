@@ -297,7 +297,7 @@ export class RequestService {
   // move an order onto another fund would change who pays for it — a free BHCPF issue
   // becoming a DRF debt — without the facility ever agreeing. The warehouse does choose
   // a fund for a direct dispatch it raises itself (DispatchService.createOrder).
-  static async fulfil(id, { dispatchedBy, carrierName, carrierPhone, pickedBy, items, clientTxnId = null, actorUserId = null } = {}) {
+  static async fulfil(id, { dispatchedBy, authorizedBy = null, carrierName, carrierPhone, pickedBy, items, clientTxnId = null, actorUserId = null } = {}) {
     // Stock is not released to an unnamed carrier — the pair is the handover record.
     if (!carrierName?.trim()) { const e = new Error("the carrier's name is required"); e.status = 400; throw e; }
     if (!carrierPhone?.trim()) { const e = new Error("the carrier's phone number is required"); e.status = 400; throw e; }
@@ -391,9 +391,10 @@ export class RequestService {
         `UPDATE requests
             SET status = 'dispatched', dispatched_at = now(), dispatched_by = $2,
                 carrier_name = $3, carrier_phone = $4,
-                picked_by = $5, picked_at = COALESCE(picked_at, now())
+                picked_by = $5, picked_at = COALESCE(picked_at, now()),
+                authorized_by = $6
           WHERE id = $1 RETURNING *`,
-        [id, dispatchedBy ?? null, carrierName.trim(), carrierPhoneNorm, picker]);
+        [id, dispatchedBy ?? null, carrierName.trim(), carrierPhoneNorm, picker, authorizedBy ?? null]);
       const dispatched = upd[0];
 
       // Record the fulfilment as a dispatch order so it shows in dispatch history, and
@@ -403,9 +404,9 @@ export class RequestService {
       const orderTotal = round2(dispatchedLines.reduce((s, l) => s + l.lineTotal, 0));
       const { rows: ord } = await client.query(
         `INSERT INTO dispatch_orders
-           (facility_id, total_amount, dispatched_by, notes, scheme, origin, source_instance)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [req.facility_id, orderTotal, dispatchedBy ?? null,
+           (facility_id, total_amount, dispatched_by, authorized_by, notes, scheme, origin, source_instance)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [req.facility_id, orderTotal, dispatchedBy ?? null, authorizedBy ?? null,
          `Essential request #${dispatched.id}${dispatched.envo_request_id ? ` (${dispatched.envo_request_id})` : ''}`,
          // The dispatch order inherits the request's fund; it is not a separate choice.
          req.scheme, ORIGIN, INSTANCE_ID]);

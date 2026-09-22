@@ -3,7 +3,7 @@ import { api } from '../lib/api.js';
 import { Banner, Empty, Field, Modal, blockEnterSubmit, money, qty, dateTime } from '../components/ui.jsx';
 import DayHistory from '../components/DayHistory.jsx';
 import { downloadCsv, downloadPdf, slug, stamp } from '../lib/download.js';
-import { printDrfVoucher } from '../lib/drfVoucher.js';
+import { printDrfVoucher, voucherName } from '../lib/drfVoucher.js';
 import { isValidNgPhone } from '../lib/phone.js';
 import { withTxn } from '../lib/txn';
 
@@ -342,6 +342,10 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
   const [dispatchedBy, setDispatchedBy] = useState(
     () => request.dispatched_by || localStorage.getItem('wms_dispatched_by') || ''
   );
+  // Who approved the release, remembered locally like the field above.
+  const [authorizedBy, setAuthorizedBy] = useState(
+    () => request.authorized_by || localStorage.getItem('wms_authorized_by') || ''
+  );
   const [receivedBy, setReceivedBy] = useState(request.received_by || '');
   // Issue quantity per line, editable while picking (defaults to the requested amount);
   // clamped to [0, requested] on submit. Only meaningful before dispatch.
@@ -392,7 +396,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
 
   const canDispatch =
     (request.picked_by || pickedBy.trim()) && carrierName.trim() && carrierPhone.trim()
-    && dispatchedBy.trim();
+    && dispatchedBy.trim() && authorizedBy.trim();
 
   const phoneValid = isValidNgPhone(carrierPhone);
 
@@ -434,7 +438,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
         </button>
         <button className="btn small" onClick={printVoucher} disabled={printing}>
           {printing ? 'preparing…'
-            : prints.length === 0 ? '⎙ DRF Voucher'
+            : prints.length === 0 ? `⎙ ${voucherName(request.scheme)}`
             : `⎙ Reprint (#${prints.length})`}
         </button>
       </div>
@@ -547,6 +551,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
             e.preventDefault();
             // Remembered here rather than through onAct, which takes only (fn, okMsg).
             localStorage.setItem('wms_dispatched_by', dispatchedBy.trim());
+            localStorage.setItem('wms_authorized_by', authorizedBy.trim());
             onAct(
               () =>
                 withTxn(`fulfil:${request.id}`, (clientTxnId) =>
@@ -555,6 +560,7 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
                     carrierName: carrierName.trim(),
                     carrierPhone: carrierPhone.trim(),
                     dispatchedBy: dispatchedBy.trim(),
+                    authorizedBy: authorizedBy.trim(),
                     items: request.items.map((i) => ({ itemId: i.id, qty: clampIssue(i) })),
                     clientTxnId,
                   })),
@@ -583,6 +589,14 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
                 value={dispatchedBy}
                 onChange={(e) => setDispatchedBy(e.target.value)}
                 placeholder="who is releasing the stock"
+                required
+              />
+            </Field>
+            <Field label="Authorized by *">
+              <input
+                value={authorizedBy}
+                onChange={(e) => setAuthorizedBy(e.target.value)}
+                placeholder="who approved this dispatch"
                 required
               />
             </Field>
@@ -716,7 +730,8 @@ function RequestDetailModal({ request, busy, onClose, onAct }) {
       {(request.status === 'dispatched' || request.status === 'received') && (
         <p className="muted" style={{ marginBottom: 0 }}>
           Dispatched {dateTime(request.dispatched_at)}
-          {request.dispatched_by ? ` by ${request.dispatched_by}` : ''}.
+          {request.dispatched_by ? ` by ${request.dispatched_by}` : ''}
+          {request.authorized_by ? `, authorized by ${request.authorized_by}` : ''}.
           {request.status === 'received' && (
             <>
               {' '}Received {dateTime(request.received_at)}
