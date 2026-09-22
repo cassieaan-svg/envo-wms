@@ -50,7 +50,7 @@ router.patch('/:id/picking', requirePermission('requests.fulfil'), async (req, r
 });
 
 /**
- * POST /api/requests/:id/fulfil — dispatch. Body: { carrierName, carrierPhone, pickedBy?, dispatchedBy? }.
+ * POST /api/requests/:id/fulfil — dispatch. Body: { carrierName, carrierPhone, pickedBy?, dispatchedBy?, authorizedBy? }.
  * Previously reachable by any logged-in user with no role check — a gap the Phase 1 audit
  * flagged explicitly. Now requires requests.fulfil.
  */
@@ -61,6 +61,8 @@ router.post('/:id/fulfil', requirePermission('requests.fulfil'), async (req, res
       // shared, so the account name says nothing about who released the stock.
       dispatchedBy: (typeof req.body?.dispatchedBy === 'string' && req.body.dispatchedBy.trim())
         || who(req),
+      // Typed only, never defaulted to the login — see the direct-dispatch route.
+      authorizedBy: (typeof req.body?.authorizedBy === 'string' && req.body.authorizedBy.trim()) || null,
       carrierName: req.body?.carrierName,
       carrierPhone: req.body?.carrierPhone,
       pickedBy: req.body?.pickedBy,
