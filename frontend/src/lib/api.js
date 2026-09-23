@@ -2,7 +2,9 @@
 // by the migrated local Postgres) instead of Supabase. The `api` export below is
 // the data surface that replaces the old `sb.from(...)` calls; realtime
 // (sb.channel) is migrated separately (#5).
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+// `??`, not `||`: an EMPTY VITE_API_URL means "same origin" (the backend serves this
+// build), whereas unset falls back to the local dev backend.
+const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
 
 // JWT issued by POST /auth/login, persisted so sessions survive a refresh.
 const TOKEN_KEY = 'envo_token'

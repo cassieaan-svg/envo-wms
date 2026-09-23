@@ -6,7 +6,7 @@ import { getToken } from './api'
 // the old postgres_changes callbacks consumed — so callers refetch their scoped
 // data (and transfer callbacks can still read new.status for their toasts).
 
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
 
 const registry = new Map() // table -> Set<callback>
 let es = null

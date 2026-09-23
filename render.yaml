@@ -1,0 +1,62 @@
+# Render Blueprint — deploys the essential-commodities branch as ONE Web Service: the Express
+# backend, serving both the API and the built frontend from one URL (see the static block in
+# backend/src/server.js). Same shape as the envo-wms (main) deployment.
+#
+# THIS IS A SEPARATE APP FROM main. Create a NEW Render service and a NEW Supabase project
+# for it. Never point it at the envo-wms database: the two share table names (users,
+# facilities, commodities, ...) and would corrupt each other.
+#
+# Use: Render dashboard -> New -> Blueprint -> pick this repo and the essential-commodities
+# branch. Render prompts for every envVar marked `sync: false` (never stored in git).
+#
+# The database is NOT created by this file. Restore the schema dump into the new Supabase
+# project (public schema only), then apply db/migrations/*.sql by hand — migrations never
+# run on deploy. See backend/scripts/apply_migration.mjs.
+services:
+  - type: web
+    name: envo-essential
+    runtime: node
+    plan: free
+    branch: essential-commodities
+    # --include=dev: the frontend build needs Vite and friends, which are devDependencies.
+    # VITE_API_URL is set EMPTY on purpose = same origin (api.js / realtime.js use `??`).
+    buildCommand: npm install --include=dev && VITE_API_URL= npm run build --workspace @envo/frontend
+    startCommand: npm start --workspace @envo/backend
+    healthCheckPath: /health
+    envVars:
+      # Vite 8 needs Node ^20.19 or >=22.12.
+      - key: NODE_VERSION
+        value: 22
+      # Render sets PORT itself; backend/src/server.js already reads process.env.PORT.
+
+      # ── Supabase connection — use the SESSION POOLER (port 5432), not the direct host.
+      # The direct host is IPv6-only, and the transaction pooler (6543) breaks the backend's
+      # LISTEN/NOTIFY realtime stream. Paste these from Supabase -> Connect.
+      - key: PGHOST
+        sync: false
+      - key: PGPORT
+        value: 5432
+      - key: PGDATABASE
+        value: postgres
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGSSLMODE
+        value: require
+
+      # ── App secrets — generated fresh, never reuse a local dev secret ──────────────────
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+
+      # ── Warehouse WMS integration (optional) ───────────────────────────────────────────
+      # Warehouse requests / Spend call the WMS (the envo-wms app). Leave blank for a
+      # standalone test: those screens will simply fail to reach a WMS. To wire them up, set
+      # WMS_API_URL to the WMS origin (no trailing slash) and SERVICE_TOKEN to the SAME
+      # shared secret the WMS checks.
+      - key: WMS_API_URL
+        sync: false
+      - key: SERVICE_TOKEN
+        sync: false

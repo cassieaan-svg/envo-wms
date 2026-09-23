@@ -1,6 +1,9 @@
 import dotenv from 'dotenv'
 dotenv.config()
 
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import express from 'express'
 import cors from 'cors'
 import compression from 'compression'
@@ -133,6 +136,35 @@ app.use('/api/bincard', binCardRoutes)
 // ACL configuration screens. Every handler gates on req.scope (system_admin or
 // state_admin); the ACL resolver is not imported here and stays shadow-only.
 app.use('/api/admin', adminRoutes)
+
+// Serve the built frontend from the same origin as the API (single Render Web Service).
+// Mounted AFTER every API route so it can never shadow /api, /auth, /hooks or /health.
+// Skipped when there is no build, so a dev machine running `vite` separately is unaffected.
+// The frontend builds to the repo-root /dist (vite.config.js build.outDir).
+const distDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'dist')
+
+if (existsSync(join(distDir, 'index.html'))) {
+  app.use(express.static(distDir, {
+    // index.html and the service worker must never be cached, or a device keeps running
+    // an old build after a deploy; hashed assets can be cached hard.
+    setHeaders(res, filePath) {
+      if (/(index\.html|sw\.js|manifest\.webmanifest|registerSW\.js)$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache')
+      } else if (/[.-][A-Za-z0-9_-]{8,}\.(js|css|woff2?|png)$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      }
+    },
+  }))
+
+  // Any other GET that isn't an API/backend path is the SPA being opened at some route.
+  // GET only, so a mistyped POST still 404s instead of returning a page.
+  app.get(/^\/(?!api|auth|hooks|health).*/, (req, res, next) => {
+    if (req.accepts('html')) return res.sendFile(join(distDir, 'index.html'))
+    return next()
+  })
+} else {
+  console.log('[web] no frontend build found at', distDir, '— serving the API only')
+}
 
 // 404 handler
 app.use((req, res) => {
