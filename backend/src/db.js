@@ -38,6 +38,10 @@ export const pool = new pg.Pool({
   max: Number(process.env.PG_POOL_MAX) || 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
+  // Opt-in. node-postgres treats sslmode=require as full certificate verification, which
+  // Supabase's pooler fails ("self-signed certificate in certificate chain"). Encrypt, but
+  // don't verify the chain — the same setting the envo-wms backend uses. Unset = no SSL.
+  ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : undefined,
 })
 
 pool.on('error', err => console.error('[db] idle client error:', err.message))
