@@ -601,6 +601,21 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
   if (modules.includes('essential')) meta.essential = true
   if (levelScope) meta.admin_level = levelScope.scope_id
 
+  // An Essential facility login is a store manager, exactly like the roster-provisioned
+  // ones. The form has no facility_role field (and must not — it is never accepted from a
+  // request), and the app treats a missing one as 'dispenser', which cannot manage stock,
+  // transfer, or raise warehouse requests. Essential is also a pharmacy-section module, so
+  // a section left unticked defaults to pharmacy rather than greying the module out.
+  // HIV-only facility accounts are untouched.
+  let allScopes = scopes
+  if (role === 'facility' && modules.includes('essential')) {
+    meta.facility_role = 'store_manager'
+    if (!sections.length) {
+      meta.commodity_section = 'pharmacy'
+      allScopes = [...scopes, { dimension: 'commodity', scope_type: 'section', scope_id: 'pharmacy' }]
+    }
+  }
+
   const password = generatePassword()
   const hash = await bcrypt.hash(password, 10)
 
@@ -618,7 +633,7 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
     await exec(
       `insert into user_roles (user_id, role_id, scope_type, scope_id) values ($1, $2, $3, $4)`,
       [userId, roleId, geo?.scope_type ?? '', geo ? String(geo.scope_id).trim() : ''])
-    for (const s of scopes) {
+    for (const s of allScopes) {
       await exec(
         `insert into user_role_scopes (user_id, role_id, dimension, scope_type, scope_id)
          values ($1, $2, $3, $4, $5) on conflict do nothing`,

@@ -555,6 +555,45 @@ test('granting the Essential module also sets the live grant, so ACL and legacy 
   } finally { await cleanupCreated() }
 })
 
+test('an Essential facility login is a store manager with the pharmacy section, not a dispenser', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const name = createdName(); CREATED.push(name)
+  try {
+    // No section ticked and nothing about a role in the request — both are derived.
+    const { user } = await createUser(sysIdentity(actor), {
+      username: name, role: 'facility',
+      scopes: [
+        { dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+        { dimension: 'module', scope_type: 'module', scope_id: 'essential' },
+      ],
+    })
+    const { rows } = await query(`select raw_user_meta_data m from users where id = $1`, [user.id])
+    assert.equal(rows[0].m.facility_role, 'store_manager', 'a missing facility_role would read as dispenser')
+    assert.equal(rows[0].m.commodity_section, 'pharmacy', 'Essential is a pharmacy-section module')
+    assert.ok(user.scopes.some(s => s.dimension === 'commodity' && s.scope_id === 'pharmacy'),
+      'the ACL carries the same section the metadata does')
+  } finally { await cleanupCreated() }
+})
+
+test('an HIV-only facility login is left as it was: no facility_role is set', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const name = createdName(); CREATED.push(name)
+  try {
+    const { user } = await createUser(sysIdentity(actor), {
+      username: name, role: 'facility',
+      scopes: [
+        { dimension: 'geography', scope_type: 'facility', scope_id: f.id },
+        { dimension: 'module', scope_type: 'module', scope_id: 'hiv' },
+      ],
+    })
+    const { rows } = await query(`select raw_user_meta_data m from users where id = $1`, [user.id])
+    assert.equal(rows[0].m.facility_role, undefined)
+    assert.equal(rows[0].m.commodity_section, undefined)
+  } finally { await cleanupCreated() }
+})
+
 test('only a hash is stored — never the password', async () => {
   const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
   const f = await facilityIn(await someState())
