@@ -545,7 +545,7 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
   const levelScope = scopes.find(s => s.dimension === 'facility_level')
   const sections = scopes.filter(s => s.dimension === 'commodity' && s.scope_type === 'section')
                          .map(s => s.scope_id)
-  const modules = scopes.filter(s => s.dimension === 'module').map(s => s.scope_id)
+  let modules = scopes.filter(s => s.dimension === 'module').map(s => s.scope_id)
 
   // A state-confined administrator may only create inside its own state — checked
   // against the geography that will actually be written, whatever its shape.
@@ -596,9 +596,24 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
   // two diverge deliberately, exactly as they do for the existing Essential
   // accounts.
   if (sections.length) meta.commodity_section = sections[0]
+  // An essential_admin administers Essential Commodities and nothing else. The form's module
+  // chip starts on HIV for an unconfined caller, so leaving it alone used to mint an
+  // essential_admin with no Essential grant at all, and ticking HIV offered it the HIV module
+  // on login. The module is forced here rather than trusted from the request.
+  let allScopes = scopes
+  if (role === 'essential_admin') {
+    modules = ['essential']
+    allScopes = [...scopes.filter(s => s.dimension !== 'module'),
+                 { dimension: 'module', scope_type: 'module', scope_id: 'essential' }]
+  }
+
   // The essential-commodities branch's live gate. Set it when the account is
   // actually being given that module, so ACL and legacy agree from the start.
   if (modules.includes('essential')) meta.essential = true
+  // Essential WITHOUT HIV means locked to Essential: without this flag an admin tier (which
+  // oversees every module it holds a grant for) or a facility that also happens to be
+  // enrolled in HIV still gets the HIV card enabled on the module picker.
+  if (modules.includes('essential') && !modules.includes('hiv')) meta.essential_only = true
   if (levelScope) meta.admin_level = levelScope.scope_id
 
   // An Essential facility login is a store manager, exactly like the roster-provisioned
@@ -607,12 +622,11 @@ export async function createUser(identity, { username, role, scopes = [] } = {})
   // transfer, or raise warehouse requests. Essential is also a pharmacy-section module, so
   // a section left unticked defaults to pharmacy rather than greying the module out.
   // HIV-only facility accounts are untouched.
-  let allScopes = scopes
   if (role === 'facility' && modules.includes('essential')) {
     meta.facility_role = 'store_manager'
     if (!sections.length) {
       meta.commodity_section = 'pharmacy'
-      allScopes = [...scopes, { dimension: 'commodity', scope_type: 'section', scope_id: 'pharmacy' }]
+      allScopes = [...allScopes, { dimension: 'commodity', scope_type: 'section', scope_id: 'pharmacy' }]
     }
   }
 

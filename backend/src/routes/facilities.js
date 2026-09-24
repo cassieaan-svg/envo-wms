@@ -29,8 +29,19 @@ router.get('/', async (req, res) => {
     // system_admin that never picks one, say, defaults to 'hiv' and would
     // otherwise never see the Essential roster here).
     const wantsAll = all === 'true' || all === '1'
+
+    // An essential_admin is confined to its own state and, when it carries one, to one
+    // facility level (Primary or Secondary). Enforced here rather than left to the client:
+    // stock, requests and users are already narrowed this way, but this list feeds every
+    // facility dropdown and filter, so a Primary admin was still being shown Secondary
+    // facilities. Applied to `all=true` too — a level-confined admin can only create
+    // accounts at its own level anyway (createUser refuses the rest).
+    const s = req.scope
+    const confined = s?.accessLevel === 'essential_admin'
     const facilities = await FacilityService.getFacilities({
-      state, lga, cluster, name, module: wantsAll ? undefined : scopedModule(req),
+      state: (confined && s.adminState) || state,
+      level: confined && s.adminLevel ? s.adminLevel : undefined,
+      lga, cluster, name, module: wantsAll ? undefined : scopedModule(req),
     })
 
     res.json({

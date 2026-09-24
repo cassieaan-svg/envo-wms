@@ -576,6 +576,59 @@ test('an Essential facility login is a store manager with the pharmacy section, 
   } finally { await cleanupCreated() }
 })
 
+test('an essential_admin is forced to Essential-only, whatever module chip the form sent', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const state = await someState()
+  try {
+    // The form's chip starts on HIV for a system admin — the case that used to create an
+    // essential_admin with no Essential access at all.
+    for (const modules of [['hiv'], ['hiv', 'essential'], ['essential'], []]) {
+      const name = createdName(); CREATED.push(name)
+      const { user } = await createUser(sysIdentity(actor), {
+        username: name, role: 'essential_admin',
+        scopes: [
+          { dimension: 'geography', scope_type: 'state', scope_id: state },
+          ...modules.map(m => ({ dimension: 'module', scope_type: 'module', scope_id: m })),
+        ],
+      })
+      const { rows } = await query(`select raw_user_meta_data m from users where id = $1`, [user.id])
+      assert.equal(rows[0].m.essential, true, `modules ${JSON.stringify(modules)}: Essential grant`)
+      assert.equal(rows[0].m.essential_only, true, `modules ${JSON.stringify(modules)}: locked to Essential`)
+      assert.deepEqual(user.scopes.filter(s => s.dimension === 'module').map(s => s.scope_id), ['essential'],
+        `modules ${JSON.stringify(modules)}: the ACL carries Essential only`)
+    }
+  } finally { await cleanupCreated() }
+})
+
+test('Essential-only is locked; a dual-module login is not', async () => {
+  const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
+  const f = await facilityIn(await someState())
+  const geo = { dimension: 'geography', scope_type: 'facility', scope_id: f.id }
+  try {
+    const only = createdName(); CREATED.push(only)
+    const dual = createdName(); CREATED.push(dual)
+    const a = await createUser(sysIdentity(actor), { username: only, role: 'facility',
+      scopes: [geo, { dimension: 'module', scope_type: 'module', scope_id: 'essential' }] })
+    const b = await createUser(sysIdentity(actor), { username: dual, role: 'facility',
+      scopes: [geo, { dimension: 'module', scope_type: 'module', scope_id: 'essential' },
+                    { dimension: 'module', scope_type: 'module', scope_id: 'hiv' }] })
+    const meta = async id => (await query(`select raw_user_meta_data m from users where id = $1`, [id])).rows[0].m
+    assert.equal((await meta(a.user.id)).essential_only, true)
+    assert.equal((await meta(b.user.id)).essential_only, undefined, 'a login given both modules keeps both')
+    assert.equal((await meta(b.user.id)).essential, true)
+  } finally { await cleanupCreated() }
+})
+
+test('the facility list can be narrowed to one level', async () => {
+  const { FacilityService } = await import('../src/services/facilityService.js')
+  const all = await FacilityService.getFacilities({})
+  for (const level of ['primary', 'secondary']) {
+    const got = await FacilityService.getFacilities({ level })
+    assert.ok(got.every(f => f.level === level), `only ${level} facilities`)
+    assert.equal(got.length, all.filter(f => f.level === level).length)
+  }
+})
+
 test('an HIV-only facility login is left as it was: no facility_role is set', async () => {
   const actor = await makeUser({ access_level: 'system_admin' }, 'system_admin')
   const f = await facilityIn(await someState())

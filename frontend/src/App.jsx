@@ -284,6 +284,11 @@ export default function App() {
   // Essential card shows disabled (no essential grant on the account), and there
   // was no way past it. Skip the picker for this tier entirely.
   const isSystemAdmin    = accessLevel === 'system_admin'
+  const availableModules = useAppStore(s => s.availableModules)
+  // An account enabled for exactly one module (an Essential-only login) has nothing to choose
+  // between, so open it directly instead of showing a picker with one live card.
+  const enabledModules = (availableModules || []).filter(m => m.enrolled)
+  const soleModule     = enabledModules.length === 1 ? enabledModules[0].key : null
   const [checking, setChecking] = useState(true)
 
   useEffect(() => {
@@ -316,6 +321,10 @@ export default function App() {
     }
   }, [user, module, moduleDataLoaded, isSystemAdmin])
 
+  useEffect(() => {
+    if (user && !module && !isSystemAdmin && soleModule) useAppStore.getState().setModule(soleModule)
+  }, [user, module, isSystemAdmin, soleModule])
+
   if (checking) return <Spinner />
 
   if (!user) {
@@ -330,6 +339,7 @@ export default function App() {
 
   // Signed in but no module chosen yet → the two-card landing picker.
   if (!module && !isSystemAdmin) {
+    if (soleModule) return <Spinner />   // being opened straight away — see the effect above
     return (
       <>
         <ModulePicker />

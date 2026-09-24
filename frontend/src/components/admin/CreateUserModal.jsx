@@ -188,7 +188,13 @@ export function CreateUserModal({ meta, onClose, onCreated }) {
       <section className="mt-4">
         <div className={label}>Role</div>
         <select className={`${field} mt-2`} value={role}
-                onChange={e => { setRole(e.target.value); setGeoValue(''); setLevel(ownLevel || '') }}>
+                onChange={e => {
+                  const r = e.target.value
+                  setRole(r); setGeoValue(''); setLevel(ownLevel || '')
+                  // An Essential administrator is Essential-only (the server enforces it too);
+                  // start the chip there instead of on HIV, where it would look like HIV access.
+                  if (r === 'essential_admin') setModules(['essential'])
+                }}>
           <option value="">— select a role —</option>
           {meta.roles.map(r => <option key={r} value={r}>{r}</option>)}
         </select>

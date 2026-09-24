@@ -8,11 +8,12 @@ export class FacilityService {
    * match the old Supabase query the session bootstrap relied on.
    */
   static async getFacilities(options = {}) {
-    const { state, lga, cluster, name, module } = options
+    const { state, lga, cluster, name, module, level } = options
 
     const params = []
     const conds = []
     if (state) { params.push(state); conds.push(`state = $${params.length}`) }
+    if (level) { params.push(level); conds.push(`level = $${params.length}`) }
     if (lga) { params.push(lga); conds.push(`lga = $${params.length}`) }
     if (cluster) { params.push(cluster); conds.push(`cluster = $${params.length}`) }
     if (name) { params.push(name); conds.push(`name = $${params.length}`) }
