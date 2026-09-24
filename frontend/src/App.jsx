@@ -154,6 +154,19 @@ const OPERATIONAL_PREFIXES = [
 // case); 'Users' for a non-operational account (System Administrator today) — landing them
 // on a page they have no permission-relevant reason to see would be a strange first screen,
 // and a wrong nav highlight besides.
+// What the sidebar chip shows. `user.roles` (from /api/auth/me) holds the role keys the person
+// really has; `user.role` is only the legacy label and would say "standard" for a Warehouse Admin.
+const ROLE_LABELS = {
+  system_administrator: 'System Administrator',
+  warehouse_admin: 'Warehouse Admin',
+  picker_dispatcher: 'Picker/Dispatcher',
+  receiving_clerk: 'Receiving Clerk',
+};
+function roleLabel(user) {
+  const labels = (user.roles || []).map((key) => ROLE_LABELS[key] || key);
+  return labels.length ? labels.join(', ') : user.role;
+}
+
 function defaultTabFor(user) {
   if (!user) return 'Dispatch';
   const permissions = user.permissions || [];
@@ -221,9 +234,18 @@ export default function App() {
   }
 
   const Page = PAGES[tab];
-  const isAdmin = user.role === 'admin';
   const permissions = user.permissions || [];
   const can = (perm) => permissions.includes(perm);
+  // "Admin" here means the write access the old admin/standard split used to mean — and it
+  // must come from what the person can actually DO, not from `user.role`. That column is now
+  // only a leftover label: an account made through the Users page is stamped 'standard' even
+  // when it holds Warehouse Admin, and the API authorises by permission, so keying the screens
+  // off the label showed "Only admins can create dispatch orders" to a real Warehouse Admin.
+  // Warehouse Admin is the only role holding all of these; Picker/Dispatcher and Receiving
+  // Clerk hold none or only some, so they still get the read-only view.
+  const isAdmin = [
+    'dispatchOrders.edit', 'batches.adjust', 'commodities.manage', 'vendors.manage', 'facilities.manage',
+  ].every(can);
   // System Administrator holds none of these — its nav collapses to Administration only,
   // matching "system/security administration only, NOT an unrestricted warehouse operator".
   // Every operational role (Warehouse Admin, Picker/Dispatcher, Receiving Clerk) holds at
@@ -262,7 +284,7 @@ export default function App() {
         <div className="sidebar-identity">
           <div className="eyebrow">Logged in as</div>
           <div className="who">{user.fullName || user.username}</div>
-          <span className="role-chip">{user.role}</span>
+          <span className="role-chip">{roleLabel(user)}</span>
         </div>
 
         <nav>
