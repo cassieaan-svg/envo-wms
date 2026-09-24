@@ -47,8 +47,12 @@ begin
   end if;
   alter table user_role_scopes
     add constraint user_role_scopes_dimension_check
-    check (dimension in ('geography', 'commodity', 'module'));
+    check (dimension in ('geography', 'commodity', 'module', 'facility_level'));
 end $$;
+-- 'facility_level' is listed here although 20260909_facility_level_scope_dimension.sql
+-- is what introduced it: this block drops and recreates the constraint, so re-running it
+-- (migrations are re-applied by hand) would otherwise silently take the level scope away
+-- again and make creating a Primary/Secondary essential_admin fail.
 
 -- ── 2. Backfill: every existing account belongs to the HIV module ───────────
 -- essential_admin and system_admin are deliberately excluded rather than filtered
