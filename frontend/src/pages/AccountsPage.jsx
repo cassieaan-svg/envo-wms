@@ -168,8 +168,8 @@ export default function AccountsPage() {
         <div>
           <h1>Accounts</h1>
           <p className="muted">
-            Money owed to the store, per dispatch order. Only DRF issues are billed — BHCPF and
-            insurance issues are settled elsewhere and never appear here.
+            Money owed to the store, per dispatch order. Only DRF and Direct Debit issues are
+            billed — BHCPF and insurance issues are settled elsewhere and never appear here.
           </p>
         </div>
       </div>

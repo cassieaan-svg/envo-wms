@@ -26,7 +26,19 @@ const line = (label, value, flex) =>
 
 const ROW_COUNT = 14;   // the paper form has 14 numbered lines
 
+// The form itself is the same for every fund; what differs is the fund it is issued under.
+// A scheme with no entry here prints as the DRF voucher, as every scheme did before.
+const FUNDS = {
+  direct_debit: { heading: 'DIRECT DEBIT', name: 'Direct Debit Voucher' },
+};
+const DRF_FUND = { heading: 'ESSENTIAL DRUG REVOLVING FUND (DRF)', name: 'DRF Voucher' };
+const fundFor = (scheme) => FUNDS[scheme] || DRF_FUND;
+
+/** What the print button and window title call the voucher for this scheme. */
+export const voucherName = (scheme) => fundFor(scheme).name;
+
 export function buildDrfVoucherHtml(request, { printLabel = null } = {}) {
+  const fund = fundFor(request.scheme);
   // Once dispatched, a line the warehouse removed (issued 0) isn't part of the voucher —
   // the facility re-requests it later. Before dispatch (qty_dispatched null) every
   // requested line still shows, so the pick list is complete.
@@ -64,7 +76,7 @@ export function buildDrfVoucherHtml(request, { printLabel = null } = {}) {
     .filter(Boolean).join(' — ');
   const grand = nk(request.total_amount);
 
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>DRF Voucher #${esc(request.id)}</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(fund.name)} #${esc(request.id)}</title>
 <style>
   @page { size: A4 landscape; margin: 8mm; }
   * { box-sizing: border-box; }
@@ -109,7 +121,7 @@ ${printLabel && printLabel !== 'ORIGINAL' ? `<div class="wm">${esc(printLabel)}<
   ${printLabel && printLabel !== 'ORIGINAL' ? `<div class="reprint">${esc(printLabel)}</div>` : ''}
   <div class="head">
     <div class="ministry">MINISTRY OF HEALTH, AKWA IBOM STATE</div>
-    <div class="fund">ESSENTIAL DRUG REVOLVING FUND (DRF)</div>
+    <div class="fund">${esc(fund.heading)}</div>
     <div class="title">COMBINED REQUISITION / RECEIPT / ISSUE VOUCHER</div>
   </div>
 

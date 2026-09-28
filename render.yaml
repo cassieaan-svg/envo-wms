@@ -1,0 +1,47 @@
+# Render Blueprint — deploys this repo as one Web Service: the Express backend, serving
+# both the API and the built frontend from one URL (see backend/src/server.js's static
+# block). No separate frontend host is needed; this mirrors the local CMS server design.
+#
+# Use: Render dashboard → New → Blueprint → point at this repo. Render reads this file and
+# creates the service below, prompting for every envVar marked `sync: false` (never stored
+# in git). See docs/DEPLOY_ONLINE_TEST.md for the full walkthrough, including what to paste
+# in from Supabase.
+services:
+  - type: web
+    name: envo-wms
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build --workspace @envo/wms-frontend
+    startCommand: npm start --workspace @envo/wms-backend
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      # Render sets PORT itself; backend/src/server.js already reads process.env.PORT.
+
+      # ── Supabase connection — paste these from Supabase's Connection Info page ──────────
+      - key: PGHOST
+        sync: false
+      - key: PGPORT
+        value: 5432
+      - key: PGDATABASE
+        value: postgres
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGSSLMODE
+        value: require
+
+      # ── App secrets — generate fresh values, never reuse a local dev secret ─────────────
+      - key: JWT_SECRET
+        generateValue: true
+
+      # This is a standalone test deployment, not part of a real Cloud/CMS split, so it runs
+      # as the default 'cloud' role with no EnVo integration and no CMS to sync with.
+      - key: WMS_ROLE
+        value: cloud
+      - key: WMS_ORIGIN
+        value: cloud
+      - key: WMS_INSTANCE_ID
+        value: online-test

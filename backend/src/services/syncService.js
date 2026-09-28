@@ -64,7 +64,7 @@ export class SyncService {
     let order = null;
     if (txn.dispatch_order_id) {
       const { rows: o } = await exec(
-        `SELECT o.uid, o.facility_id, o.total_amount, o.dispatched_by, o.dispatched_at,
+        `SELECT o.uid, o.facility_id, o.total_amount, o.dispatched_by, o.authorized_by, o.dispatched_at,
                 o.notes, o.scheme, o.edited_at, o.edited_by, o.edit_count,
                 o.origin, o.source_instance,
                 r.uid AS request_uid, r.envo_request_id
@@ -87,7 +87,7 @@ export class SyncService {
     let request = null;
     if (txn.request_id) {
       const { rows: r } = await exec(
-        `SELECT uid, envo_request_id, status, dispatched_at, dispatched_by, picked_by,
+        `SELECT uid, envo_request_id, status, dispatched_at, dispatched_by, authorized_by, picked_by,
                 carrier_name, carrier_phone, total_amount
            FROM requests WHERE id = $1`, [txn.request_id]);
       if (r[0]) {
@@ -228,14 +228,15 @@ export class SyncService {
         const { rows } = await client.query(
           `INSERT INTO dispatch_orders
              (uid, facility_id, total_amount, dispatched_by, dispatched_at, notes, scheme,
-              edited_at, edited_by, edit_count, origin, source_instance)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+              edited_at, edited_by, edit_count, origin, source_instance, authorized_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            ON CONFLICT (uid) DO UPDATE SET total_amount = EXCLUDED.total_amount,
              notes = EXCLUDED.notes, edited_at = EXCLUDED.edited_at,
              edited_by = EXCLUDED.edited_by, edit_count = EXCLUDED.edit_count
            RETURNING id`,
           [o.uid, o.facility_id, o.total_amount, o.dispatched_by, o.dispatched_at, o.notes,
-           o.scheme, o.edited_at, o.edited_by, o.edit_count ?? 0, o.origin, o.source_instance]);
+           o.scheme, o.edited_at, o.edited_by, o.edit_count ?? 0, o.origin, o.source_instance,
+           o.authorized_by ?? null]);   // absent from an envelope sent by an older CMS
         orderId = rows[0].id;
 
         await client.query('DELETE FROM dispatch_order_items WHERE dispatch_order_id = $1', [orderId]);
@@ -256,10 +257,11 @@ export class SyncService {
         const { rows: rr } = await client.query(
           `UPDATE requests SET status = $2, dispatched_at = $3, dispatched_by = $4,
                   picked_by = $5, carrier_name = $6, carrier_phone = $7,
-                  dispatch_order_id = COALESCE($8, dispatch_order_id)
+                  dispatch_order_id = COALESCE($8, dispatch_order_id),
+                  authorized_by = $9
             WHERE envo_request_id = $1 RETURNING id`,
           [r.envo_request_id, r.status, r.dispatched_at, r.dispatched_by, r.picked_by,
-           r.carrier_name, r.carrier_phone, orderId]);
+           r.carrier_name, r.carrier_phone, orderId, r.authorized_by ?? null]);
         requestId = rr[0]?.id ?? null;
         for (const it of r.items || []) {
           await client.query(

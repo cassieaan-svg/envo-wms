@@ -16,6 +16,17 @@ import { query, withTransaction } from '../src/db.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const commit = process.argv.includes('--commit');
+// --tag-only: set facility_type on the facilities that already exist and insert nothing.
+// For a database whose facilities came from EnVo (with EnVo codes) rather than from this
+// sheet — inserting the sheet's rows there would add a second, code-less copy of each.
+const tagOnly = process.argv.includes('--tag-only');
+// --infer-untagged: for facilities whose name is not on the sheet (EnVo spells many
+// differently — "Ekpene Obo Cottage Hospital" vs the sheet's "Cottage Hospital Ekpene Obo"),
+// guess the level from the name. Every guess is printed and marked, and only fills a NULL.
+// The rule is the one the sheet itself follows: it reproduces all 521 of its own rows.
+const inferUntagged = process.argv.includes('--infer-untagged');
+const inferLevel = (name) =>
+  /hosp|comprehensive health cent|dental cent|airport clinic/i.test(name) ? 'secondary' : 'primary';
 const CSV_FILE = resolve(HERE, 'facility_master.csv');
 const STATE = 'Akwa Ibom';
 
@@ -77,7 +88,9 @@ async function main() {
   // (case/punctuation-insensitive) so a spelling difference doesn't create a duplicate the
   // sheet didn't actually introduce.
   const existingKey = new Set(existing.map((f) => `${norm(f.name)}|${norm(f.lga || '')}`));
-  const toInsert = master.filter((m) => !existingKey.has(`${norm(m.name)}|${norm(m.lga)}`));
+  const toInsert = tagOnly
+    ? []
+    : master.filter((m) => !existingKey.has(`${norm(m.name)}|${norm(m.lga)}`));
 
   // Existing (test) facilities: tag facility_type by exact name match against the master
   // list. A name that appears under both types, or at conflicting LGAs, is ambiguous for
@@ -96,7 +109,15 @@ async function main() {
     .map((f) => ({ ...f, matched: masterByName.get(norm(f.name)) }))
     .filter((f) => f.matched && f.matched !== 'AMBIGUOUS');
   const taggedIds = new Set(toTag.map((f) => f.id));
-  const untagged = existing.filter((f) => f.facility_type == null && !taggedIds.has(f.id));
+  let untagged = existing.filter((f) => f.facility_type == null && !taggedIds.has(f.id));
+
+  const inferred = inferUntagged
+    ? untagged.map((f) => ({ ...f, matched: inferLevel(f.name) }))
+    : [];
+  if (inferred.length) {
+    toTag.push(...inferred);
+    untagged = [];
+  }
 
   console.log(`New facilities to insert:                     ${toInsert.length}`);
   console.log(`Existing facilities to tag by name match:      ${toTag.length}`);
@@ -109,8 +130,13 @@ async function main() {
   if (toInsert.length > 8) console.log(`  … and ${toInsert.length - 8} more`);
 
   console.log('\nExisting facilities being tagged:');
+  const inferredIds = new Set(inferred.map((f) => f.id));
   for (const f of toTag) {
-    console.log(`  #${f.id} ${f.name} (${f.lga}) -> ${f.matched}`);
+    console.log(`  #${f.id} ${f.name} (${f.lga}) -> ${f.matched}${inferredIds.has(f.id) ? '   [inferred from name]' : ''}`);
+  }
+  if (inferred.length) {
+    const sec = inferred.filter((f) => f.matched === 'secondary').length;
+    console.log(`\nInferred from the name (not on the sheet): ${inferred.length} — ${sec} secondary, ${inferred.length - sec} primary`);
   }
 
   if (untagged.length) {

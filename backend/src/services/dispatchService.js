@@ -15,7 +15,7 @@ export class DispatchService {
   // the one place the store chooses the fund, because there is no facility request whose
   // choice it would be overriding. (Fulfilling a request inherits that request's scheme;
   // see RequestService.fulfil.)
-  static async createOrder({ facilityId, items, notes, dispatchedBy, scheme, clientTxnId = null, actorUserId = null }) {
+  static async createOrder({ facilityId, items, notes, dispatchedBy, authorizedBy = null, scheme, clientTxnId = null, actorUserId = null }) {
     // Only the instance that owns the stock may move it.
     assertCanWriteWarehouseStock();
     return withTransaction(async (client) => {
@@ -60,10 +60,11 @@ export class DispatchService {
 
       const orderResult = await client.query(
         `INSERT INTO dispatch_orders
-           (facility_id, total_amount, dispatched_by, notes, scheme, origin, source_instance)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, uid, facility_id, total_amount, dispatched_by, dispatched_at, notes, scheme`,
-        [facilityId, totalAmount, dispatchedBy ?? null, notes ?? null, issueScheme, ORIGIN, INSTANCE_ID]
+           (facility_id, total_amount, dispatched_by, authorized_by, notes, scheme, origin, source_instance)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, uid, facility_id, total_amount, dispatched_by, authorized_by, dispatched_at, notes, scheme`,
+        [facilityId, totalAmount, dispatchedBy ?? null, authorizedBy ?? null, notes ?? null,
+         issueScheme, ORIGIN, INSTANCE_ID]
       );
       const order = orderResult.rows[0];
 
@@ -338,8 +339,8 @@ export class DispatchService {
 
     const orderResult = await run(
       `SELECT o.id, o.uid, o.facility_id, f.name AS facility_name, f.state, f.lga,
-              o.total_amount, o.dispatched_by, o.dispatched_at, o.notes,
-              o.edited_at, o.edited_by, o.edit_count, o.print_count
+              o.total_amount, o.dispatched_by, o.authorized_by, o.dispatched_at, o.notes,
+              o.edited_at, o.edited_by, o.edit_count, o.print_count, o.scheme
          FROM dispatch_orders o
          JOIN facilities f ON f.id = o.facility_id
         WHERE o.id = $1`,
@@ -389,6 +390,7 @@ export class DispatchService {
               f.lga,
               o.total_amount,
               o.dispatched_by,
+              o.authorized_by,
               o.dispatched_at,
               o.notes,
               o.edited_at,

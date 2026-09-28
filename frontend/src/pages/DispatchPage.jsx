@@ -5,7 +5,7 @@ import DispatchLineEditor from '../components/DispatchLineEditor.jsx';
 import { CommodityPicker, FacilityPicker } from '../components/pickers.jsx';
 import { ymd } from '../components/PeriodFilter.jsx';
 import { downloadCsv, slug, stamp } from '../lib/download.js';
-import { printDrfVoucher } from '../lib/drfVoucher.js';
+import { printDrfVoucher, voucherName } from '../lib/drfVoucher.js';
 import { withTxn } from '../lib/txn';
 
 // A dispatch order shaped for the DRF voucher: what was dispatched is what was issued,
@@ -13,6 +13,7 @@ import { withTxn } from '../lib/txn';
 function orderAsVoucher(order) {
   return {
     id: order.id,
+    scheme: order.scheme,
     facility_name: order.facility_name,
     lga: order.lga,
     state: order.state,
@@ -60,6 +61,10 @@ export default function DispatchPage({ isAdmin }) {
   // and re-typing a name every time is how it ends up left blank.
   const [dispatchedBy, setDispatchedBy] = useState(
     () => localStorage.getItem('wms_dispatched_by') || ''
+  );
+  // Who approved the issue — usually a fixed person, so remembered the same way.
+  const [authorizedBy, setAuthorizedBy] = useState(
+    () => localStorage.getItem('wms_authorized_by') || ''
   );
   const [schemes, setSchemes] = useState([]);
   const [history, setHistory] = useState([]);
@@ -168,6 +173,7 @@ export default function DispatchPage({ isAdmin }) {
     if (filled.length === 0) return setError('add at least one complete commodity line');
     if (!scheme) return setError('choose the scheme this dispatch is issued against');
     if (!dispatchedBy.trim()) return setError('enter who is dispatching this order');
+    if (!authorizedBy.trim()) return setError('enter who authorized this dispatch');
 
     setBusy(true);
     setError(null);
@@ -184,9 +190,11 @@ export default function DispatchPage({ isAdmin }) {
           notes: notes || null,
           scheme,
           dispatchedBy: dispatchedBy.trim(),
+          authorizedBy: authorizedBy.trim(),
           clientTxnId,
         }));
       localStorage.setItem('wms_dispatched_by', dispatchedBy.trim());
+      localStorage.setItem('wms_authorized_by', authorizedBy.trim());
       setNotice(
         `dispatched ${order.items.length} line(s) totalling ${money(order.total_amount)} — order #${order.id}`
       );
@@ -358,6 +366,13 @@ export default function DispatchPage({ isAdmin }) {
                     placeholder="who is issuing this order"
                   />
                 </Field>
+                <Field label="Authorized by *">
+                  <input
+                    value={authorizedBy}
+                    onChange={(e) => setAuthorizedBy(e.target.value)}
+                    placeholder="who approved this dispatch"
+                  />
+                </Field>
                 <Field label="Notes (optional)">
                   <input
                     value={notes}
@@ -368,7 +383,7 @@ export default function DispatchPage({ isAdmin }) {
                 <button
                   className="btn primary"
                   type="submit"
-                  disabled={busy || filled.length === 0 || !scheme || !dispatchedBy.trim()}
+                  disabled={busy || filled.length === 0 || !scheme || !dispatchedBy.trim() || !authorizedBy.trim()}
                   style={{ marginLeft: 'auto' }}
                 >
                   {busy ? 'dispatching…' : `Dispatch ${filled.length} line(s)`}
@@ -423,6 +438,7 @@ export default function DispatchPage({ isAdmin }) {
                       { header: 'LGA', value: (o) => o.lga || '' },
                       { header: 'Dispatched at', value: (o) => o.dispatched_at },
                       { header: 'Dispatched by', value: (o) => o.dispatched_by || '' },
+                      { header: 'Authorized by', value: (o) => o.authorized_by || '' },
                       { header: 'Lines', value: (o) => o.line_count },
                       { header: 'Total quantity', value: (o) => o.total_quantity },
                       { header: 'Value (NGN)', value: (o) => o.total_amount },
@@ -454,6 +470,7 @@ export default function DispatchPage({ isAdmin }) {
                   {!facility && <th className="wrap">Facility</th>}
                   <th>When</th>
                   <th>By</th>
+                  <th>Authorized by</th>
                   <th className="num">Lines</th>
                   <th className="num">Total qty</th>
                   <th className="num">Value</th>
@@ -473,6 +490,7 @@ export default function DispatchPage({ isAdmin }) {
                     )}
                     <td>{dateTime(order.dispatched_at)}</td>
                     <td className="muted">{order.dispatched_by || '—'}</td>
+                    <td className="muted">{order.authorized_by || '—'}</td>
                     <td className="num">{order.line_count}</td>
                     <td className="num">{qty(order.total_quantity)}</td>
                     <td className="num">{money(order.total_amount)}</td>
@@ -618,7 +636,7 @@ function OrderDetailModal({ order, onClose, isAdmin, commodities, onSaved }) {
           ⭳ CSV
         </button>
         <button className="btn small" onClick={printVoucher} disabled={editing || printing}>
-          {printing ? 'preparing…' : prints.length === 0 ? '⎙ DRF Voucher' : `⎙ Reprint (#${prints.length})`}
+          {printing ? 'preparing…' : prints.length === 0 ? `⎙ ${voucherName(order.scheme)}` : `⎙ Reprint (#${prints.length})`}
         </button>
         {isAdmin && !editing && !/^Essential request #/.test(order.notes || '') && (
           <button className="btn small" onClick={startEdit} style={{ marginLeft: 'auto' }}>
