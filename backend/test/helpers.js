@@ -23,10 +23,11 @@ export const txnId = (label = 'T') => `${label}-${uniq()}`.replace(/[^A-Za-z0-9_
 // `role` is kept for the legacy users.role column (display only, post Phase 1). What
 // actually gates a route now is user_roles/role_permissions, so this also grants the
 // permission-bundle role that matches the legacy meaning of `role`: 'admin' -> the full
-// operational role (warehouse_admin), so existing tests written against "an admin user"
-// keep exercising exactly the same permissions the old requireAdmin gate gave them.
+// operational role (`admin`, renamed from `warehouse_admin` in the role redesign), so
+// existing tests written against "an admin user" keep exercising exactly the same
+// permissions the old requireAdmin gate gave them.
 // Pass `roles: []` for a plain authenticated user with no grants, or `roles: [...]` for
-// anything more specific (e.g. ['picker_dispatcher']).
+// anything more specific (e.g. ['dispatch_receiver']).
 export async function makeUser({ role = 'admin', roles } = {}) {
   const username = `test-user-${uniq()}`;
   const { rows } = await query(
@@ -36,7 +37,7 @@ export async function makeUser({ role = 'admin', roles } = {}) {
   );
   const user = rows[0];
 
-  const roleKeys = roles !== undefined ? roles : (role === 'admin' ? ['warehouse_admin'] : []);
+  const roleKeys = roles !== undefined ? roles : (role === 'admin' ? ['admin'] : []);
   for (const key of roleKeys) {
     await query(
       `INSERT INTO user_roles (user_id, role_id)

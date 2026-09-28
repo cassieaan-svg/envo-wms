@@ -126,7 +126,7 @@ test('reject replays the same result for a repeated clientTxnId, not a second ca
 });
 
 test('PATCH /:id/picking over HTTP is refused without a clientTxnId', async () => {
-  const user = await makeUser({ roles: ['picker_dispatcher'] });
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   const facility = await makeFacility();
   const commodity = await makeCommodity();
   const { req, envoId } = await makeRequest(facility, commodity);
@@ -148,7 +148,7 @@ test('PATCH /:id/picking over HTTP is refused without a clientTxnId', async () =
 });
 
 test('POST /:id/reject over HTTP is refused without a clientTxnId', async () => {
-  const user = await makeUser({ roles: ['picker_dispatcher'] });
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   const facility = await makeFacility();
   const commodity = await makeCommodity();
   const { req, envoId } = await makeRequest(facility, commodity);

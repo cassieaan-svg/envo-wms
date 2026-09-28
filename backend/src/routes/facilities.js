@@ -8,7 +8,7 @@ import { query } from '../db.js';
 
 const router = express.Router();
 
-router.get('/', async (req, res, next) => {
+router.get('/', requirePermission('facilities.view'), async (req, res, next) => {
   try {
     const facilities = await FacilityService.list({
       state: req.query.state || null,
@@ -24,7 +24,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // Registered before /:id so "lgas" isn't parsed as a facility id.
-router.get('/lgas', async (req, res, next) => {
+router.get('/lgas', requirePermission('facilities.view'), async (req, res, next) => {
   try {
     return res.json(await FacilityService.listLgas({ state: req.query.state || null }));
   } catch (err) {
@@ -54,7 +54,7 @@ router.put('/:id', requirePermission('facilities.manage'), async (req, res, next
   }
 });
 
-router.get('/:id/commodities', async (req, res, next) => {
+router.get('/:id/commodities', requirePermission('facilities.view'), async (req, res, next) => {
   try {
     return res.json(await FacilityService.listCommodities(Number(req.params.id)));
   } catch (err) {
@@ -148,7 +148,7 @@ router.post('/:id/dispatch-orders', requirePermission('dispatchOrders.edit'), as
   }
 });
 
-router.get('/:id/dispatch-orders', async (req, res, next) => {
+router.get('/:id/dispatch-orders', requirePermission('dispatchOrders.view'), async (req, res, next) => {
   try {
     return res.json(await DispatchService.listForFacility(Number(req.params.id)));
   } catch (err) {
@@ -157,7 +157,7 @@ router.get('/:id/dispatch-orders', async (req, res, next) => {
 });
 
 // Proxied from EnVo — mock data until the real API details are confirmed.
-router.get('/:id/stock', async (req, res, next) => {
+router.get('/:id/stock', requirePermission('facilities.view'), async (req, res, next) => {
   const facilityId = Number(req.params.id);
   try {
     const facilities = await FacilityService.list({ includeInactive: true });

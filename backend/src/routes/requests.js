@@ -11,7 +11,7 @@ const router = express.Router();
 const who = (req) => req.user?.fullName || req.user?.username || req.user?.sub || null;
 
 /** GET /api/requests?status=pending — the warehouse queue. */
-router.get('/', async (req, res) => {
+router.get('/', requirePermission('requests.view'), async (req, res) => {
   try {
     res.json(await RequestService.listQueue({ status: req.query.status || null }));
   } catch (err) {
@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
 });
 
 /** GET /api/requests/:id — request detail / pick list. */
-router.get('/:id', async (req, res) => {
+router.get('/:id', requirePermission('requests.view'), async (req, res) => {
   try {
     const request = await RequestService.getById(Number(req.params.id));
     if (!request) return res.status(404).json({ error: 'not found' });

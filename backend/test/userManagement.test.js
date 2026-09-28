@@ -72,9 +72,9 @@ test('2. System Administrator can create a user', async () => {
   }
 });
 
-// ── 3. Warehouse Admin can create users ─────────────────────────────────────────────────
-test('3. Warehouse Admin can create a user', async () => {
-  const admin = await makeUser({ roles: ['warehouse_admin'] });
+// ── 3. Admin can create users ─────────────────────────────────────────────────
+test('3. Admin can create a user', async () => {
+  const admin = await makeUser({ roles: ['admin'] });
   const token = tokenFor(admin);
   let created;
   try {
@@ -89,24 +89,22 @@ test('3. Warehouse Admin can create a user', async () => {
   }
 });
 
-// ── 4. Warehouse Admin can assign operational roles ────────────────────────────────────
-test('4. Warehouse Admin can assign Picker/Dispatcher and Receiving Clerk', async () => {
-  const admin = await makeUser({ roles: ['warehouse_admin'] });
+// ── 4. Admin can assign operational roles ────────────────────────────────────
+test('4. Admin can assign Dispatch/Receiver', async () => {
+  const admin = await makeUser({ roles: ['admin'] });
   const target = await makeUser({ roles: [] });
   const token = tokenFor(admin);
   try {
-    const pd = await req('POST', `/api/admin/users/${target.id}/roles`, { body: { role: 'picker_dispatcher' }, token });
-    assert.equal(pd.status, 201);
-    const rc = await req('POST', `/api/admin/users/${target.id}/roles`, { body: { role: 'receiving_clerk' }, token });
-    assert.equal(rc.status, 201);
+    const res = await req('POST', `/api/admin/users/${target.id}/roles`, { body: { role: 'dispatch_receiver' }, token });
+    assert.equal(res.status, 201);
   } finally {
     await cleanup({ userIds: [admin.id, target.id] });
   }
 });
 
-// ── 5. Warehouse Admin cannot assign System Administrator ─────────────────────────────
-test('5. Warehouse Admin cannot assign System Administrator', async () => {
-  const admin = await makeUser({ roles: ['warehouse_admin'] });
+// ── 5. Admin cannot assign System Administrator ─────────────────────────────
+test('5. Admin cannot assign System Administrator', async () => {
+  const admin = await makeUser({ roles: ['admin'] });
   const target = await makeUser({ roles: [] });
   const token = tokenFor(admin);
   try {
@@ -117,33 +115,33 @@ test('5. Warehouse Admin cannot assign System Administrator', async () => {
   }
 });
 
-// ── 6. Warehouse Admin cannot assign Warehouse Admin ───────────────────────────────────
-test('6. Warehouse Admin cannot assign Warehouse Admin', async () => {
-  const admin = await makeUser({ roles: ['warehouse_admin'] });
+// ── 6. Admin cannot assign Admin ───────────────────────────────────
+test('6. Admin cannot assign Admin', async () => {
+  const admin = await makeUser({ roles: ['admin'] });
   const target = await makeUser({ roles: [] });
   const token = tokenFor(admin);
   try {
-    const res = await req('POST', `/api/admin/users/${target.id}/roles`, { body: { role: 'warehouse_admin' }, token });
+    const res = await req('POST', `/api/admin/users/${target.id}/roles`, { body: { role: 'admin' }, token });
     assert.equal(res.status, 403);
   } finally {
     await cleanup({ userIds: [admin.id, target.id] });
   }
 });
 
-// ── 7. Warehouse Admin cannot change their own role ────────────────────────────────────
-test('7. Warehouse Admin cannot change their own role, even to an operational one', async () => {
-  const admin = await makeUser({ roles: ['warehouse_admin'] });
+// ── 7. Admin cannot change their own role ────────────────────────────────────
+test('7. Admin cannot change their own role, even to an operational one', async () => {
+  const admin = await makeUser({ roles: ['admin'] });
   const token = tokenFor(admin);
   try {
-    const grant = await req('POST', `/api/admin/users/${admin.id}/roles`, { body: { role: 'picker_dispatcher' }, token });
+    const grant = await req('POST', `/api/admin/users/${admin.id}/roles`, { body: { role: 'dispatch_receiver' }, token });
     assert.equal(grant.status, 403);
     assert.match(grant.body.error, /own roles/);
 
-    // Revoking their own warehouse_admin role is refused too — here the tier-permission
-    // check (roles.assignAny, which Warehouse Admin never holds) is what stops it before
+    // Revoking their own admin role is refused too — here the tier-permission
+    // check (roles.assignAny, which Admin never holds) is what stops it before
     // the self-check inside the service even runs. Different mechanism, same outcome:
     // nothing about their own access changes.
-    const revoke = await req('DELETE', `/api/admin/users/${admin.id}/roles/warehouse_admin`, { token });
+    const revoke = await req('DELETE', `/api/admin/users/${admin.id}/roles/admin`, { token });
     assert.equal(revoke.status, 403);
   } finally {
     await cleanup({ userIds: [admin.id] });
@@ -157,10 +155,10 @@ test('8. A plain operational user cannot grant themselves any role, even with us
   // the actual enforcement point (the route's permission check happens first, but even a
   // caller that legitimately holds roles.assignOperational or roles.assignAny is still
   // refused by the service when the target is themselves).
-  const user = await makeUser({ roles: ['picker_dispatcher'] });
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   try {
     await assert.rejects(
-      AdminUsersService.grantRole(user.id, 'receiving_clerk', { actorUserId: user.id }),
+      AdminUsersService.grantRole(user.id, 'dispatch_receiver', { actorUserId: user.id }),
       /own roles/
     );
   } finally {
@@ -209,22 +207,9 @@ test('10. A re-enabled user can log in again', async () => {
   }
 });
 
-// ── 11 & 12. Operational roles cannot access user management ──────────────────────────
-test('11. Picker/Dispatcher cannot access user management', async () => {
-  const user = await makeUser({ roles: ['picker_dispatcher'] });
-  const token = tokenFor(user);
-  try {
-    const list = await req('GET', '/api/admin/users', { token });
-    assert.equal(list.status, 403);
-    const create = await req('POST', '/api/admin/users', { body: { username: 'x', password: 'a-long-enough-password' }, token });
-    assert.equal(create.status, 403);
-  } finally {
-    await cleanup({ userIds: [user.id] });
-  }
-});
-
-test('12. Receiving Clerk cannot access user management', async () => {
-  const user = await makeUser({ roles: ['receiving_clerk'] });
+// ── 11. Operational role cannot access user management ────────────────────────────────
+test('11. Dispatch/Receiver cannot access user management', async () => {
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   const token = tokenFor(user);
   try {
     const list = await req('GET', '/api/admin/users', { token });

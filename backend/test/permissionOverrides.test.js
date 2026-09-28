@@ -53,7 +53,7 @@ async function auditRowsFor(userId, action) {
 
 // ── 1. Existing role permission still works ────────────────────────────────────────────
 test('1. Existing role permission still works, no override in the way', async () => {
-  const user = await makeUser({ roles: ['picker_dispatcher'] }); // holds requests.view
+  const user = await makeUser({ roles: ['dispatch_receiver'] }); // holds requests.view
   try {
     assert.equal(await AuthzService.hasPermission(user.id, 'requests.view'), true);
     assert.deepEqual(await overrideRowsFor(user.id, 'requests.view'), []);
@@ -65,7 +65,7 @@ test('1. Existing role permission still works, no override in the way', async ()
 // ── 2. Direct grant works ───────────────────────────────────────────────────────────────
 test('2. Direct grant works', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const user = await makeUser({ roles: ['picker_dispatcher'] }); // does not hold commodities.manage
+  const user = await makeUser({ roles: ['dispatch_receiver'] }); // does not hold commodities.manage
   try {
     assert.equal(await AuthzService.hasPermission(user.id, 'commodities.manage'), false);
     await AdminUsersService.setPermissionOverride(user.id, 'commodities.manage', 'grant', { actorUserId: admin.id });
@@ -78,7 +78,7 @@ test('2. Direct grant works', async () => {
 // ── 3. Direct deny overrides an inherited role permission ─────────────────────────────
 test('3. Direct deny overrides an inherited role permission', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const user = await makeUser({ roles: ['picker_dispatcher'] }); // holds requests.view via role
+  const user = await makeUser({ roles: ['dispatch_receiver'] }); // holds requests.view via role
   try {
     assert.equal(await AuthzService.hasPermission(user.id, 'requests.view'), true);
     await AdminUsersService.setPermissionOverride(user.id, 'requests.view', 'deny', { actorUserId: admin.id });
@@ -91,7 +91,7 @@ test('3. Direct deny overrides an inherited role permission', async () => {
 // ── 4. Removing override restores role behaviour ───────────────────────────────────────
 test('4. Removing override restores role behaviour, in both directions', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const user = await makeUser({ roles: ['picker_dispatcher'] });
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   try {
     // deny -> remove restores the role's true.
     await AdminUsersService.setPermissionOverride(user.id, 'requests.view', 'deny', { actorUserId: admin.id });
@@ -110,11 +110,11 @@ test('4. Removing override restores role behaviour, in both directions', async (
 // ── 5. Direct grant can provide a permission absent from the user's role ──────────────
 test('5. Direct grant provides a permission the role never included', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const user = await makeUser({ roles: ['receiving_clerk'] }); // no requests.* at all
+  const user = await makeUser({ roles: ['dispatch_receiver'] }); // no commodities.setPrices
   try {
-    assert.equal(await AuthzService.hasPermission(user.id, 'requests.fulfil'), false);
-    await AdminUsersService.setPermissionOverride(user.id, 'requests.fulfil', 'grant', { actorUserId: admin.id });
-    assert.equal(await AuthzService.hasPermission(user.id, 'requests.fulfil'), true);
+    assert.equal(await AuthzService.hasPermission(user.id, 'commodities.setPrices'), false);
+    await AdminUsersService.setPermissionOverride(user.id, 'commodities.setPrices', 'grant', { actorUserId: admin.id });
+    assert.equal(await AuthzService.hasPermission(user.id, 'commodities.setPrices'), true);
   } finally {
     await cleanup({ userIds: [admin.id, user.id] });
   }
@@ -123,13 +123,13 @@ test('5. Direct grant provides a permission the role never included', async () =
 // ── 6. Direct deny can be stored even where the role doesn't grant it ─────────────────
 test("6. Direct deny can be stored even where the role never granted the permission", async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const user = await makeUser({ roles: ['receiving_clerk'] });
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   try {
-    await AdminUsersService.setPermissionOverride(user.id, 'requests.fulfil', 'deny', { actorUserId: admin.id });
-    const rows = await overrideRowsFor(user.id, 'requests.fulfil');
+    await AdminUsersService.setPermissionOverride(user.id, 'commodities.setPrices', 'deny', { actorUserId: admin.id });
+    const rows = await overrideRowsFor(user.id, 'commodities.setPrices');
     assert.equal(rows.length, 1);
     assert.equal(rows[0].effect, 'deny');
-    assert.equal(await AuthzService.hasPermission(user.id, 'requests.fulfil'), false, 'still false — nothing to override was true');
+    assert.equal(await AuthzService.hasPermission(user.id, 'commodities.setPrices'), false, 'still false — nothing to override was true');
   } finally {
     await cleanup({ userIds: [admin.id, user.id] });
   }
@@ -138,13 +138,13 @@ test("6. Direct deny can be stored even where the role never granted the permiss
 // ── 7. Multiple roles + direct override ────────────────────────────────────────────────
 test('7. A direct deny wins even when TWO roles together would grant the permission', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  // Neither role alone grants batches.create... wait: receiving_clerk DOES grant
-  // batches.create. Use both roles so the union is unambiguous, then deny on top.
-  const user = await makeUser({ roles: ['picker_dispatcher', 'receiving_clerk'] });
+  // accountant alone grants accounts.recordPayment; dispatch_receiver doesn't, but adds
+  // its own permissions on top. The union still grants it — then deny wins over that union.
+  const user = await makeUser({ roles: ['accountant', 'dispatch_receiver'] });
   try {
-    assert.equal(await AuthzService.hasPermission(user.id, 'batches.create'), true, 'receiving_clerk alone already grants it');
-    await AdminUsersService.setPermissionOverride(user.id, 'batches.create', 'deny', { actorUserId: admin.id });
-    assert.equal(await AuthzService.hasPermission(user.id, 'batches.create'), false, 'the deny wins over the role union');
+    assert.equal(await AuthzService.hasPermission(user.id, 'accounts.recordPayment'), true, 'accountant already grants it');
+    await AdminUsersService.setPermissionOverride(user.id, 'accounts.recordPayment', 'deny', { actorUserId: admin.id });
+    assert.equal(await AuthzService.hasPermission(user.id, 'accounts.recordPayment'), false, 'the deny wins over the role union');
   } finally {
     await cleanup({ userIds: [admin.id, user.id] });
   }
@@ -187,10 +187,10 @@ test('10. Self-remove is blocked', async () => {
   }
 });
 
-// ── 11. Warehouse Admin receives 403 ────────────────────────────────────────────────────
-test('11. Warehouse Admin cannot view, grant, deny, or remove permission overrides', async () => {
-  const wa = await makeUser({ roles: ['warehouse_admin'] });
-  const target = await makeUser({ roles: ['picker_dispatcher'] });
+// ── 11. Admin receives 403 ────────────────────────────────────────────────────
+test('11. Admin cannot view, grant, deny, or remove permission overrides', async () => {
+  const wa = await makeUser({ roles: ['admin'] });
+  const target = await makeUser({ roles: ['dispatch_receiver'] });
   const token = tokenFor(wa);
   try {
     const view = await req('GET', `/api/admin/users/${target.id}/permissions`, { token });
@@ -207,17 +207,17 @@ test('11. Warehouse Admin cannot view, grant, deny, or remove permission overrid
 });
 
 // ── 12. Operational users receive 403 ───────────────────────────────────────────────────
-test('12. Picker/Dispatcher and Receiving Clerk cannot manage permission overrides', async () => {
-  const picker = await makeUser({ roles: ['picker_dispatcher'] });
-  const clerk = await makeUser({ roles: ['receiving_clerk'] });
+test('12. Dispatch/Receiver cannot manage permission overrides', async () => {
+  const actor1 = await makeUser({ roles: ['dispatch_receiver'] });
+  const actor2 = await makeUser({ roles: ['dispatch_receiver'] });
   const target = await makeUser({ roles: [] });
   try {
-    for (const actor of [picker, clerk]) {
+    for (const actor of [actor1, actor2]) {
       const res = await req('GET', `/api/admin/users/${target.id}/permissions`, { token: tokenFor(actor) });
       assert.equal(res.status, 403);
     }
   } finally {
-    await cleanup({ userIds: [picker.id, clerk.id, target.id] });
+    await cleanup({ userIds: [actor1.id, actor2.id, target.id] });
   }
 });
 
@@ -237,7 +237,7 @@ test('13. System Administrator can grant', async () => {
 
 test('14. System Administrator can deny', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const target = await makeUser({ roles: ['picker_dispatcher'] });
+  const target = await makeUser({ roles: ['dispatch_receiver'] });
   try {
     const res = await req('PUT', `/api/admin/users/${target.id}/permissions/requests.view`,
       { body: { effect: 'deny' }, token: tokenFor(admin) });
@@ -282,7 +282,7 @@ test('16. Audit entry created for a grant', async () => {
 
 test('17. Audit entry created for a deny, and flags a sensitive permission', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const target = await makeUser({ roles: ['warehouse_admin'] }); // holds batches.adjust via role
+  const target = await makeUser({ roles: ['admin'] }); // holds batches.adjust via role
   try {
     await AdminUsersService.setPermissionOverride(target.id, 'batches.adjust', 'deny', { actorUserId: admin.id });
     const rows = await auditRowsFor(target.id, 'permission.override.deny');
@@ -326,7 +326,7 @@ test('19. Repeated grant is idempotent — one row, effective state unchanged', 
 
 test('20. Repeated deny is idempotent — one row, effective state unchanged', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const target = await makeUser({ roles: ['picker_dispatcher'] });
+  const target = await makeUser({ roles: ['dispatch_receiver'] });
   try {
     await AdminUsersService.setPermissionOverride(target.id, 'requests.view', 'deny', { actorUserId: admin.id });
     await AdminUsersService.setPermissionOverride(target.id, 'requests.view', 'deny', { actorUserId: admin.id });
@@ -371,11 +371,11 @@ test('22. Removing a non-existent override is a successful no-op with no mislead
 
 // ── 23. Existing users with no overrides behave exactly as before ─────────────────────
 test('23. A user with no overrides has exactly their role-derived permission set', async () => {
-  const user = await makeUser({ roles: ['warehouse_admin'] });
+  const user = await makeUser({ roles: ['admin'] });
   try {
     const effective = await AuthzService.permissionsForUser(user.id);
     assert.ok(effective.has('batches.adjust'));
-    assert.ok(!effective.has('roles.assignAny'), 'unchanged — Warehouse Admin still lacks this');
+    assert.ok(!effective.has('roles.assignAny'), 'unchanged — Admin still lacks this');
     assert.equal(await overrideRowsFor(user.id, 'batches.adjust').then((r) => r.length), 0);
   } finally {
     await cleanup({ userIds: [user.id] });
@@ -429,7 +429,7 @@ test('an invalid effect value is refused', async () => {
 // ── Extra: the effective-permission view reports source correctly ─────────────────────
 test('getUserPermissions reports role/override source correctly', async () => {
   const admin = await makeUser({ roles: ['system_administrator'] });
-  const user = await makeUser({ roles: ['picker_dispatcher'] });
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   try {
     await AdminUsersService.setPermissionOverride(user.id, 'requests.view', 'deny', { actorUserId: admin.id });
     await AdminUsersService.setPermissionOverride(user.id, 'commodities.manage', 'grant', { actorUserId: admin.id });
@@ -446,7 +446,7 @@ test('getUserPermissions reports role/override source correctly', async () => {
     assert.equal(byKey['commodities.manage'].roleGranted, false);
 
     assert.equal(byKey['dispatchOrders.view'].source, 'role');
-    assert.equal(byKey['dispatchOrders.view'].roleLabel, 'Picker/Dispatcher');
+    assert.equal(byKey['dispatchOrders.view'].roleLabel, 'Dispatch/Receiver');
 
     assert.equal(byKey['instance.configure'].source, 'none');
     assert.equal(byKey['instance.configure'].effective, false);

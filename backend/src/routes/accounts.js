@@ -9,14 +9,14 @@ const router = express.Router();
 // orders issued under a scheme that bills the facility (the DRF).
 
 /** GET /api/accounts/debtors — facilities owing money, worst first. */
-router.get('/debtors', async (_req, res, next) => {
+router.get('/debtors', requirePermission('accounts.view'), async (_req, res, next) => {
   try {
     return res.json(await AccountService.debtors());
   } catch (err) { return next(err); }
 });
 
 /** GET /api/accounts/outstanding?facilityId= — unpaid orders, oldest first. */
-router.get('/outstanding', async (req, res, next) => {
+router.get('/outstanding', requirePermission('accounts.view'), async (req, res, next) => {
   try {
     return res.json(await AccountService.outstandingOrders({
       facilityId: req.query.facilityId ? Number(req.query.facilityId) : null,
@@ -25,7 +25,7 @@ router.get('/outstanding', async (req, res, next) => {
 });
 
 /** GET /api/accounts/settled?facilityId= — orders paid off, most recently cleared first. */
-router.get('/settled', async (req, res, next) => {
+router.get('/settled', requirePermission('accounts.view'), async (req, res, next) => {
   try {
     return res.json(await AccountService.settled({
       facilityId: req.query.facilityId ? Number(req.query.facilityId) : null,
@@ -34,7 +34,7 @@ router.get('/settled', async (req, res, next) => {
 });
 
 /** GET /api/accounts/facilities/:id/orders?onlyOutstanding=true */
-router.get('/facilities/:id/orders', async (req, res, next) => {
+router.get('/facilities/:id/orders', requirePermission('accounts.view'), async (req, res, next) => {
   try {
     return res.json(await AccountService.ordersForFacility(Number(req.params.id), {
       onlyOutstanding: req.query.onlyOutstanding === 'true',
@@ -43,7 +43,7 @@ router.get('/facilities/:id/orders', async (req, res, next) => {
 });
 
 /** GET /api/accounts/orders/:id/payments */
-router.get('/orders/:id/payments', async (req, res, next) => {
+router.get('/orders/:id/payments', requirePermission('accounts.view'), async (req, res, next) => {
   try {
     return res.json(await AccountService.payments(Number(req.params.id)));
   } catch (err) { return next(err); }

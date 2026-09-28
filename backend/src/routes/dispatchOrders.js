@@ -6,7 +6,7 @@ import { IdempotencyService } from '../services/idempotencyService.js';
 const router = express.Router();
 
 // The dispatch log across every facility, or one facility when ?facilityId= is given.
-router.get('/', async (req, res, next) => {
+router.get('/', requirePermission('dispatchOrders.view'), async (req, res, next) => {
   try {
     const facilityId = req.query.facilityId ? Number(req.query.facilityId) : null;
     return res.json(await DispatchService.list({ facilityId }));
@@ -16,7 +16,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // Receipt-style detail for one order, including which batches each line drew from.
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', requirePermission('dispatchOrders.view'), async (req, res, next) => {
   try {
     const order = await DispatchService.getOrder(Number(req.params.id));
     if (!order) return res.status(404).json({ error: 'dispatch order not found' });
@@ -82,7 +82,7 @@ router.post('/:id/print', requirePermission('dispatchOrders.print'), async (req,
 });
 
 /** GET /api/dispatch-orders/:id/prints — who has printed this, and when. */
-router.get('/:id/prints', async (req, res, next) => {
+router.get('/:id/prints', requirePermission('dispatchOrders.view'), async (req, res, next) => {
   try {
     return res.json(await DispatchService.printHistory(Number(req.params.id)));
   } catch (err) {

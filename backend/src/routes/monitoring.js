@@ -1,5 +1,6 @@
 import express from 'express';
 import { MonitoringService } from '../services/monitoringService.js';
+import { requirePermission } from '../middleware/requirePermission.js';
 
 const router = express.Router();
 
@@ -14,7 +15,7 @@ function period(req) {
   };
 }
 
-router.get('/summary', async (req, res, next) => {
+router.get('/summary', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(await MonitoringService.summary(period(req)));
   } catch (err) {
@@ -22,7 +23,7 @@ router.get('/summary', async (req, res, next) => {
   }
 });
 
-router.get('/daily', async (req, res, next) => {
+router.get('/daily', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(await MonitoringService.daily(period(req)));
   } catch (err) {
@@ -30,7 +31,7 @@ router.get('/daily', async (req, res, next) => {
   }
 });
 
-router.get('/by-category', async (req, res, next) => {
+router.get('/by-category', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(await MonitoringService.byCategory(period(req)));
   } catch (err) {
@@ -38,7 +39,7 @@ router.get('/by-category', async (req, res, next) => {
   }
 });
 
-router.get('/by-facility', async (req, res, next) => {
+router.get('/by-facility', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(await MonitoringService.byFacility(period(req)));
   } catch (err) {
@@ -46,7 +47,7 @@ router.get('/by-facility', async (req, res, next) => {
   }
 });
 
-router.get('/by-commodity', async (req, res, next) => {
+router.get('/by-commodity', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(await MonitoringService.byCommodity(period(req)));
   } catch (err) {
@@ -55,7 +56,7 @@ router.get('/by-commodity', async (req, res, next) => {
 });
 
 // Registered before /commodities/:id so the two do not collide.
-router.get('/commodities/:id/history', async (req, res, next) => {
+router.get('/commodities/:id/history', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(
       await MonitoringService.commodityHistory(Number(req.params.id), { limit: req.query.limit })
@@ -65,7 +66,7 @@ router.get('/commodities/:id/history', async (req, res, next) => {
   }
 });
 
-router.get('/commodities/:id', async (req, res, next) => {
+router.get('/commodities/:id', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(await MonitoringService.commodityDetail(Number(req.params.id), period(req)));
   } catch (err) {
@@ -74,7 +75,7 @@ router.get('/commodities/:id', async (req, res, next) => {
 });
 
 // One day's records for one kind of operation, feeding the shared history card.
-router.get('/day', async (req, res, next) => {
+router.get('/day', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(
       await MonitoringService.dayRecords({ date: req.query.date || null, kind: req.query.kind })
@@ -85,7 +86,7 @@ router.get('/day', async (req, res, next) => {
 });
 
 // Adjustments only, with per-reason totals for the period.
-router.get('/adjustments', async (req, res, next) => {
+router.get('/adjustments', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(
       await MonitoringService.adjustments({
@@ -102,7 +103,7 @@ router.get('/adjustments', async (req, res, next) => {
 });
 
 // Stock movement log — receipts, dispatches, adjustments and dispatch reversals.
-router.get('/activity', async (req, res, next) => {
+router.get('/activity', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     return res.json(
       await MonitoringService.activity({
@@ -119,7 +120,7 @@ router.get('/activity', async (req, res, next) => {
 // What a facility has taken over a period — commodities received and every dispatch,
 // across both the ad-hoc and request-fulfilment routes. ?from=&to= are ISO dates and
 // default to the last 30 days.
-router.get('/facilities/:id', async (req, res, next) => {
+router.get('/facilities/:id', requirePermission('monitoring.view'), async (req, res, next) => {
   try {
     const detail = await MonitoringService.facilityDetail(Number(req.params.id), {
       from: req.query.from || null,

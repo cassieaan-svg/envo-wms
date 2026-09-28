@@ -6,7 +6,7 @@ import { requirePermission } from '../middleware/requirePermission.js';
 
 const router = express.Router();
 
-router.get('/', async (req, res, next) => {
+router.get('/', requirePermission('commodities.view'), async (req, res, next) => {
   try {
     const commodities = await CommodityService.list({
       category: req.query.category || null,
@@ -19,7 +19,7 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.get('/categories', async (req, res, next) => {
+router.get('/categories', requirePermission('commodities.view'), async (req, res, next) => {
   try {
     return res.json(await CommodityService.listCategories());
   } catch (err) {
@@ -27,7 +27,7 @@ router.get('/categories', async (req, res, next) => {
   }
 });
 
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', requirePermission('commodities.view'), async (req, res, next) => {
   try {
     const commodity = await CommodityService.getById(Number(req.params.id));
     if (!commodity) return res.status(404).json({ error: 'commodity not found' });
@@ -81,7 +81,7 @@ router.put('/:id/stock-levels', requirePermission('commodities.setStockLevels'),
   }
 });
 
-router.get('/:id/prices', async (req, res, next) => {
+router.get('/:id/prices', requirePermission('commodities.view'), async (req, res, next) => {
   try {
     return res.json(await PriceService.history(Number(req.params.id)));
   } catch (err) {
@@ -110,7 +110,7 @@ router.put('/:id/prices', requirePermission('commodities.setPrices'), async (req
   }
 });
 
-router.get('/:id/batches', async (req, res, next) => {
+router.get('/:id/batches', requirePermission('batches.view'), async (req, res, next) => {
   try {
     const batches = await BatchService.listForCommodity(Number(req.params.id), {
       includeDepleted: req.query.includeDepleted === 'true',

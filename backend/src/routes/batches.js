@@ -69,7 +69,7 @@ router.put('/:id/number', requirePermission('batches.editNumber'), async (req, r
   }
 });
 
-router.get('/:id/movements', async (req, res, next) => {
+router.get('/:id/movements', requirePermission('batches.view'), async (req, res, next) => {
   try {
     return res.json(await BatchService.movements(Number(req.params.id)));
   } catch (err) {

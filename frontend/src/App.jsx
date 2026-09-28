@@ -97,41 +97,41 @@ const ICONS = {
 // Grouped side-rail navigation rather than a router — the page count is small and every
 // view is reachable from one list, matching how EnVo itself switches views.
 // Operations is the daily work, Catalogue the reference data you maintain.
+// A 4th element names the permission required to see that tab at all. This is UX only:
+// the real enforcement is server-side (requirePermission on every route), so a hidden
+// tab is a courtesy, not the security boundary — but it's what keeps Admin Viewer's nav
+// down to read-only oversight (no Requests/Dispatch/Batches/Adjustments/Users) without
+// a separate per-role nav list to maintain.
 const NAV = [
   [
     'Operations',
     [
-      ['Requests', RequestsPage, ICONS.requests],
-      ['Dispatch', DispatchPage, ICONS.dispatch],
-      ['Intake Batches', BatchesPage, ICONS.batches],
-      ['Adjustments', AdjustmentsPage, ICONS.adjustments],
+      ['Requests', RequestsPage, ICONS.requests, 'requests.view'],
+      ['Dispatch', DispatchPage, ICONS.dispatch, 'dispatchOrders.view'],
+      ['Intake Batches', BatchesPage, ICONS.batches, 'batches.view'],
+      ['Adjustments', AdjustmentsPage, ICONS.adjustments, 'batches.adjust'],
     ],
   ],
   [
     'Catalogue',
     [
-      ['Commodities', CommoditiesPricesPage, ICONS.commodities],
-      ['Facilities', FacilitiesPage, ICONS.facilities],
-      ['Vendors', VendorsPage, ICONS.vendors],
+      ['Commodities', CommoditiesPricesPage, ICONS.commodities, 'commodities.view'],
+      ['Facilities', FacilitiesPage, ICONS.facilities, 'facilities.view'],
+      ['Vendors', VendorsPage, ICONS.vendors, 'vendors.view'],
     ],
   ],
   [
     'Reports',
     [
-      ['Accounts', AccountsPage, ICONS.monitoring],
-      ['Monitoring', MonitoringPage, ICONS.monitoring],
-      ['Activity log', ActivityLogPage, ICONS.activity],
+      ['Accounts', AccountsPage, ICONS.monitoring, 'accounts.view'],
+      ['Monitoring', MonitoringPage, ICONS.monitoring, 'monitoring.view'],
+      ['Activity log', ActivityLogPage, ICONS.activity, 'monitoring.view'],
       ['Alerts', AlertsPage, ICONS.alerts],
     ],
   ],
   [
     'Administration',
     [
-      // A 4th element names the permission required to see this tab at all — System
-      // Administrator and Warehouse Admin both hold users.create (see the Phase 1 matrix);
-      // Picker/Dispatcher and Receiving Clerk do not, and never see this entry. This is UX
-      // only: the real enforcement is server-side (requirePermission on every /api/admin
-      // route), so a hidden tab is a courtesy, not the security boundary.
       ['Users', UsersPage, ICONS.users, 'users.create'],
     ],
   ],
@@ -144,23 +144,26 @@ const PAGES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([n, p]) =
 // instance.*) or the cross-cutting monitoring/sync permissions every admin-ish role happens
 // to hold one of. Deliberately its own list rather than "everything not in Administration":
 // System Administrator holds monitoring.view, and one shared oversight permission should not
-// by itself make the whole operational nav reappear for a role the design calls "NOT an
-// unrestricted warehouse operator".
+// by itself make the whole operational nav reappear for a role with no real operational work
+// (System Administrator, and now Admin Viewer for the Operations group specifically).
 const OPERATIONAL_PREFIXES = [
   'requests', 'dispatchOrders', 'batches', 'commodities', 'facilities', 'vendors', 'accounts',
 ];
 
-// The tab a session lands on. 'Dispatch' for anyone with operational access (the normal
-// case); 'Users' for a non-operational account (System Administrator today) — landing them
-// on a page they have no permission-relevant reason to see would be a strange first screen,
-// and a wrong nav highlight besides.
+// The tab a session lands on: 'Dispatch' when the account can actually see it (Admin,
+// Dispatch/Receiver), otherwise the first tab its permissions actually make visible —
+// picking a tab it can't see (e.g. Accountant or Admin Viewer, who hold neither
+// requests.view nor dispatchOrders.view) would land on a page with nothing to show.
 function defaultTabFor(user) {
   if (!user) return 'Dispatch';
   const permissions = user.permissions || [];
-  const hasOperationalAccess = permissions.some(
-    (p) => OPERATIONAL_PREFIXES.some((prefix) => p.startsWith(`${prefix}.`))
-  );
-  return hasOperationalAccess ? 'Dispatch' : 'Users';
+  const can = (perm) => !perm || permissions.includes(perm);
+  if (can('dispatchOrders.view')) return 'Dispatch';
+  for (const [, items] of NAV) {
+    const hit = items.find(([, , , perm]) => can(perm));
+    if (hit) return hit[0];
+  }
+  return 'Dispatch';
 }
 
 export default function App() {
@@ -226,8 +229,9 @@ export default function App() {
   const can = (perm) => permissions.includes(perm);
   // System Administrator holds none of these — its nav collapses to Administration only,
   // matching "system/security administration only, NOT an unrestricted warehouse operator".
-  // Every operational role (Warehouse Admin, Picker/Dispatcher, Receiving Clerk) holds at
-  // least one, so this changes nothing for them.
+  // Every other role (Admin, Accountant, Dispatch/Receiver, Admin Viewer) holds at least
+  // one, so this changes nothing for them — the per-item permission on each NAV entry is
+  // what actually narrows which tabs inside the group they see.
   const hasOperationalAccess = permissions.some(
     (p) => OPERATIONAL_PREFIXES.some((prefix) => p.startsWith(`${prefix}.`))
   );

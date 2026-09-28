@@ -71,60 +71,59 @@ test('a user with no roles at all is refused the four previously-unguarded actio
   }
 });
 
-// ── Role composition: Picker/Dispatcher ────────────────────────────────────────────────
-test('Picker/Dispatcher can dispatch but not adjust stock or manage facilities', async () => {
-  const user = await makeUser({ roles: ['picker_dispatcher'] });
+// ── Role composition: Dispatch/Receiver ────────────────────────────────────────────────
+// The role redesign merged Picker/Dispatcher and Receiving Clerk into one role that
+// covers BOTH the pick/dispatch workflow and receiving/batch adjustment — so, unlike
+// Phase 1, this role legitimately holds batches.create/adjust AND requests.fulfil AND
+// dispatchOrders.print together. What it still doesn't hold is anything admin-tier:
+// commodity/price management, facility management, or user administration.
+test('Dispatch/Receiver can dispatch, receive and adjust stock, but not manage commodities, prices, facilities, or users', async () => {
+  const user = await makeUser({ roles: ['dispatch_receiver'] });
   const facility = await makeFacility();
   const commodity = await makeCommodity();
   const batch = await makeBatch(commodity.id, 500);
   const token = tokenFor(user);
-  const clientTxnId = txnId('AUTHZ-PD');
 
   try {
     // Allowed: dispatch print is the cheapest thing to prove without a real order — the
     // route itself will 404/error on the missing order, but that is a DIFFERENT failure
     // than the 403 this test is checking for. Assert it is NOT a permission refusal.
     const print = await req('POST', `/api/dispatch-orders/999999/print`, { body: {}, token });
-    assert.notEqual(print.status, 403, 'Picker/Dispatcher holds dispatchOrders.print');
+    assert.notEqual(print.status, 403, 'Dispatch/Receiver holds dispatchOrders.print');
 
-    // Disallowed: batches.adjust is Warehouse-Admin-only.
-    const adjust = await req('POST', `/api/batches/${batch.id}/adjust`, {
-      body: { quantity: -10, reason: 'damaged', clientTxnId },
+    // Allowed: batches.create (receiving).
+    const create = await req('POST', '/api/batches', {
+      body: { commodityId: commodity.id, expiryDate: '2030-01-01', quantity: 50, clientTxnId: txnId('AUTHZ-DR-create') },
       token,
     });
-    assert.equal(adjust.status, 403, 'Picker/Dispatcher does not hold batches.adjust');
+    assert.equal(create.status, 201, 'Dispatch/Receiver holds batches.create');
 
-    // Disallowed: facilities.manage is Warehouse-Admin-only.
-    const manage = await req('PUT', `/api/facilities/${facility.id}`, {
-      body: { name: 'Renamed' }, token,
+    // Allowed: batches.adjust.
+    const adjust = await req('POST', `/api/batches/${batch.id}/adjust`, {
+      body: { quantity: -10, reason: 'damaged', clientTxnId: txnId('AUTHZ-DR-adjust') },
+      token,
     });
-    assert.equal(manage.status, 403, 'Picker/Dispatcher does not hold facilities.manage');
+    assert.equal(adjust.status, 200, 'Dispatch/Receiver holds batches.adjust');
+
+    // Allowed: requests.fulfil (a 404 for the made-up id, not a 403).
+    const fulfil = await req('POST', '/api/requests/999999/fulfil', { body: {}, token });
+    assert.notEqual(fulfil.status, 403, 'Dispatch/Receiver holds requests.fulfil');
+
+    // Disallowed: commodities.manage/setPrices and facilities.manage stay admin-only.
+    const manageCommodity = await req('PUT', `/api/commodities/${commodity.id}`, { body: { name: 'Renamed' }, token });
+    assert.equal(manageCommodity.status, 403, 'Dispatch/Receiver does not hold commodities.manage');
+
+    const setPrice = await req('PUT', `/api/commodities/${commodity.id}/prices`, { body: { unitPrice: 5 }, token });
+    assert.equal(setPrice.status, 403, 'Dispatch/Receiver does not hold commodities.setPrices');
+
+    const manageFacility = await req('PUT', `/api/facilities/${facility.id}`, { body: { name: 'Renamed' }, token });
+    assert.equal(manageFacility.status, 403, 'Dispatch/Receiver does not hold facilities.manage');
+
+    // Disallowed: user administration.
+    const createUser = await req('POST', '/api/admin/users', { body: { username: 'x', password: 'a-long-enough-password' }, token });
+    assert.equal(createUser.status, 403, 'Dispatch/Receiver does not hold users.create');
   } finally {
     await cleanup({ facilityIds: [facility.id], commodityIds: [commodity.id], batchIds: [batch.id], userIds: [user.id] });
-  }
-});
-
-// ── Role composition: Receiving Clerk ──────────────────────────────────────────────────
-test('Receiving Clerk can create a batch but not fulfil a request', async () => {
-  const user = await makeUser({ roles: ['receiving_clerk'] });
-  const commodity = await makeCommodity();
-  const token = tokenFor(user);
-  const clientTxnId = txnId('AUTHZ-RC');
-
-  try {
-    const create = await req('POST', '/api/batches', {
-      body: { commodityId: commodity.id, expiryDate: '2030-01-01', quantity: 50, clientTxnId },
-      token,
-    });
-    assert.equal(create.status, 201, 'Receiving Clerk holds batches.create');
-
-    const fulfil = await req('POST', '/api/requests/999999/fulfil', { body: {}, token });
-    assert.equal(fulfil.status, 403, 'Receiving Clerk does not hold requests.fulfil');
-
-    await cleanup({ commodityIds: [commodity.id], batchIds: [create.body.id], userIds: [user.id] });
-  } catch (err) {
-    await cleanup({ commodityIds: [commodity.id], userIds: [user.id] });
-    throw err;
   }
 });
 
@@ -149,23 +148,23 @@ test('System Administrator cannot adjust stock, edit dispatch, or manage facilit
   }
 });
 
-// ── Warehouse Admin cannot touch the permission architecture ──────────────────────────
-test('Warehouse Admin cannot assign System Administrator or Warehouse Admin', async () => {
-  const admin = await makeUser({ roles: ['warehouse_admin'] });
+// ── Admin cannot touch the permission architecture ──────────────────────────
+test('Admin cannot assign System Administrator or Admin', async () => {
+  const admin = await makeUser({ roles: ['admin'] });
   const target = await makeUser({ roles: [] });
   const token = tokenFor(admin);
 
   try {
     const grant = await req('POST', `/api/admin/users/${target.id}/roles`, {
-      body: { role: 'warehouse_admin' }, token,
+      body: { role: 'admin' }, token,
     });
-    assert.equal(grant.status, 403, 'Warehouse Admin lacks roles.assignAny');
+    assert.equal(grant.status, 403, 'Admin lacks roles.assignAny');
 
     // But CAN assign an operational role.
     const grantOperational = await req('POST', `/api/admin/users/${target.id}/roles`, {
-      body: { role: 'picker_dispatcher' }, token,
+      body: { role: 'dispatch_receiver' }, token,
     });
-    assert.equal(grantOperational.status, 201, 'Warehouse Admin holds roles.assignOperational');
+    assert.equal(grantOperational.status, 201, 'Admin holds roles.assignOperational');
   } finally {
     await cleanup({ userIds: [admin.id, target.id] });
   }
@@ -178,7 +177,7 @@ test('a System Administrator cannot grant themselves a role', async () => {
 
   try {
     const grant = await req('POST', `/api/admin/users/${admin.id}/roles`, {
-      body: { role: 'warehouse_admin' }, token,
+      body: { role: 'admin' }, token,
     });
     assert.equal(grant.status, 403, 'self-targeted role grant is refused unconditionally');
     assert.match(grant.body.error, /own roles/);
@@ -188,7 +187,7 @@ test('a System Administrator cannot grant themselves a role', async () => {
 });
 
 // ── Migration: the two existing accounts keep exactly their old reach ─────────────────
-test('cms.admin maps to Warehouse Admin, not System Administrator', async () => {
+test('cms.admin maps to Admin, not System Administrator', async () => {
   const { rows } = await query(
     `SELECT r.key FROM users u
        JOIN user_roles ur ON ur.user_id = u.id
@@ -200,12 +199,12 @@ test('cms.admin maps to Warehouse Admin, not System Administrator', async () => 
   // won't have it, and that's fine; this test documents the migration's intent, not a
   // fixture requirement.
   if (keys.length) {
-    assert.ok(keys.includes('warehouse_admin'), 'cms.admin holds Warehouse Admin');
+    assert.ok(keys.includes('admin'), 'cms.admin holds Admin');
     assert.ok(!keys.includes('system_administrator'), 'cms.admin was NOT assumed to be System Administrator');
   }
 });
 
-test('cms.viewer maps to Picker/Dispatcher', async () => {
+test('cms.viewer maps to Dispatch/Receiver', async () => {
   const { rows } = await query(
     `SELECT r.key FROM users u
        JOIN user_roles ur ON ur.user_id = u.id
@@ -214,13 +213,13 @@ test('cms.viewer maps to Picker/Dispatcher', async () => {
   );
   const keys = rows.map((r) => r.key);
   if (keys.length) {
-    assert.deepEqual(keys, ['picker_dispatcher']);
+    assert.deepEqual(keys, ['dispatch_receiver']);
   }
 });
 
 // ── Offline emergency lockout ──────────────────────────────────────────────────────────
 test('a locally-disabled user is refused regardless of their synced permissions', async () => {
-  const admin = await makeUser({ roles: ['warehouse_admin'] });
+  const admin = await makeUser({ roles: ['admin'] });
   const token = tokenFor(admin);
 
   try {
@@ -235,7 +234,7 @@ test('a locally-disabled user is refused regardless of their synced permissions'
 });
 
 test('AuthzService.hasPermission returns false for a locally-disabled user even with a granted role', async () => {
-  const user = await makeUser({ roles: ['warehouse_admin'] });
+  const user = await makeUser({ roles: ['admin'] });
   try {
     assert.ok(await AuthzService.hasPermission(user.id, 'batches.adjust'));
     await AdminUsersService.setLocalDisabled(user.id, true, { actorUserId: user.id });
@@ -255,7 +254,7 @@ test('creating a user and granting a role are both attributed in authz_audit_log
       username: `authz-audit-${txnId()}`, password: 'a-long-enough-password', fullName: 'Audit Test',
       actorUserId: admin.id,
     });
-    await AdminUsersService.grantRole(created.id, 'picker_dispatcher', { actorUserId: admin.id });
+    await AdminUsersService.grantRole(created.id, 'dispatch_receiver', { actorUserId: admin.id });
 
     const { rows } = await query(
       `SELECT action, actor_user_id, target_user_id FROM authz_audit_log
@@ -312,7 +311,7 @@ test('the Cloud<->CMS sync protocol is not reachable under /api/sync at all', as
 test('MasterDataService.apply replaces user_roles wholesale without duplicating grants', async () => {
   const { MasterDataService } = await import('../src/services/masterDataService.js');
   const user = await makeUser({ roles: [] });
-  const { rows: roleRows } = await query("SELECT id FROM roles WHERE key = 'picker_dispatcher'");
+  const { rows: roleRows } = await query("SELECT id FROM roles WHERE key = 'dispatch_receiver'");
   const roleId = roleRows[0].id;
 
   try {

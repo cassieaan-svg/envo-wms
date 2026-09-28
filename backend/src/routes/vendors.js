@@ -4,7 +4,7 @@ import { requirePermission } from '../middleware/requirePermission.js';
 
 const router = express.Router();
 
-router.get('/', async (req, res, next) => {
+router.get('/', requirePermission('vendors.view'), async (req, res, next) => {
   try {
     const vendors = await VendorService.list({ includeInactive: req.query.includeInactive === 'true' });
     return res.json(vendors);

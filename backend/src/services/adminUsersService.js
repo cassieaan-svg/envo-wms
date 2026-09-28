@@ -6,8 +6,11 @@ import { AuthzService } from './authzService.js';
 // were seeded directly in the database). Every write here is attributed via
 // AuthzService.recordAudit, closing that gap.
 
-const OPERATIONAL_ROLES = new Set(['picker_dispatcher', 'receiving_clerk']);
-const PRIVILEGED_ROLES = new Set(['system_administrator', 'warehouse_admin']);
+// Accountant and Dispatch/Receiver are day-to-day staff roles — Admin can hand
+// them out. Admin Viewer, despite being read-only, is admin-tier: only System
+// Administrator grants it, same as Admin itself.
+const OPERATIONAL_ROLES = new Set(['dispatch_receiver', 'accountant']);
+const PRIVILEGED_ROLES = new Set(['system_administrator', 'admin', 'admin_viewer']);
 
 export class AdminUsersService {
   /** 'operational' | 'privileged' | null (unknown role key). Decides which assign permission a
