@@ -296,6 +296,41 @@ router.get('/sales-summary', async (req, res) => {
 })
 
 /**
+ * GET /api/dispense/sales-by-source — the same revenue as sales-summary, but broken
+ * down by the raw supplier_source of the intake batch each dispense drew from (see
+ * LogService.getSalesBySource). One row per distinct supplier string, plus '' for
+ * dispenses that can't be traced to a batch. The client buckets these into
+ * cms/ghsc/baseline/other with classifyIntakeSupplier — explains Spend's Bought-vs-
+ * Sold gap by source instead of leaving it as one alarming number.
+ *
+ * MUST stay above '/:id' for the same reason as sales-summary above.
+ */
+router.get('/sales-by-source', async (req, res) => {
+  try {
+    const { facility_id, facility_ids, from, to, commodity_ids, section } = req.query
+    const commodityIds = commodity_ids ? String(commodity_ids).split(',').map(s => s.trim()).filter(Boolean) : null
+
+    const base = {
+      from, to, commodityIds, categories: req.scope.sectionCategories, commodityNames: req.scope.sectionCommodityNames,
+      section,
+    }
+    let rows
+    if (facility_id) {
+      if (!validators.isUUID(facility_id)) return sendValidationError(res, 'Invalid facility_id format', 'facility_id')
+      if (!(await enforceFacilityRead(req, res, facility_id, 'dispense_log'))) return
+      rows = await LogService.getSalesBySource(facility_id, base)
+    } else {
+      const facilityIds = await resolveListFacilityIds(req, 'dispense_log', facility_ids)
+      rows = await LogService.getSalesBySource(null, { ...base, facilityIds: facilityIds === null ? undefined : facilityIds })
+    }
+    res.json({ success: true, data: rows, count: rows.length, timestamp: new Date().toISOString() })
+  } catch (err) {
+    console.error('Error fetching sales by source:', err)
+    res.status(500).json({ success: false, error: err.message, code: 'FETCH_ERROR' })
+  }
+})
+
+/**
  * PATCH /api/dispense/:id - Edit a dispense record (metadata only; the client
  * reconciles stock separately). Scoped to the row's facility (own facility or admin).
  */

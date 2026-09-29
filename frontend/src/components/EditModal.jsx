@@ -9,7 +9,7 @@ export function EditModal({ record, onClose, onSave }) {
   const store = useAppStore()
   const { loadStock } = useStock()
   const normalizedSupplier = record.supplier_source === 'GHSC' ? 'GHSC-PSM' : (record.supplier_source || '')
-  const knownSuppliers = ['GHSC-PSM']
+  const knownSuppliers = ['CMS-Uyo', 'GHSC-PSM']
   const [qty, setQty]           = useState(record.quantity)
   const [date, setDate]         = useState(record.dispensed_at?.slice(0,10)||record.received_at?.slice(0,10)||record.adjusted_at?.slice(0,10)||'')
   const [notes, setNotes]       = useState(record.notes||'')
@@ -170,7 +170,7 @@ export function EditModal({ record, onClose, onSave }) {
               <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Supplier</label>
               <select value={supplier} onChange={e=>setSupplier(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500">
                 <option value="">Select supplier…</option>
-                <option>GHSC-PSM</option><option>Other</option>
+                <option>CMS-Uyo</option><option>GHSC-PSM</option><option>Other</option>
               </select>
               {supplier === 'Other' && (
                 <div className="mt-3">

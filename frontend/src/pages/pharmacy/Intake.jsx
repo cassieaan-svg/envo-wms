@@ -201,7 +201,7 @@ export function Intake() {
                 <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Supplier *</label>
                 <select value={supplier} onChange={e=>setSupplier(e.target.value)} required className={inputCls}>
                   <option value="">Select supplier…</option>
-                  <option>GHSC-PSM</option><option>Other</option>
+                  <option>CMS-Uyo</option><option>GHSC-PSM</option><option>Other</option>
                 </select>
               </div>
               {supplier === 'Other' && (

@@ -198,14 +198,15 @@ export function CRRF() {
 
     // ── The CRRF's own columns: movements INSIDE the period only ────────────────
     // Intake splits by supplier (see classifyIntakeSupplier): GHSC-PSM is Quantity
-    // Received (col B); another named source (state office, CHAI, …) is a positive
-    // adjustment (Adj+); baseline/stock-take is the OPENING balance, so it feeds
-    // neither column here — it is handled in the rewind below as pre-period stock.
+    // Received (col B); CMS-Uyo or another named source (state office, CHAI, …) is
+    // a positive adjustment (Adj+); baseline/stock-take is the OPENING balance, so
+    // it feeds neither column here — it is handled in the rewind below as
+    // pre-period stock.
     ;(bIntake.within).forEach(r => {
       if (!agg[r.commodity_id]) return
       const cls = classifyIntakeSupplier(r.supplier_source)
-      if (cls === 'ghsc')       agg[r.commodity_id].received += r.quantity
-      else if (cls === 'other') agg[r.commodity_id].adjPos   += r.quantity
+      if (cls === 'ghsc') agg[r.commodity_id].received += r.quantity
+      else if (cls === 'other' || cls === 'cms') agg[r.commodity_id].adjPos += r.quantity
       // 'baseline' → opening balance, not a period movement
     })
     ;(bDisp.within).forEach(r => { if (agg[r.commodity_id]) agg[r.commodity_id].dispensed += r.quantity })

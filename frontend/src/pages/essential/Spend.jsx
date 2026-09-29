@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { Pagination, pageSlice } from '../../components/ui/Pagination'
 import { naira } from '../../utils/helpers'
+import { classifyIntakeSupplier } from '../../utils/reports'
 import { SalesPanel } from './SalesPanel'
 
 // What facilities have bought through the central warehouse, in naira.
@@ -47,6 +48,24 @@ const MEASURES = [
 const COLUMN_HEAD = {
   facility: 'Facility', lga: 'LGA', commodity: 'Commodity', month: 'Month', scheme: 'Scheme',
 }
+
+// Sold counts every priced dispense, whatever it was drawn from — CMS is only
+// one of the sources a facility consumes. Bucketing it this way is what turns
+// "Sold is bigger than Bought" from an alarming, unexplained gap into a
+// breakdown: most of it is baseline or GHSC-PSM stock being used up, not CMS
+// stock going unaccounted for. 'unknown' is its own bucket, not folded into
+// 'other' — a dispense with no batch recorded (or a batch too old to have a
+// matching intake row) genuinely isn't traceable, which is different from a
+// named non-CMS source.
+const SOURCE_META = {
+  cms:      { label: 'CMS',       color: 'bg-green-500' },
+  ghsc:     { label: 'GHSC-PSM',  color: 'bg-blue-500' },
+  baseline: { label: 'Baseline',  color: 'bg-gray-500' },
+  other:    { label: 'Other',     color: 'bg-amber-500' },
+  unknown:  { label: 'Untraced',  color: 'bg-white/20' },
+}
+const SOURCE_ORDER = ['cms', 'ghsc', 'baseline', 'other', 'unknown']
+const bucketForSupplier = (raw) => (raw ? classifyIntakeSupplier(raw) : 'unknown')
 
 function Tab({ id, label, active, onSelect }) {
   return (
@@ -113,6 +132,9 @@ export function Spend() {
   // lightweight totals-only fetch of the same sales data SalesPanel shows in
   // detail, scoped to the same period/facility filter as the Bought view.
   const [soldTotal, setSoldTotal] = useState(undefined)   // undefined = loading, null = failed
+  // Sold, broken down by the supplier of the stock actually dispensed (see
+  // SOURCE_META) — what makes the Gap card legible instead of alarming.
+  const [soldBySource, setSoldBySource] = useState(undefined)  // undefined = loading, null = failed
   // Bought splits into "from your request" vs "direct dispatch" only when the view
   // is pinned to ONE facility — the WMS spend aggregate has no source dimension, so
   // the split comes from that facility's own order list (already fetched for the
@@ -173,13 +195,29 @@ export function Spend() {
     return () => { cancelled = true }
   }, [showBoughtSplit, singleFacility?.id, from, to])
 
-  // Same from/to/scope as Bought, but grouping doesn't matter here — only the sum.
+  // Same from/to/scope as Bought. One call gives both the total (summed here) and
+  // the by-source breakdown (bucketed here) — sales-by-source is sales-summary's
+  // rows regrouped by supplier instead of by month, so there's no need to fetch both.
   useEffect(() => {
     let cancelled = false
     setSoldTotal(undefined)
-    api.dispense.salesSummary({ group_by: 'month', from, to, ...scopeParams })
-      .then(rows => { if (!cancelled) setSoldTotal((rows || []).reduce((s, r) => s + Number(r.revenue || 0), 0)) })
-      .catch(() => { if (!cancelled) setSoldTotal(null) })
+    setSoldBySource(undefined)
+    api.dispense.salesBySource({ from, to, ...scopeParams })
+      .then(rows => {
+        if (cancelled) return
+        const bySource = {}
+        SOURCE_ORDER.forEach(k => { bySource[k] = { revenue: 0, quantity: 0 } })
+        let total = 0
+        ;(rows || []).forEach(r => {
+          const bucket = bucketForSupplier(r.supplier_source)
+          bySource[bucket].revenue += Number(r.revenue || 0)
+          bySource[bucket].quantity += Number(r.quantity || 0)
+          total += Number(r.revenue || 0)
+        })
+        setSoldTotal(total)
+        setSoldBySource(bySource)
+      })
+      .catch(() => { if (!cancelled) { setSoldTotal(null); setSoldBySource(null) } })
     return () => { cancelled = true }
   }, [from, to, scopeParams])
 
@@ -252,7 +290,34 @@ export function Spend() {
         </div>
       </div>
 
-      {view === 'sold' ? <SalesPanel /> : <>
+      {view === 'sold' ? <>
+
+      {/* Sold counts every priced dispense, not just CMS stock, so it's routinely
+          bigger than Bought — this breaks it down by what was actually dispensed,
+          so it reads as "mostly baseline/GHSC-PSM" rather than as an unexplained
+          shortfall. Shown whenever the Sold view is open, no separate toggle. */}
+      <div className="flex gap-3 flex-wrap mb-5">
+        {soldBySource === undefined ? (
+          <div className="text-sm text-gray-500">Loading…</div>
+        ) : soldBySource === null ? (
+          <div className="text-sm text-red-400">Could not load the sold breakdown.</div>
+        ) : (
+          SOURCE_ORDER.filter(k => k !== 'unknown' || soldBySource[k].revenue > 0).map(k => (
+            <div key={k} className="flex-1 min-w-[140px] rounded-lg border border-white/10 bg-white/3 px-4 py-3">
+              <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${SOURCE_META[k].color}`} />
+                {SOURCE_META[k].label}
+              </div>
+              <div className="text-lg font-medium mt-0.5 text-gray-100">{naira(soldBySource[k].revenue)}</div>
+              <div className="text-[11px] text-gray-500 mt-0.5">{num(soldBySource[k].quantity)} units</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <SalesPanel />
+
+      </> : <>
 
       <p className="text-sm text-gray-500 mb-2">
         What has been bought from the central warehouse. Cancelled requests are excluded.{' '}

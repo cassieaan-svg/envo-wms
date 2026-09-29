@@ -29,8 +29,12 @@ export const INTRA_FACILITY_ADJ_REASONS = [
 ]
 
 // Every intake carries a free-text supplier_source. For the CRRF, that text decides
-// where the units land, because the three sources mean three different things:
+// where the units land, because the four sources mean four different things:
 //
+//   'cms'      CMS-Uyo — the central warehouse. Also used by Spend to explain its
+//              Bought-vs-Sold gap: Bought is CMS-only, so splitting Sold by this
+//              same classification shows how much of consumption was CMS stock vs.
+//              baseline/GHSC-PSM/other, instead of leaving it as one bare gap.
 //   'ghsc'     GHSC-PSM — a real programme delivery. This is Quantity Received (col B).
 //   'baseline' go-live stock-take: "baseline stock", "stock taking", "physical count",
 //              "SOH", and their many typos. NOT a receipt at all — it is the OPENING
@@ -46,15 +50,17 @@ export const INTRA_FACILITY_ADJ_REASONS = [
 // {C, Adj−, Loss}, the form reconciles: A + B − C + Adj+ − Adj− − Loss = E.
 //
 // Matching is deliberately fuzzy — the data has ~285 distinct supplier strings, most
-// of them typos. GHSC is checked first (most specific), then baseline, else other.
+// of them typos. Checked most-specific first: GHSC, then CMS, then baseline, else other.
 const GHSC_RE     = /ghsc|psm/i
+const CMS_RE      = /\bcms\b/i
 const BASELINE_RE = /baseline|base ?line|bas[ae]?li?i?ne|bseline|baeline|baseine|baselie|basic.?entr|stock.?tak|syock.?tak|stake.?tak|stock.?tankng|stock ?on ?hand|\bsoh\b|\bopening\b|go.?live|physical.*count|stock ?count|stock ?intake|stock ?balance|stock ?level|stock ?update|stock ?report|stocks? ?update|\bstocks?\b/i
 
 export function classifyIntakeSupplier(s) {
   const str = String(s || '')
   if (GHSC_RE.test(str)) return 'ghsc'
+  if (CMS_RE.test(str)) return 'cms'
   if (BASELINE_RE.test(str)) return 'baseline'
-  return 'other'   // real receipt from a non-GHSC source, or an unusable label
+  return 'other'   // real receipt from a non-GHSC, non-CMS source, or an unusable label
 }
 // Kept for the one existing caller; prefer classifyIntakeSupplier for new code.
 export const isGhscPsmSupplier = (s) => classifyIntakeSupplier(s) === 'ghsc'

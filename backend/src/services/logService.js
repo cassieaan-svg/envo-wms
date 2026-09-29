@@ -1081,6 +1081,62 @@ export class LogService {
   }
 
   /**
+   * Revenue (same shape/filters as getSalesSummary) broken down by the SUPPLIER
+   * of the stock actually dispensed, not just the total. Spend's Bought figure is
+   * CMS-only (WMS dispatch value); Sold here counts every priced dispense
+   * regardless of source, so a facility that consumes baseline stock-take or
+   * GHSC-PSM stock shows revenue with nothing on the Bought side to match it. That
+   * used to read as an unexplained gap; this lets the UI show it's baseline/GHSC
+   * consumption instead of a discrepancy.
+   *
+   * A dispense doesn't carry its source directly — it draws from a specific lot
+   * by FEFO, recording that lot's `batch_number`/`expiry_date` (see recordDispense).
+   * The SAME (facility, commodity, batch_number, expiry_date) key identifies the
+   * intake that created that lot, which does carry `supplier_source` — this is
+   * the identical join key the bin-ledger reconciliation queries above use.
+   *
+   * Returns one row per RAW supplier_source string (including '' for dispenses
+   * with no batch_number, or a batch that no longer matches any intake row — e.g.
+   * from before this field was tracked). The caller classifies those into
+   * cms/ghsc/baseline/other with classifyIntakeSupplier, same as the CRRF does —
+   * kept in one place (the frontend) rather than duplicating the fuzzy matching here.
+   */
+  static async getSalesBySource(facilityId, options = {}) {
+    const { from, to, facilityIds, commodityIds, categories, commodityNames, section } = options
+    if (!facilityId && Array.isArray(facilityIds) && facilityIds.length === 0) return []
+
+    const params = []
+    const conds = ['l.line_total is not null']
+    applyLogFilters({ conds, params, dateField: 'dispensed_at', facilityId, facilityIds, commodityIds, categories, commodityNames, from, section })
+    if (to) { params.push(to); conds.push(`l.dispensed_at < ($${params.length}::date + interval '1 day')`) }
+
+    const { rows } = await query(
+      `select coalesce(src.supplier_source, '') as supplier_source,
+              sum(l.quantity)::int as quantity,
+              sum(l.line_total)::numeric as revenue,
+              count(*)::int as txn
+         from dispense_log l
+         left join commodities c on c.id = l.commodity_id
+         left join lateral (
+           select i.supplier_source
+             from intake_log i
+            where i.facility_id = l.facility_id
+              and i.commodity_id = l.commodity_id
+              and nullif(btrim(coalesce(l.batch_number, '')), '') is not null
+              and nullif(btrim(coalesce(i.batch_number, '')), '') = nullif(btrim(coalesce(l.batch_number, '')), '')
+              and i.expiry_date = l.expiry_date
+            order by i.received_at desc
+            limit 1
+         ) src on true
+        where ${conds.join(' and ')}
+        group by coalesce(src.supplier_source, '')
+        order by revenue desc`,
+      params
+    )
+    return rows
+  }
+
+  /**
    * Intake summed over a facility set and date window — the receiving-side mirror
    * of getDispenseSummary, powering Monitoring's "Units received" card and its
    * commodity/facility drill-ins. Same groupings, same { qty, txn } row shape, so
