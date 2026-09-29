@@ -5,8 +5,14 @@ import { loadConsumptionAmcMap, getStockStatus } from './helpers'
 // Out-of-stock is intentionally excluded (by request). Mirrors the Alerts page
 // computation but returns counts only and fetches its own data, so it can run
 // from the nav without depending on any page being mounted.
+//
+// Also returns `keys` — one stable identifier per alert (e.g. `low:<commodity_id>`,
+// `expiry:<commodity_id>:<batch_number>:<expiry_date>`) — so the nav can tell a
+// brand-new alert from one it already notified about (see alertSeen.js). The
+// counts alone can't do that: a count that stays at "3" reads as unchanged
+// whether it's the same three alerts or three different ones.
 export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows = {}, commoditySection, expiryDays = 180 }) {
-  const empty = { expiry: 0, low: 0, over: 0, total: 0 }
+  const empty = { expiry: 0, low: 0, over: 0, total: 0, keys: [] }
   if (!fid || !allCommodities?.length) return empty
   const commIds = allCommodities.map(c => c.id)
 
@@ -32,13 +38,14 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
   })
 
   let low = 0, over = 0
+  const keys = []
   allCommodities.forEach(c => {
     const g = gMap[c.id] || {}
     const quantity = (g.store_qty || 0) + (g.sdp_qty || 0)
     const amc = amcMap[c.id] && amcMap[c.id] > 0 ? amcMap[c.id] : (g.baseline_amc || 0)
     const status = getStockStatus(quantity, amc)
-    if (status === 'low') low++
-    else if (status === 'over') over++
+    if (status === 'low') { low++; keys.push(`low:${c.id}`) }
+    else if (status === 'over') { over++; keys.push(`over:${c.id}`) }
     // 'out' excluded on purpose.
   })
 
@@ -54,6 +61,7 @@ export async function fetchFacilityAlertCounts({ fid, allCommodities, amcWindows
     expiry_to: cutoff, section: commoditySection || undefined,
   }).catch(() => [])
   const expiry = (exp || []).length
+  ;(exp || []).forEach(r => keys.push(`expiry:${r.commodity_id}:${r.batch_number || ''}:${r.expiry_date}`))
 
-  return { expiry, low, over, total: expiry + low + over }
+  return { expiry, low, over, total: expiry + low + over, keys }
 }

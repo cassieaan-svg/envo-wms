@@ -12,6 +12,7 @@ import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, isLabCategory, transferReason, reviewerNameOf, facilityGroupLabel } from '../../utils/helpers'
 import { exportCsv, exportPdf } from '../../utils/download'
+import { markAlertsSeen } from '../../utils/alertSeen'
 
 // Defined at module scope, not inside Alerts(). A component created during render is a
 // new type on every render, so React unmounts and remounts it each time — throwing away
@@ -401,6 +402,21 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
     const n = reviewerNameOf(store.user)
     if (n) setAssignReviewedBy(n)
   }, [store.user])
+
+  // Marks the nav's "new alert" trigger as seen while this page is open: every
+  // low/over/expiry alert currently shown here is recorded, so the nav badge
+  // (unseenAlertKeys) drops to 0 and only relights for an alert that shows up
+  // AFTER this. Facility logins only — fid is unset for an admin's cross-facility
+  // view, which the nav badge was never scoped to either (see alertCounts.js).
+  useEffect(() => {
+    if (!fid || loading) return
+    const keys = [
+      ...stockRows.low.map(r => `low:${r.commodity_id}`),
+      ...stockRows.over.map(r => `over:${r.commodity_id}`),
+      ...expiryRows.map(r => `expiry:${r.commodity_id}:${r.batch_number || ''}:${r.expiry_date}`),
+    ]
+    markAlertsSeen(fid, keys)
+  }, [fid, loading, stockRows, expiryRows])
 
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   // The in-use split belongs to the Out-of-stock tab; drop it when the tab moves.

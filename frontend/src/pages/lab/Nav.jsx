@@ -4,6 +4,7 @@ import { subscribeRealtime } from '../../lib/realtime'
 import { NavSection, NavItem } from '../../components/NavItem'
 import { useAppStore } from '../../store/appStore'
 import { fetchFacilityAlertCounts } from '../../utils/alertCounts'
+import { unseenAlertKeys, ALERTS_SEEN_EVENT } from '../../utils/alertSeen'
 
 const icons = {
   dispense:   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4"><circle cx="8" cy="8" r="6"/><path d="M8 5v6M5 8h6"/></svg>,
@@ -33,15 +34,25 @@ export function LabNav() {
 
   const [pendingCount, setPendingCount] = useState(0)
   const [alertCount, setAlertCount]     = useState(0)
+  // Requests the warehouse has dispatched but this facility hasn't receipted yet —
+  // shown on "Request from Warehouse" itself, not folded into Alerts (see loadRequestAlertCount).
+  const [requestAlertCount, setRequestAlertCount] = useState(0)
 
   useEffect(() => {
-    if (!fid) { setPendingCount(0); setAlertCount(0); return }
+    if (!fid) { setPendingCount(0); setAlertCount(0); setRequestAlertCount(0); return }
     loadPendingCount()
     loadAlertCount()
+    if (isEssential) loadRequestAlertCount()
     const unsubT = subscribeRealtime(['stock_transfer_log'], loadPendingCount)
     const unsubS = subscribeRealtime(['stock'], loadAlertCount)
-    return () => { unsubT?.(); unsubS?.() }
-  }, [fid, commoditySection])
+    const unsubW = isEssential ? subscribeRealtime(['warehouse_requests'], loadRequestAlertCount) : null
+    // The Alerts page marks alerts seen in localStorage and fires this event —
+    // without it, the badge only refreshed on the next stock change or a remount,
+    // so it kept showing a stale count after the page that just cleared it.
+    const onSeen = (e) => { if (e.detail?.fid === fid) loadAlertCount() }
+    window.addEventListener(ALERTS_SEEN_EVENT, onSeen)
+    return () => { unsubT?.(); unsubS?.(); unsubW?.(); window.removeEventListener(ALERTS_SEEN_EVENT, onSeen) }
+  }, [fid, commoditySection, isEssential])
 
   async function loadPendingCount() {
     if (!fid) { setPendingCount(0); return }
@@ -59,11 +70,25 @@ export function LabNav() {
   async function loadAlertCount() {
     if (!fid) { setAlertCount(0); return }
     const s = useAppStore.getState()
-    // Expiry + low stock + overstock (out-of-stock excluded by request).
-    const { total } = await fetchFacilityAlertCounts({
+    // Expiry + low stock + overstock (out-of-stock excluded by request). The badge
+    // is a trigger, not a running tally: only alerts not yet seen on the Alerts
+    // page count, so it clears while that page is open and relights only when a
+    // genuinely new alert shows up (see alertSeen.js).
+    const { keys } = await fetchFacilityAlertCounts({
       fid, allCommodities: s.allCommodities, amcWindows: s.amcWindows, commoditySection,
-    }).catch(() => ({ total: 0 }))
-    setAlertCount(total || 0)
+    }).catch(() => ({ keys: [] }))
+    setAlertCount(unseenAlertKeys(fid, keys).length)
+  }
+
+  async function loadRequestAlertCount() {
+    if (!fid) { setRequestAlertCount(0); return }
+    // Dispatched-but-not-yet-received warehouse requests: this lingers on purpose
+    // (not a trigger) — it stays until the facility receipts the order, which is
+    // the action that actually resolves it.
+    try {
+      const rows = await api.warehouseRequests.list({ status: 'dispatched' })
+      setRequestAlertCount(rows?.length || 0)
+    } catch { setRequestAlertCount(0) }
   }
 
   return (
@@ -72,13 +97,13 @@ export function LabNav() {
       <NavItem page="dispense"   icon={icons.dispense}>Record Stock Utilized</NavItem>
       {!isRestricted && <NavItem page="intake"     icon={icons.intake}     disabled={!canManage}>Stock Intake</NavItem>}
       {!isRestricted && <NavItem page="adjustment" icon={icons.adjustment} disabled={!canManage}>Adjustment</NavItem>}
-      {isEssential && !isRestricted && <NavItem page="warehouse-requests" icon={icons.transfers} disabled={!canManage}>Request from Warehouse</NavItem>}
+      {isEssential && !isRestricted && <NavItem page="warehouse-requests" icon={icons.transfers} disabled={!canManage} badge={requestAlertCount}>Request from Warehouse</NavItem>}
       <NavItem page="transfers" icon={icons.transfers} badge={pendingCount}>Redistribution & Emergency Order</NavItem>
 
       {!isRestricted && <NavSection>Overview</NavSection>}
       {!isRestricted && <NavItem page="dashboard" icon={icons.dashboard}>Dashboard</NavItem>}
       <NavItem page="stock"     icon={icons.stock}>Stock Levels</NavItem>
-      {!isRestricted && <NavItem page="alerts"    icon={icons.alerts} badge={pendingCount + alertCount}>Alerts</NavItem>}
+      {!isRestricted && <NavItem page="alerts"    icon={icons.alerts} badge={isEssential ? alertCount : (pendingCount + alertCount)}>Alerts</NavItem>}
 
       {!isRestricted && <NavSection>Reports</NavSection>}
       {!isRestricted && <NavItem page="log"        icon={icons.log}>Activity Log</NavItem>}

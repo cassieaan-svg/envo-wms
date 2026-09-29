@@ -11,6 +11,7 @@ import { toast } from '../../components/ui/Toast'
 import { Button } from '../../components/ui/Button'
 import { FacilityPicker } from '../../components/ui/FacilityPicker'
 import { fmtDate, fmtDateTime, loadConsumptionAmcMap, getMOS, getStockStatus, transferReason } from '../../utils/helpers'
+import { markAlertsSeen } from '../../utils/alertSeen'
 
 export function Alerts() {
   const store = useAppStore()
@@ -240,6 +241,18 @@ How many did you actually accept? The rest goes back to the sender.`, '0')
       over: enriched.filter(r=>r._status==='over'),
     })
   }
+
+  // Marks the nav's "new alert" trigger as seen while this page is open — see the
+  // matching effect in pharmacy/Alerts.jsx for the full rationale.
+  useEffect(() => {
+    if (!fid || loading) return
+    const keys = [
+      ...stockRows.low.map(r => `low:${r.commodity_id}`),
+      ...stockRows.over.map(r => `over:${r.commodity_id}`),
+      ...expiryRows.map(r => `expiry:${r.commodity_id}:${r.batch_number || ''}:${r.expiry_date}`),
+    ]
+    markAlertsSeen(fid, keys)
+  }, [fid, loading, stockRows, expiryRows])
 
   useEffect(()=>{ if(fid) loadExpiry() },[expiryDays])
   // Recompute the out/low/over aggregates when an admin narrows the location scope.
